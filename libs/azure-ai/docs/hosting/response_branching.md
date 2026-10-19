@@ -440,6 +440,11 @@ retry contract; independent branches use new response identities.
   root interrupt; their recorded outputs are reused without rerunning the tasks.
   This restriction does not change legacy continuation or completed-root forks.
   Completed-root forks still do not select or isolate private subgraph state.
+- Completed functional `@task` calls inside a root node are also reused when
+  that node pauses for approval, including repeated, nested, asynchronous, and
+  parallel calls. Calls first reached after an approval still execute normally.
+  Failed calls retain LangGraph's retry behavior; only successfully completed
+  work is protected from this unintended replay.
 - Checkpoints do not roll back or isolate external tools, shared stores, or
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
@@ -487,6 +492,37 @@ history, so ancestor-reconstructed channels such as `DeltaChannel` do not replay
 the transferred pending writes twice.
 Task and pending-write remapping is a pure transformation keyed by
 `(task.name, task.path)`, keeping same-name fan-out tasks distinct.
+
+Functional calls additionally need their call identity: a completed `@task`
+result in pending writes does not contain its function name or full calling
+context. A request-scoped callback captures the name, parent namespace, call
+path, and step, without storing task inputs. Before saving that task's writes,
+the saver persists this identity in a reserved
+`__langgraph_response_tasks__:<checkpoint_id>:<task_id>` namespace in the same
+thread and backend. These are internal identity checkpoints, not application
+subgraph state; applications must not use this namespace prefix. Retain them
+for as long as their associated root checkpoint can be branched and prune them
+alongside that checkpoint. History tools that list all namespaces also include
+these records; select `checkpoint_ns=""` for root-only history. Normal
+whole-thread deletion removes them with the other checkpoints.
+
+When copying pending writes, the host uses LangGraph's internal task
+construction helper rather than duplicating its ID hash algorithm. It first
+reconstructs and verifies each original task ID, then generates the fork's IDs
+in parent-before-child order and copies both identities and results. This also
+preserves distinct calls to the same function with identical arguments. The
+integration is compatibility-tested against the supported minimum LangGraph
+version; missing helpers, unavailable or invalid identity records, and storage
+errors fail explicitly rather than silently rerunning completed work.
+
+Paused responses created by older hosts may lack these identity records. Start
+new roots under the updated host or drain old workflows through an
+application-approved continuation path; the host cannot safely infer the
+missing identities from task IDs alone. This restriction
+applies to paused checkpoints containing functional task writes, not ordinary
+completed-parent branching or legacy continuation. Identity persistence adds
+storage operations for functional calls but does not add an execution engine,
+input-based result cache, or exactly-once guarantee.
 
 Actual pause resumes and recovery from recorded progress use a request-scoped
 checkpoint head. The execution config omits the explicit `checkpoint_id` that
@@ -543,6 +579,7 @@ parent.
 | --- | --- |
 | Origin write fails or confirmed recovery origin is unavailable | Fail before graph execution. |
 | Paused fork checkpoint or pending-write transfer fails | Fail before graph execution or origin confirmation; the parent remains unchanged. |
+| Functional task identity is missing or invalid, or its read/write fails | Fail explicitly; do not rerun completed tasks or publish the failed branch as a parent. |
 | Required graph checkpoint or state read/write fails | Fail explicitly; no latest-state, empty-state, or transcript fallback. |
 | Approval snapshots or their ID bindings are invalid, or the unanswered-snapshot write fails | Fail before graph execution; do not silently replace the approvals or discard the storage error. |
 | Confirmed origin; no recorded progress or published boundary | Restart the current task from its confirmed starting checkpoint with its original input; unsaved work may run again. |

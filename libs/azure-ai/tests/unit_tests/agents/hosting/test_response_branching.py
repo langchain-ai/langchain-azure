@@ -34,6 +34,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph import channels
+from langgraph.cache.memory import InMemoryCache
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     CheckpointMetadata,
@@ -42,10 +43,11 @@ from langgraph.checkpoint.base import (
     get_checkpoint_metadata,
 )
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.func import task
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command, Interrupt, PregelTask, Send, interrupt
+from langgraph.types import CachePolicy, Command, Interrupt, PregelTask, Send, interrupt
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
@@ -512,7 +514,15 @@ def test_mcp_approval_forks_use_parent_ids(stream: bool) -> None:
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_send_forks_match_tasks_by_path(stream: bool) -> None:
+@pytest.mark.parametrize("functional", [False, True])
+def test_send_forks_match_tasks_by_path(stream: bool, functional: bool) -> None:
+    operations: list[str] = []
+
+    @task
+    def prepare(name: str) -> str:
+        operations.append(name)
+        return name
+
     def distribute(state: _BranchState) -> list[Send]:
         return [
             Send("ask", {"messages": [HumanMessage(content=name)]})
@@ -521,6 +531,8 @@ def test_send_forks_match_tasks_by_path(stream: bool) -> None:
 
     def ask(state: _BranchState) -> dict[str, Any]:
         name = str(state["messages"][0].content)
+        if functional:
+            name = prepare(name).result()
         return {"messages": [AIMessage(content=f"{name}={interrupt(name)}")]}
 
     builder = StateGraph(_BranchState)
@@ -562,6 +574,398 @@ def test_send_forks_match_tasks_by_path(stream: bool) -> None:
             assert (
                 _boundary_ref(client, server, response["id"]).thread_id == parent["id"]
             )
+        assert sorted(operations) == (["one", "two"] if functional else [])
+
+
+def _functional_graph(
+    saver: BaseCheckpointSaver[Any], operations: list[str], kind: str = "single"
+) -> CompiledStateGraph:
+    lock = threading.Lock()
+
+    def execute() -> int:
+        with lock:
+            operations.append("prepare")
+            return len(operations)
+
+    def prepare() -> int:
+        return execute()
+
+    cache_policy: CachePolicy[Callable[[], str | bytes]] | None = (
+        CachePolicy() if kind == "cached" else None
+    )
+    prepare_task = task(cache_policy=cache_policy)(prepare)
+
+    @task
+    def nested_prepare() -> list[int]:
+        return [prepare_task().result(), prepare_task().result()]
+
+    @task
+    async def async_prepare() -> int:
+        return execute()
+
+    def finish(values: list[int]) -> dict[str, Any]:
+        answer = interrupt("approve?")
+        prepared = ",".join(str(value) for value in values)
+        return {"messages": [AIMessage(content=f"{prepared}:{answer}")]}
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        if kind == "nested":
+            return finish(nested_prepare().result())
+        values = [prepare_task().result()]
+        if kind == "repeated":
+            values.append(prepare_task().result())
+        return finish(values)
+
+    async def ask_async(state: _BranchState) -> dict[str, Any]:
+        if kind == "async_parallel":
+            return finish(
+                sorted(await asyncio.gather(async_prepare(), async_prepare()))
+            )
+        return finish([await async_prepare()])
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask_async if kind.startswith("async") else ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    return builder.compile(
+        checkpointer=saver, cache=InMemoryCache() if kind == "cached" else None
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "kind", ["single", "repeated", "nested", "async", "async_parallel", "cached"]
+)
+def test_paused_branches_reuse_completed_functional_tasks(
+    stream: bool, kind: str
+) -> None:
+    operations: list[str] = []
+    saver = InMemorySaver()
+    graph = _functional_graph(saver, operations, kind)
+    expected_operations = ["prepare"] * (
+        2 if kind in {"repeated", "nested", "async_parallel"} else 1
+    )
+    expected_result = ",".join(
+        str(value) for value in range(1, len(expected_operations) + 1)
+    )
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        if kind == "cached":
+            _post(client, "warm cache", stream=stream)
+        parent = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        parent_ref = _boundary_ref(client, server, parent["id"])
+        config: RunnableConfig = {
+            "configurable": {**parent_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        before = saver.get_tuple(config)
+        assert before is not None
+        assert operations == expected_operations
+
+        for answer in ("left", "right"):
+            completed = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                ],
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert completed["status"] == "completed", completed
+            assert operations == expected_operations
+            assert _text(completed) == f"{expected_result}:{answer}"
+            assert _boundary_ref(client, server, completed["id"]).thread_id == (
+                parent_ref.thread_id
+            )
+
+        assert saver.get_tuple(config) == before
+        assert (
+            client.get(f"/responses/{parent['id']}").json()["output"]
+            == (parent["output"])
+        )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_functional_results_survive_later_approvals_without_caching_new_work(
+    stream: bool,
+) -> None:
+    operations: list[str] = []
+
+    @task
+    def prepare(label: str) -> str:
+        operations.append(label)
+        return f"{label}-{operations.count(label)}"
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        before = prepare("before").result()
+        first = interrupt("first")
+        after = prepare("after").result()
+        second = interrupt("second")
+        return {"messages": [AIMessage(content=f"{before}:{first}/{after}:{second}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        initial = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        assert operations == ["before"]
+        for index, answer in enumerate(("left", "right"), start=1):
+            partial = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": initial["call_id"],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                ],
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert partial["status"] == "completed", partial
+            pending = next(
+                item for item in partial["output"] if item["type"] == "function_call"
+            )
+            completed = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": json.dumps({"resume": "done"}),
+                    }
+                ],
+                previous_response_id=partial["id"],
+                stream=stream,
+            )
+            assert completed["status"] == "completed", completed
+            assert _text(completed) == f"before-1:{answer}/after-{index}:done"
+            assert operations == ["before", *(["after"] * index)]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_caught_functional_task_errors_preserve_retry_behavior(
+    stream: bool, enabled: bool
+) -> None:
+    operations: list[str] = []
+
+    @task
+    def prepare() -> int:
+        operations.append("attempt")
+        raise RuntimeError("expected failure")
+
+    def ask(state: _BranchState) -> dict[str, Any]:
+        try:
+            prepare().result()
+        except RuntimeError:
+            pass
+        return {"messages": [AIMessage(content=f"recovered:{interrupt('approve?')}")]}
+
+    builder = StateGraph(_BranchState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps({"resume": "yes"}),
+                }
+            ],
+            previous_response_id=parent["id"],
+            stream=stream,
+        )
+        assert completed["status"] == "completed", completed
+        assert _text(completed) == "recovered:yes"
+        assert operations == ["attempt", "attempt"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "malformed",
+        "wrong_identity",
+        "wrong_checkpoint",
+        "version",
+        "boolean_version",
+        "read",
+        "write",
+    ],
+)
+def test_invalid_functional_identities_fail_before_replaying_work(
+    stream: bool, failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operations: list[str] = []
+    saver = InMemorySaver()
+    graph = _functional_graph(saver, operations)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    original_read = saver.aget_tuple
+    original_write = saver.aput
+
+    async def read(config: RunnableConfig) -> Any:
+        saved = await original_read(config)
+        namespace = config.get("configurable", {}).get("checkpoint_ns", "")
+        if not namespace.startswith("__langgraph_response_tasks__:"):
+            return saved
+        if failure == "read":
+            raise OSError("private identity storage failure")
+        if failure == "missing":
+            return None
+        if saved is not None and failure in {
+            "malformed",
+            "wrong_identity",
+            "version",
+            "boolean_version",
+        }:
+            value = saved.checkpoint["channel_values"]["identity"]
+            if failure != "malformed":
+                identity = json.loads(value)
+                if failure == "wrong_identity":
+                    identity["name"] = "another_task"
+                else:
+                    identity["version"] = 2 if failure == "version" else True
+                value = json.dumps(identity)
+            else:
+                value = "{"
+            return saved._replace(
+                checkpoint={**saved.checkpoint, "channel_values": {"identity": value}}
+            )
+        if saved is not None and failure == "wrong_checkpoint":
+            return saved._replace(
+                checkpoint={**saved.checkpoint, "id": "another-checkpoint"}
+            )
+        return saved
+
+    async def write(
+        config: RunnableConfig,
+        checkpoint: Any,
+        metadata: Any,
+        new_versions: Any,
+    ) -> RunnableConfig:
+        if (
+            config.get("configurable", {})
+            .get("checkpoint_ns", "")
+            .startswith("__langgraph_response_tasks__:")
+        ):
+            raise OSError("private identity storage failure")
+        return await original_write(config, checkpoint, metadata, new_versions)
+
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        monkeypatch.setattr(saver, "aget_tuple", read)
+        if failure == "write":
+            monkeypatch.setattr(saver, "aput", write)
+        completed = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": pending["call_id"],
+                    "output": json.dumps({"resume": "yes"}),
+                }
+            ],
+            previous_response_id=parent["id"],
+            stream=stream,
+        )
+        assert completed["status"] == "failed", completed
+        assert completed["error"]["code"] == "server_error"
+        assert "private identity storage failure" not in json.dumps(completed)
+        assert operations == ["prepare"]
+        assert client.portal is not None
+        assert (
+            client.portal.call(
+                server._conversation_chain_store.get, completed["id"], BRANCH_ORIGIN_KEY
+            )
+            is None
+        )
+        assert (
+            client.portal.call(
+                server._conversation_chain_store.get,
+                completed["id"],
+                BRANCH_BOUNDARY_KEY,
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_functional_identity_write_failure_prevents_parent_publication(
+    stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operations: list[str] = []
+    saver = InMemorySaver()
+    original_write = saver.aput
+
+    async def write(
+        config: RunnableConfig,
+        checkpoint: Any,
+        metadata: Any,
+        new_versions: Any,
+    ) -> RunnableConfig:
+        if (
+            config.get("configurable", {})
+            .get("checkpoint_ns", "")
+            .startswith("__langgraph_response_tasks__:")
+        ):
+            raise OSError("private identity storage failure")
+        return await original_write(config, checkpoint, metadata, new_versions)
+
+    monkeypatch.setattr(saver, "aput", write)
+    server = ResponsesHostServer(
+        _functional_graph(saver, operations),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        failed = _post(client, "start", stream=stream)
+        assert failed["status"] == "failed", failed
+        assert failed["error"]["code"] == "server_error"
+        assert "private identity storage failure" not in json.dumps(failed)
+        assert operations == ["prepare"]
+        assert client.portal is not None
+        assert (
+            client.portal.call(
+                server._conversation_chain_store.get, failed["id"], BRANCH_BOUNDARY_KEY
+            )
+            is None
+        )
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1230,6 +1634,55 @@ async def test_checkpoint_saver_records_only_root_response_ownership(
         )
         with pytest.raises(BranchingError, match="ownership could not be verified"):
             await foreign.validate_progress(saved_config)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checkpoint_saver_persists_functional_task_identities(
+    asynchronous: bool,
+) -> None:
+    saver = InMemorySaver()
+    adapter = ResponseCheckpointSaver(saver, branching=True, response_key="functional")
+    operations: list[str] = []
+    graph = _functional_graph(adapter, operations, "nested")
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "functional"},
+        "callbacks": [adapter.task_recorder],
+    }
+    inputs = {"messages": [HumanMessage(content="start")]}
+    if asynchronous:
+        await graph.ainvoke(inputs, config)
+    else:
+        graph.invoke(inputs, config)
+    saved = await saver.aget_tuple(config)
+    assert saved is not None
+    task_ids = {
+        task_id
+        for task_id, channel, _ in saved.pending_writes or ()
+        if channel == "__return__"
+    }
+    indexes = [
+        item
+        for item in saver.list(config)
+        if item.config["configurable"]["checkpoint_ns"].startswith(
+            "__langgraph_response_tasks__:"
+        )
+    ]
+    assert len(indexes) == len(task_ids) == 3
+    assert operations == ["prepare", "prepare"]
+    assert {
+        item.config["configurable"]["checkpoint_ns"].rsplit(":", 1)[-1]
+        for item in indexes
+    } == task_ids
+    for item in indexes:
+        assert item.checkpoint["id"] == saved.checkpoint["id"]
+        identity = json.loads(item.checkpoint["channel_values"]["identity"])
+        assert set(identity) == {"name", "parent_ns", "path", "step", "version"}
+        assert identity["version"] == 1
+    if asynchronous:
+        await adapter.adelete_thread("functional")
+    else:
+        adapter.delete_thread("functional")
+    assert list(saver.list(config)) == []
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -3876,6 +4329,63 @@ async def test_progress_ownership_survives_host_and_saver_recreation(
             assert CheckpointRef.from_dict(boundary) == selected
         else:
             assert boundary is None
+
+
+@pytest.mark.parametrize("kind", ["nested", "async_parallel"])
+async def test_functional_task_results_survive_host_and_saver_recreation(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    sqlite = pytest.importorskip("langgraph.checkpoint.sqlite.aio")
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    database = str(tmp_path / "functional-checkpoints.sqlite")
+    operations: list[str] = []
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        server = ResponsesHostServer(
+            _functional_graph(saver, operations, kind),
+            enable_response_branching=True,
+        )
+        with TestClient(server.app) as client:
+            parent = _post(client, "start")
+            pending = next(
+                item for item in parent["output"] if item["type"] == "function_call"
+            )
+            waiting = _post(client, "waiting", previous_response_id=parent["id"])
+            assert waiting["status"] == "completed", waiting
+            waiting_pending = next(
+                item for item in waiting["output"] if item["type"] == "function_call"
+            )
+        assert operations == ["prepare", "prepare"]
+
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        recreated = ResponsesHostServer(
+            _functional_graph(saver, operations, kind),
+            enable_response_branching=True,
+        )
+        with TestClient(recreated.app) as client:
+            for selected, call, answer in (
+                (parent, pending, "left"),
+                (waiting, waiting_pending, "right"),
+            ):
+                completed = _post(
+                    client,
+                    [
+                        {
+                            "type": "function_call_output",
+                            "call_id": call["call_id"],
+                            "output": json.dumps({"resume": answer}),
+                        }
+                    ],
+                    previous_response_id=selected["id"],
+                )
+                assert completed["status"] == "completed", completed
+                assert _text(completed) == f"1,2:{answer}"
+                assert operations == ["prepare", "prepare"]
 
 
 async def test_persisted_partial_approval_reuses_completed_task_after_recreation(

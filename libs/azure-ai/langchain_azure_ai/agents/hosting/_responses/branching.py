@@ -41,6 +41,11 @@ from .._converters._hitl import (
 )
 from .checkpoint_ref import CheckpointRef
 from .conversation_chain_store import ConversationChainStoreProtocol
+from .functional_tasks import (
+    FunctionalTaskError,
+    FunctionalTaskRecorder,
+    fork_functional_tasks,
+)
 from .hosting_runnable_config import HostingRunnableConfig
 from .task_storage_manager import TaskStorageManager
 
@@ -547,8 +552,18 @@ class ResponseBranchStore:
         resume_ids, writes_by_task = _remap_pause_writes(
             parent.tasks, fork.tasks, saved.pending_writes or ()
         )
+        fork_tasks = {(task.name, task.path): task.id for task in fork.tasks}
+        root_ids = {task.id: fork_tasks[task.name, task.path] for task in parent.tasks}
+        try:
+            functional_ids = await fork_functional_tasks(
+                checkpointer, saved, fork_config, checkpoint, root_ids
+            )
+        except FunctionalTaskError as exc:
+            raise BranchingError("invalid_branch_state", str(exc)) from exc
         for task_id, writes in writes_by_task.items():
-            await saver.aput_writes(fork_config, writes, task_id)
+            await saver.aput_writes(
+                fork_config, writes, functional_ids.get(task_id, task_id)
+            )
         return fork_ref, resume_ids
 
     async def prepare(
@@ -789,6 +804,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             if branching and response_key is not None
             else None
         )
+        self.task_recorder = FunctionalTaskRecorder()
         self._resume_head: CheckpointRef | None = None
 
     @property
@@ -977,7 +993,10 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's pending-write semantics."""
-        self._saver.put_writes(self._resolve(config), writes, task_id, task_path)
+        config = self._resolve(config)
+        if self._execution is not None:
+            self.task_recorder.put(self._saver, config, task_id)
+        self._saver.put_writes(config, writes, task_id, task_path)
 
     async def aput_writes(
         self,
@@ -987,7 +1006,10 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's asynchronous pending-write semantics."""
-        await self._saver.aput_writes(self._resolve(config), writes, task_id, task_path)
+        config = self._resolve(config)
+        if self._execution is not None:
+            await self.task_recorder.aput(self._saver, config, task_id)
+        await self._saver.aput_writes(config, writes, task_id, task_path)
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete a thread's checkpoints and writes using the original saver.
