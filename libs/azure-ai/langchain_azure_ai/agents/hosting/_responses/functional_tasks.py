@@ -1,4 +1,4 @@
-"""Persist functional call identities needed to copy paused task results."""
+"""Persist functional call identities needed to copy paused task writes."""
 
 from __future__ import annotations
 
@@ -25,6 +25,15 @@ _NULL_TASK_ID = "00000000-0000-0000-0000-000000000000"
 
 class FunctionalTaskError(ValueError):
     """A persisted functional call cannot be safely associated with its result."""
+
+
+@dataclass(frozen=True)
+class TaskFork:
+    """A task's new ID and its verified source and destination namespaces."""
+
+    task_id: str
+    source_namespace: str
+    namespace: str
 
 
 def _path(value: Any) -> tuple[Any, ...]:
@@ -288,14 +297,14 @@ async def fork_functional_tasks(
     fork_config: RunnableConfig,
     checkpoint: Checkpoint,
     root_ids: Mapping[str, str],
-) -> dict[str, str]:
+) -> dict[str, TaskFork]:
     """Rebind persisted functional calls using verified upstream task identities."""
     pending = {
         task_id
         for task_id, channel, _ in saved.pending_writes or ()
         if task_id not in root_ids
-        and task_id != _NULL_TASK_ID
-        and channel in {"__return__", "__error__", "__interrupt__"}
+        and task_id not in {"", _NULL_TASK_ID}
+        and channel in {"__return__", "__error__", "__interrupt__", "__resume__"}
     }
     identities = {}
     while pending:
@@ -319,6 +328,7 @@ async def fork_functional_tasks(
                 pending.add(parent_id)
 
     remapped = dict(root_ids)
+    forks: dict[str, TaskFork] = {}
     while identities:
         ready = False
         for task_id, identity in list(identities.items()):
@@ -340,12 +350,13 @@ async def fork_functional_tasks(
                 )
             await _save_index(saver, fork_config, fork_id, fork_identity)
             remapped[task_id] = fork_id
+            forks[task_id] = TaskFork(
+                fork_id,
+                f"{identity.parent_ns}|{identity.name}:{task_id}",
+                f"{parent_ns}|{identity.name}:{fork_id}",
+            )
             del identities[task_id]
             ready = True
         if not ready:
             raise FunctionalTaskError("The functional task ancestry is invalid.")
-    return {
-        task_id: fork_id
-        for task_id, fork_id in remapped.items()
-        if task_id not in root_ids
-    }
+    return forks

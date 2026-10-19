@@ -445,6 +445,12 @@ retry contract; independent branches use new response identities.
   parallel calls. Calls first reached after an approval still execute normally.
   Failed calls retain LangGraph's retry behavior; only successfully completed
   work is protected from this unintended replay.
+- An `interrupt()` inside a functional `@task`, including a nested or
+  asynchronous call, can be approved through either JSON or SSE responses.
+  Waiting, sequential approvals, and partial approvals preserve the same
+  branch-isolation and completed-task reuse behavior. Functional calls whose
+  writes belong to the root checkpoint are not paused subgraphs: the restriction
+  above still applies when a separate subgraph checkpoint history is involved.
 - Checkpoints do not roll back or isolate external tools, shared stores, or
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
@@ -490,7 +496,7 @@ Paused-fork creation uses the strict saver for checkpoint reads and writes.
 The copy shares the selected checkpoint's parent rather than extending its
 history, so ancestor-reconstructed channels such as `DeltaChannel` do not replay
 the transferred pending writes twice.
-Task and pending-write remapping is a pure transformation keyed by
+Root task and pending-write remapping is a pure transformation keyed by
 `(task.name, task.path)`, keeping same-name fan-out tasks distinct.
 
 Functional calls additionally need their call identity: a completed `@task`
@@ -509,7 +515,12 @@ whole-thread deletion removes them with the other checkpoints.
 When copying pending writes, the host uses LangGraph's internal task
 construction helper rather than duplicating its ID hash algorithm. It first
 reconstructs and verifies each original task ID, then generates the fork's IDs
-in parent-before-child order and copies both identities and results. This also
+in parent-before-child order before remapping pending writes. Interrupt IDs are
+derived from the complete remapped task namespace, not only the root node name
+and ID. An interrupt propagated to an ancestor retains its child's identity in
+every write, and namespace ancestry is validated before copying it. Task-local
+resume lists and ID-keyed global resume bindings are transferred consistently.
+The host copies both identities and results. This also
 preserves distinct calls to the same function with identical arguments. The
 integration is compatibility-tested against the supported minimum LangGraph
 version; missing helpers, unavailable or invalid identity records, and storage

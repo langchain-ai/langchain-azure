@@ -44,6 +44,7 @@ from .conversation_chain_store import ConversationChainStoreProtocol
 from .functional_tasks import (
     FunctionalTaskError,
     FunctionalTaskRecorder,
+    TaskFork,
     fork_functional_tasks,
 )
 from .hosting_runnable_config import HostingRunnableConfig
@@ -254,12 +255,10 @@ class BranchingError(ValueError):
         super().__init__(message)
 
 
-def _remap_pause_writes(
+def _pause_task_forks(
     parent_tasks: Sequence[PregelTask],
     fork_tasks: Sequence[PregelTask],
-    pending_writes: Sequence[PendingWrite],
-) -> tuple[dict[str, str], dict[str, list[tuple[str, Any]]]]:
-    """Rekey paused writes without modifying the parent tasks or values."""
+) -> dict[str, TaskFork]:
     tasks = {(task.name, task.path): task for task in fork_tasks}
     if len(tasks) != len(fork_tasks) or set(tasks) != {
         (task.name, task.path) for task in parent_tasks
@@ -267,11 +266,38 @@ def _remap_pause_writes(
         raise BranchingError(
             "invalid_branch_state", "The fork checkpoint tasks do not match."
         )
-    task_ids = {task.id: tasks[task.name, task.path] for task in parent_tasks}
+    return {
+        task.id: TaskFork(
+            tasks[task.name, task.path].id,
+            f"{task.name}:{task.id}",
+            f"{task.name}:{tasks[task.name, task.path].id}",
+        )
+        for task in parent_tasks
+    }
+
+
+def _remap_pause_writes(
+    parent_tasks: Sequence[PregelTask],
+    fork_tasks: Sequence[PregelTask],
+    pending_writes: Sequence[PendingWrite],
+    *,
+    functional_tasks: Mapping[str, TaskFork] | None = None,
+) -> tuple[dict[str, str], dict[str, list[tuple[str, Any]]]]:
+    """Rekey paused writes without modifying the parent tasks or values."""
+    task_forks = _pause_task_forks(parent_tasks, fork_tasks)
+    task_forks.update(functional_tasks or {})
+    interrupt_tasks = {
+        Interrupt.from_ns(None, task.source_namespace).id: task
+        for task in task_forks.values()
+    }
+    interrupt_ids = {
+        interrupt_id: Interrupt.from_ns(None, task.namespace).id
+        for interrupt_id, task in interrupt_tasks.items()
+    }
     resume_ids: dict[str, str] = {}
     writes_by_task: dict[str, list[tuple[str, Any]]] = {}
     for task_id, channel, value in pending_writes:
-        task = task_ids.get(task_id)
+        task = task_forks.get(task_id)
         if channel == "__interrupt__":
             if (
                 task is None
@@ -283,13 +309,27 @@ def _remap_pause_writes(
                 )
             fork_interrupts = []
             for interrupt in value:
-                fork_id = Interrupt.from_ns(
-                    interrupt.value, f"{task.name}:{task.id}"
-                ).id
+                interrupted = interrupt_tasks.get(interrupt.id)
+                if interrupted is None or not (
+                    interrupted.source_namespace == task.source_namespace
+                    or interrupted.source_namespace.startswith(
+                        f"{task.source_namespace}|"
+                    )
+                ):
+                    raise BranchingError(
+                        "invalid_branch_state", "The paused checkpoint is invalid."
+                    )
+                fork_id = interrupt_ids[interrupt.id]
                 resume_ids[interrupt.id] = fork_id
                 fork_interrupts.append(replace(interrupt, id=fork_id))
             value = tuple(fork_interrupts)
-        writes_by_task.setdefault(task.id if task else task_id, []).append(
+        elif (
+            channel == "__resume__"
+            and task_id in {"", "00000000-0000-0000-0000-000000000000"}
+            and isinstance(value, dict)
+        ):
+            value = remap_resume_command(Command(resume=value), interrupt_ids).resume
+        writes_by_task.setdefault(task.task_id if task else task_id, []).append(
             (channel, value)
         )
     if not resume_ids:
@@ -549,21 +589,25 @@ class ResponseBranchStore:
             .runnable_config
         )
         fork = await guarded_graph.aget_state(fork_config)
-        resume_ids, writes_by_task = _remap_pause_writes(
-            parent.tasks, fork.tasks, saved.pending_writes or ()
-        )
-        fork_tasks = {(task.name, task.path): task.id for task in fork.tasks}
-        root_ids = {task.id: fork_tasks[task.name, task.path] for task in parent.tasks}
+        root_tasks = _pause_task_forks(parent.tasks, fork.tasks)
         try:
-            functional_ids = await fork_functional_tasks(
-                checkpointer, saved, fork_config, checkpoint, root_ids
+            functional_tasks = await fork_functional_tasks(
+                checkpointer,
+                saved,
+                fork_config,
+                checkpoint,
+                {task_id: task.task_id for task_id, task in root_tasks.items()},
             )
         except FunctionalTaskError as exc:
             raise BranchingError("invalid_branch_state", str(exc)) from exc
+        resume_ids, writes_by_task = _remap_pause_writes(
+            parent.tasks,
+            fork.tasks,
+            saved.pending_writes or (),
+            functional_tasks=functional_tasks,
+        )
         for task_id, writes in writes_by_task.items():
-            await saver.aput_writes(
-                fork_config, writes, functional_ids.get(task_id, task_id)
-            )
+            await saver.aput_writes(fork_config, writes, task_id)
         return fork_ref, resume_ids
 
     async def prepare(
