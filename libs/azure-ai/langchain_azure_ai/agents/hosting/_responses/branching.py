@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import (
@@ -10,7 +11,10 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import replace
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from azure.ai.agentserver.responses import (
@@ -863,11 +867,56 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         )
         self.task_recorder = FunctionalTaskRecorder()
         self._resume_head: CheckpointRef | None = None
+        self._checkpoint_writes: dict[CheckpointRef, Future[None]] = {}
+        self._write_error: BaseException | None = None
+        self._write_lock = Lock()
 
     @property
     def config_specs(self) -> Any:
         """Preserve the wrapped saver's configurable fields."""
         return self._saver.config_specs
+
+    async def wait_for_checkpoint(self, ref: CheckpointRef) -> None:
+        """Wait for a root checkpoint before publishing recovery progress.
+
+        Args:
+            ref: The exact root checkpoint announced by the graph stream.
+
+        Raises:
+            BaseException: A checkpoint or pending-write operation failed.
+        """
+        with self._write_lock:
+            future = self._checkpoint_writes.get(ref)
+            if future is None:
+                future = self._checkpoint_writes[ref] = Future()
+                if self._write_error is not None:
+                    future.set_exception(self._write_error)
+        await asyncio.wrap_future(future)
+
+    def _record_checkpoint(
+        self, config: RunnableConfig, checkpoint: Checkpoint
+    ) -> None:
+        self.task_recorder.record_checkpoint(config, checkpoint)
+        configurable = config.get("configurable") or {}
+        if configurable.get("checkpoint_ns", "") != "":
+            return
+        ref = CheckpointRef(configurable["thread_id"], checkpoint["id"])
+        with self._write_lock:
+            future = self._checkpoint_writes.setdefault(ref, Future())
+            if not future.done():
+                future.set_result(None)
+
+    @contextmanager
+    def _track_writes(self) -> Iterator[None]:
+        try:
+            yield
+        except BaseException as exc:
+            with self._write_lock:
+                self._write_error = exc
+                for future in self._checkpoint_writes.values():
+                    if not future.done():
+                        future.set_exception(exc)
+            raise
 
     async def validate_progress(self, config: RunnableConfig) -> None:
         """Require a recovery checkpoint owned by this response and origin.
@@ -969,7 +1018,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
                     "The branch resume checkpoint was not saved.",
                 )
             self._resume_head = ref
-        self.task_recorder.record_checkpoint(config, checkpoint)
+        self._record_checkpoint(config, checkpoint)
         return saved_config
 
     def _validate(
@@ -1001,7 +1050,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         config = self._resolve(config)
         saved = self._validate(config, self._saver.get_tuple(config))
         if saved is not None:
-            self.task_recorder.record_checkpoint(config, saved.checkpoint)
+            self._record_checkpoint(config, saved.checkpoint)
         return saved
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
@@ -1009,7 +1058,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         config = self._resolve(config)
         saved = self._validate(config, await self._saver.aget_tuple(config))
         if saved is not None:
-            self.task_recorder.record_checkpoint(config, saved.checkpoint)
+            self._record_checkpoint(config, saved.checkpoint)
         return saved
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:
@@ -1029,11 +1078,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write a checkpoint using the original saver."""
-        config = self._resolve(config)
-        saved_config = self._saver.put(
-            config, checkpoint, self._metadata(config, metadata), new_versions
-        )
-        return self._advance_head(config, checkpoint, saved_config)
+        with self._track_writes():
+            config = self._resolve(config)
+            saved_config = self._saver.put(
+                config, checkpoint, self._metadata(config, metadata), new_versions
+            )
+            return self._advance_head(config, checkpoint, saved_config)
 
     async def aput(
         self,
@@ -1043,11 +1093,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         """Write an asynchronous checkpoint using the original saver."""
-        config = self._resolve(config)
-        saved_config = await self._saver.aput(
-            config, checkpoint, self._metadata(config, metadata), new_versions
-        )
-        return self._advance_head(config, checkpoint, saved_config)
+        with self._track_writes():
+            config = self._resolve(config)
+            saved_config = await self._saver.aput(
+                config, checkpoint, self._metadata(config, metadata), new_versions
+            )
+            return self._advance_head(config, checkpoint, saved_config)
 
     def put_writes(
         self,
@@ -1057,10 +1108,11 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's pending-write semantics."""
-        config = self._resolve(config)
-        if self._execution is not None:
-            self.task_recorder.put(self._saver, config, task_id)
-        self._saver.put_writes(config, writes, task_id, task_path)
+        with self._track_writes():
+            config = self._resolve(config)
+            if self._execution is not None:
+                self.task_recorder.put(self._saver, config, task_id)
+            self._saver.put_writes(config, writes, task_id, task_path)
 
     async def aput_writes(
         self,
@@ -1070,10 +1122,11 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         task_path: str = "",
     ) -> None:
         """Preserve the saver's asynchronous pending-write semantics."""
-        config = self._resolve(config)
-        if self._execution is not None:
-            await self.task_recorder.aput(self._saver, config, task_id)
-        await self._saver.aput_writes(config, writes, task_id, task_path)
+        with self._track_writes():
+            config = self._resolve(config)
+            if self._execution is not None:
+                await self.task_recorder.aput(self._saver, config, task_id)
+            await self._saver.aput_writes(config, writes, task_id, task_path)
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete a thread's checkpoints and writes using the original saver.

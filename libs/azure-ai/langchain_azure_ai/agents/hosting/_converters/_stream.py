@@ -5,7 +5,7 @@
 
 Drives :meth:`CompiledStateGraph.astream` with
 ``stream_mode=["updates", "messages", "checkpoints"]`` so the converter
-receives per-token text chunks, per-node state updates, and the exact persisted
+receives per-token text chunks, per-node state updates, and the exact
 checkpoint config for the invocation. Checkpoint events stay internal while
 tool calls and tool-message results are surfaced to the client in real time.
 
@@ -46,7 +46,14 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from typing import Any, TypedDict, cast
 
@@ -72,6 +79,7 @@ async def stream_graph_to_events(
     cancellation_signal: asyncio.Event,
     shutdown_signal: asyncio.Event | None = None,
     usage: UsageAccumulator | None = None,
+    checkpoint_waiter: Callable[[CheckpointRef], Awaitable[None]] | None = None,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -93,6 +101,8 @@ async def stream_graph_to_events(
         shutdown_signal: Set when the host is draining. Iteration stops on set
             so the caller can defer resilient work to the next lifetime.
         usage: Optional accumulator for LangChain AI message usage metadata.
+        checkpoint_waiter: Optional persistence barrier for a root checkpoint.
+            Completes before its reference is stored in the Responses task.
 
     Yields:
         Responses API event payload dicts.
@@ -105,8 +115,8 @@ async def stream_graph_to_events(
     #   -> execute superstep A
     #   -> "messages" chunks while nodes run
     #   -> "updates" chunks as nodes finish
-    #   -> commit LangGraph checkpoint
     #   -> "checkpoints" chunk for the resulting state
+    #   -> wait for LangGraph persistence when a checkpoint waiter is supplied
     #   -> commit responses store  <--- THE recovery boundary
     #       A crash before it resumes from superstep A.
     #       A crash after it resumes from superstep B.
@@ -136,6 +146,8 @@ async def stream_graph_to_events(
         elif mode == "checkpoints":
             checkpoint_ref = _extract_checkpoint_ref(payload)
             if checkpoint_ref is not None:
+                if checkpoint_waiter is not None:
+                    await checkpoint_waiter(checkpoint_ref)
                 task_storage.store_checkpoint_ref(checkpoint_ref)
             async for event in converter.checkpoint():
                 yield event

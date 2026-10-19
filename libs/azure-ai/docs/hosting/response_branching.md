@@ -556,7 +556,11 @@ checkpoint. Explicit state reads and ordinary historical branch execution keep
 their existing checkpoint-selection semantics.
 
 Root checkpoint writes also record the current response's user-scoped identity
-and confirmed origin in checkpoint metadata. Before resuming recorded progress,
+and confirmed origin in checkpoint metadata. A graph checkpoint event can arrive
+before its write completes, including with synchronous durability. The host
+waits for that exact root checkpoint to be read or successfully written before
+publishing its reference as recovery progress. Write failures propagate without
+publishing an unavailable checkpoint. Before resuming recorded progress,
 the host verifies that this execution identity matches both the recovering
 response and its origin. Sharing a thread or descending from the same parent is
 not sufficient: sibling responses can share both. A paused fork is marked when

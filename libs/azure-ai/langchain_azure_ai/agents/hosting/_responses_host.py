@@ -1328,6 +1328,11 @@ class ResponsesHostServer:
                 cancellation_signal=cancellation_signal,
                 shutdown_signal=context.shutdown,
                 usage=usage,
+                checkpoint_waiter=(
+                    request_saver.wait_for_checkpoint
+                    if request_saver is not None
+                    else None
+                ),
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref

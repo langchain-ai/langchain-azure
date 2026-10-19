@@ -2825,9 +2825,23 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("progress", ["own", "sibling", "parent", "different_origin"])
 async def test_recovery_requires_progress_from_the_same_response_execution(
-    enabled: bool, stream: bool, progress: str
+    enabled: bool, stream: bool, progress: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graph, executions = _branch_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    original_put = saver.aput
+
+    async def delayed_put(
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        await asyncio.sleep(0)
+        return await original_put(config, checkpoint, metadata, new_versions)
+
+    monkeypatch.setattr(saver, "aput", delayed_put)
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
     with TestClient(server.app) as client:
@@ -2854,6 +2868,17 @@ async def test_recovery_requires_progress_from_the_same_response_execution(
                 assert (
                     metadata[METADATA_LANGGRAPH_CHECKPOINT_ID]
                     != parent_ref.checkpoint_id
+                )
+                saved = await saver.aget_tuple(
+                    {
+                        "configurable": {
+                            "thread_id": metadata[METADATA_LANGGRAPH_THREAD_ID],
+                            "checkpoint_id": metadata[METADATA_LANGGRAPH_CHECKPOINT_ID],
+                        }
+                    }
+                )
+                assert saved is not None, (
+                    "Recovery progress was published before checkpoint persistence."
                 )
                 persisted = deepcopy(event.response)
                 break
@@ -2905,6 +2930,63 @@ async def test_recovery_requires_progress_from_the_same_response_execution(
         assert terminal["status"] == "completed", terminal
         assert _text(terminal) == "A,B"
         assert executions == ["A", "C", "B"]
+
+
+@pytest.mark.parametrize("source", ["input", "loop"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_checkpoint_write_failure_does_not_publish_missing_progress(
+    source: str, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph, _ = _branch_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    original_put = saver.aput
+
+    async def failed_put(
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        await asyncio.sleep(0)
+        if metadata["source"] == source:
+            raise OSError("private checkpoint backend failure")
+        return await original_put(config, checkpoint, metadata, new_versions)
+
+    monkeypatch.setattr(saver, "aput", failed_put)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    context = _context(response_id="root", conversation_id=None, current_text="A")
+    events = []
+    async with asyncio.timeout(5):
+        async for event in server.handle_create(
+            _request(stream=stream), context, asyncio.Event()
+        ):
+            events.append(event)
+            if not isinstance(event, dict):
+                metadata = json.loads(
+                    event.response.get("metadata", {}).get("_internal_metadata", "{}")
+                )
+                if metadata.get(METADATA_LANGGRAPH_CHECKPOINT_ID):
+                    saved = await saver.aget_tuple(
+                        {
+                            "configurable": {
+                                "thread_id": metadata[METADATA_LANGGRAPH_THREAD_ID],
+                                "checkpoint_id": metadata[
+                                    METADATA_LANGGRAPH_CHECKPOINT_ID
+                                ],
+                            }
+                        }
+                    )
+                    assert saved is not None
+    terminal = events[-1]["response"]
+    assert terminal["status"] == "failed", terminal
+    assert terminal["error"]["code"] == "server_error"
+    assert "private checkpoint backend" not in terminal["error"]["message"]
+    assert (
+        await server._conversation_chain_store.get("root", BRANCH_BOUNDARY_KEY) is None
+    )
 
 
 @pytest.mark.parametrize("enabled", [False, True])
