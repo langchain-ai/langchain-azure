@@ -296,6 +296,20 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.11**:
+
+  - **[NEW, Preview]** We introduced `AzureContentSafetyPolicyMiddleware` to apply a Content Safety guardrail policy to agent and model messages, tool arguments, and tool results, with support for service-provided transforms and annotations. This requires `azure-ai-contentsafety>=1.1.0b1`. [#1141](https://github.com/langchain-ai/langchain-azure/pull/1141)
+  - We mapped MCP approval responses to ordered approve/reject decisions for LangChain `HumanInTheLoopMiddleware`. Invalid or conflicting decisions fail the request without resuming pending interrupts. [#1058](https://github.com/langchain-ai/langchain-azure/pull/1058)
+  - We preserved image and file attachments in hosted Responses requests and tool outputs. [#1072](https://github.com/langchain-ai/langchain-azure/pull/1072) [#1073](https://github.com/langchain-ai/langchain-azure/pull/1073)
+  - We preserved Responses text citations and their streaming annotation events in hosted agent output. [#1074](https://github.com/langchain-ai/langchain-azure/pull/1074)
+  - We deferred model SDK imports during hosting startup while preserving the hosting User-Agent stamp, and added `wrapt` to the `hosting` extra so this instrumentation does not require the `opentelemetry` extra. [#1155](https://github.com/langchain-ai/langchain-azure/pull/1155)
+  - We scoped `AzureCosmosDBMongoVCoreSemanticCache` lookups and clearing to the requested `llm_string`, preventing cache hits and deletions across model configurations. [#1030](https://github.com/langchain-ai/langchain-azure/pull/1030) Thanks to [@cr-sbarbouche](https://github.com/cr-sbarbouche).
+  - We fixed `AzureAIOpenTelemetryTracer` to accept LangGraph interrupt and resume callbacks without callback errors. [#1075](https://github.com/langchain-ai/langchain-azure/pull/1075) Thanks to [@taekop](https://github.com/taekop).
+  - We redacted agent finish output and retriever queries in `AzureAIOpenTelemetryTracer` when content recording is disabled. [#1089](https://github.com/langchain-ai/langchain-azure/pull/1089) Thanks to [@taekop](https://github.com/taekop).
+  - We fixed agent requests to honor an explicitly selected agent version while preserving dynamic version resolution for `version="latest"`. [#1041](https://github.com/langchain-ai/langchain-azure/pull/1041)
+  - We fixed project endpoint resolution to match service names exactly and honor the supplied `api_version`. [#1099](https://github.com/langchain-ai/langchain-azure/pull/1099) Thanks to [@revanth-045](https://github.com/revanth-045).
+  - We updated hosted Responses usage typing for SDK compatibility while preserving cache-write token counts. [#1048](https://github.com/langchain-ai/langchain-azure/pull/1048) Thanks to [@jkennedyvz](https://github.com/jkennedyvz).
+
 - **1.2.10**:
 
   - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
