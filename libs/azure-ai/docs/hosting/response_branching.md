@@ -502,18 +502,29 @@ and keeping execution consistent across supported LangGraph versions. The
 shared application graph is not modified. Application-specific fields remain
 available for fork reads, writes, functional-task identity records, and recovery
 validation even when the saver returns only checkpoint reference fields.
+Checkpoint reads also retain these configurable fields on ancestor references,
+so channel-history reconstruction, including `DeltaChannel`, uses the same
+application configuration without changing checkpoint identities. Pending-write
+delegation preserves LangGraph's support for three-argument saver methods;
+`task_path` is forwarded only when the corresponding method accepts it.
 The copy shares the selected checkpoint's parent rather than extending its
 history, so ancestor-reconstructed channels such as `DeltaChannel` do not replay
 the transferred pending writes twice.
 Root task and pending-write remapping is a pure transformation keyed by
 `(task.name, task.path)`, keeping same-name fan-out tasks distinct.
+Transferred writes retain their native task paths so channel-history reloads
+preserve the same ordering as live execution, regardless of approval order.
 
 Functional calls additionally need their call identity: a completed `@task`
 result in pending writes does not contain its function name or full calling
 context. Request-scoped runnable bindings capture the name, parent namespace,
 call path, and step when LangGraph schedules a call, including cache hits that
-skip execution callbacks, without storing task inputs. Reused successful results
-are persisted before returning the task, including on LangGraph versions that
+skip execution callbacks, without storing task inputs.
+The binding observes each copied node's combined runner while preserving its
+original bound callable and writers. Native node-cache identities and entries
+therefore remain compatible with unwrapped graphs, including shared caches.
+Reused successful results are persisted before returning the task, including
+on LangGraph versions that
 only emit cached values. Before saving that task's writes,
 the saver persists this identity in a reserved
 `__langgraph_response_tasks__:<checkpoint_id>:<task_id>` namespace in the same

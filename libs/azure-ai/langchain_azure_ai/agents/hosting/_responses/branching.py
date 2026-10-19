@@ -14,6 +14,7 @@ from collections.abc import (
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import replace
+from inspect import signature
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
@@ -264,6 +265,8 @@ def _pause_task_forks(
     parent_tasks: Sequence[PregelTask],
     fork_tasks: Sequence[PregelTask],
 ) -> dict[str, TaskFork]:
+    from langgraph.pregel._algo import task_path_str
+
     tasks = {(task.name, task.path): task for task in fork_tasks}
     if len(tasks) != len(fork_tasks) or set(tasks) != {
         (task.name, task.path) for task in parent_tasks
@@ -276,6 +279,7 @@ def _pause_task_forks(
             tasks[task.name, task.path].id,
             f"{task.name}:{task.id}",
             f"{task.name}:{tasks[task.name, task.path].id}",
+            task_path_str(tasks[task.name, task.path].path),
         )
         for task in parent_tasks
     }
@@ -616,8 +620,14 @@ class ResponseBranchStore:
             saved.pending_writes or (),
             functional_tasks=functional_tasks,
         )
+        task_paths = {
+            task.task_id: task.task_path
+            for task in {**root_tasks, **functional_tasks}.values()
+        }
         for task_id, writes in writes_by_task.items():
-            await saver.aput_writes(fork_saver_config, writes, task_id)
+            await saver.aput_writes(
+                fork_saver_config, writes, task_id, task_paths.get(task_id, "")
+            )
         return fork_ref, resume_ids
 
     async def prepare(
@@ -859,6 +869,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     ) -> None:
         super().__init__(serde=saver.serde)
         self._saver = saver
+        self._put_writes_accepts_task_path = (
+            "task_path" in signature(saver.put_writes).parameters
+        )
+        self._aput_writes_accepts_task_path = (
+            "task_path" in signature(saver.aput_writes).parameters
+        )
         self._branching = branching
         self._execution = (
             _checkpoint_execution(response_key, origin)
@@ -1026,14 +1042,16 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     ) -> CheckpointTuple | None:
         requested = config.get("configurable") or {}
         checkpoint_id = requested.get("checkpoint_id")
-        if not self._branching or not checkpoint_id:
+        if not self._branching:
             return saved
         if saved is None:
-            raise BranchingError(
-                "checkpoint_unavailable", "The required checkpoint is unavailable."
-            )
+            if checkpoint_id:
+                raise BranchingError(
+                    "checkpoint_unavailable", "The required checkpoint is unavailable."
+                )
+            return None
         actual = saved.config.get("configurable") or {}
-        if (
+        if checkpoint_id and (
             actual.get("thread_id") != requested.get("thread_id")
             or actual.get("checkpoint_ns", "") != requested.get("checkpoint_ns", "")
             or actual.get("checkpoint_id") != checkpoint_id
@@ -1043,7 +1061,29 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
                 "checkpoint_unavailable",
                 "The saver did not return the required checkpoint.",
             )
-        return saved
+        # Carry execution options without substituting the current checkpoint's ID.
+        execution_options = {
+            key: value
+            for key, value in requested.items()
+            if key not in {"thread_id", "checkpoint_ns", "checkpoint_id"}
+        }
+        return saved._replace(
+            config={
+                **saved.config,
+                "configurable": {**execution_options, **actual},
+            },
+            parent_config=(
+                {
+                    **saved.parent_config,
+                    "configurable": {
+                        **execution_options,
+                        **(saved.parent_config.get("configurable") or {}),
+                    },
+                }
+                if saved.parent_config is not None
+                else None
+            ),
+        )
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read a checkpoint and validate an explicit branch selection."""
@@ -1112,7 +1152,10 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             config = self._resolve(config)
             if self._execution is not None:
                 self.task_recorder.put(self._saver, config, task_id)
-            self._saver.put_writes(config, writes, task_id, task_path)
+            if self._put_writes_accepts_task_path:
+                self._saver.put_writes(config, writes, task_id, task_path)
+            else:
+                self._saver.put_writes(config, writes, task_id)
 
     async def aput_writes(
         self,
@@ -1126,7 +1169,10 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             config = self._resolve(config)
             if self._execution is not None:
                 await self.task_recorder.aput(self._saver, config, task_id)
-            await self._saver.aput_writes(config, writes, task_id, task_path)
+            if self._aput_writes_accepts_task_path:
+                await self._saver.aput_writes(config, writes, task_id, task_path)
+            else:
+                await self._saver.aput_writes(config, writes, task_id)
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete a thread's checkpoints and writes using the original saver.

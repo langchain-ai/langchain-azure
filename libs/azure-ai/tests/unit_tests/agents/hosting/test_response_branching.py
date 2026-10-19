@@ -252,6 +252,44 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     return builder.compile(checkpointer=InMemorySaver()), executions
 
 
+def _delta_branch_graph(
+    saver: BaseCheckpointSaver[Any], *, paused: bool = False
+) -> CompiledStateGraph:
+    pytest.importorskip("langgraph.channels.delta")
+
+    class DeltaState(TypedDict):
+        messages: Annotated[list[AnyMessage], add_messages]
+        ledger: Annotated[
+            list[str],
+            channels.DeltaChannel(
+                lambda value, writes: (
+                    value + [entry for write in writes for entry in write]
+                )
+            ),
+        ]
+
+    def record(state: DeltaState) -> dict[str, Any]:
+        text = str(state["messages"][-1].content)
+        return {"ledger": [text]}
+
+    def finish(state: DeltaState) -> dict[str, Any]:
+        if paused:
+            answer = str(interrupt("approve?"))
+            return {
+                "ledger": [answer],
+                "messages": [AIMessage(content=",".join([*state["ledger"], answer]))],
+            }
+        return {"messages": [AIMessage(content=",".join(state["ledger"]))]}
+
+    builder = StateGraph(DeltaState)
+    builder.add_node("record", record)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "record")
+    builder.add_edge("record", "finish")
+    builder.add_edge("finish", END)
+    return builder.compile(checkpointer=saver)
+
+
 def _application_owned_subgraph_graph() -> tuple[CompiledStateGraph, dict[str, int]]:
     class ChildState(TypedDict):
         count: int
@@ -559,6 +597,58 @@ def test_branches_preserve_checkpoint_configuration(
             assert _text(child) == (f"ok:{answer}" if paused else f"start,{answer}")
         if parent_config is not None:
             assert saver.get_tuple(parent_config) == parent_checkpoint
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+def test_delta_branches_preserve_checkpoint_configuration(
+    stream: bool, paused: bool, configuration: str
+) -> None:
+    saver = _ConfiguredSaver()
+    server = _configured_server(
+        _delta_branch_graph(saver, paused=paused), configuration
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "A", stream=stream)
+        assert parent["status"] == "completed", parent
+        parent_config: RunnableConfig = {
+            "configurable": {
+                **_boundary_ref(client, server, parent["id"]).to_dict(),
+                "checkpoint_ns": "",
+                "tenant_id": "tenant",
+            }
+        }
+        original = saver.get_tuple(parent_config)
+        call_id = (
+            next(
+                item["call_id"]
+                for item in parent["output"]
+                if item["type"] == "function_call"
+            )
+            if paused
+            else None
+        )
+        for text in ("B", "C"):
+            child = _post(
+                client,
+                (
+                    [
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": text,
+                        }
+                    ]
+                    if paused
+                    else text
+                ),
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert child["status"] == "completed", child
+            assert _text(child) == f"A,{text}"
+        assert saver.get_tuple(parent_config) == original
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -2209,6 +2299,83 @@ async def test_checkpoint_saver_read_policy(enabled: bool, asynchronous: bool) -
         assert await read() is None
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checkpoint_saver_supports_three_argument_writes(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saver = InMemorySaver()
+    original_put_writes = saver.put_writes
+
+    def put_writes(
+        config: RunnableConfig, writes: Sequence[tuple[str, Any]], task_id: str
+    ) -> None:
+        original_put_writes(config, writes, task_id)
+
+    async def aput_writes(
+        config: RunnableConfig, writes: Sequence[tuple[str, Any]], task_id: str
+    ) -> None:
+        put_writes(config, writes, task_id)
+
+    monkeypatch.setattr(saver, "put_writes", put_writes)
+    monkeypatch.setattr(saver, "aput_writes", aput_writes)
+    builder = StateGraph(_BranchState)
+    builder.add_node(
+        "record",
+        lambda state: {"ledger": [str(state["messages"][-1].content)]},
+    )
+    builder.add_edge(START, "record")
+    builder.add_edge("record", END)
+    graph = builder.compile(checkpointer=saver)
+    inputs: _BranchState = {
+        "messages": [HumanMessage(content="A")],
+        "ledger": [],
+    }
+    native_config: RunnableConfig = {"configurable": {"thread_id": "native"}}
+    wrapped_config: RunnableConfig = {"configurable": {"thread_id": "wrapped"}}
+    if asynchronous:
+        native = await graph.ainvoke(inputs, native_config, durability="sync")
+    else:
+        native = graph.invoke(inputs, native_config, durability="sync")
+    graph.checkpointer = ResponseCheckpointSaver(saver, branching=True)
+    if asynchronous:
+        wrapped = await graph.ainvoke(inputs, wrapped_config, durability="sync")
+    else:
+        wrapped = graph.invoke(inputs, wrapped_config, durability="sync")
+    assert wrapped["ledger"] == native["ledger"] == ["A"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checkpoint_saver_restores_configured_delta_history(
+    asynchronous: bool,
+) -> None:
+    saver = _ConfiguredSaver()
+    graph = _delta_branch_graph(saver)
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "configured-delta", "tenant_id": "tenant"}
+    }
+    inputs = {"messages": [HumanMessage(content="A")]}
+    if asynchronous:
+        await graph.ainvoke(inputs, config, durability="sync")
+        native = await graph.aget_state(config)
+    else:
+        graph.invoke(inputs, config, durability="sync")
+        native = graph.get_state(config)
+    selected_config: RunnableConfig = {
+        "configurable": {**config["configurable"], **native.config["configurable"]}
+    }
+    original = deepcopy(saver.get_tuple(selected_config))
+    original_config = deepcopy(selected_config)
+    graph.checkpointer = ResponseCheckpointSaver(saver, branching=True)
+    restored = (
+        await graph.aget_state(selected_config)
+        if asynchronous
+        else graph.get_state(selected_config)
+    )
+    assert restored.values["ledger"] == native.values["ledger"] == ["A"]
+    assert selected_config == original_config
+    assert saver.get_tuple(selected_config) == original
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("namespace", ["", "child:task"])
@@ -2259,6 +2426,61 @@ async def test_checkpoint_saver_records_only_root_response_ownership(
         )
         with pytest.raises(BranchingError, match="ownership could not be verified"):
             await foreign.validate_progress(saved_config)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("warm_wrapped", [False, True])
+async def test_functional_binding_preserves_shared_node_cache(
+    asynchronous: bool, warm_wrapped: bool
+) -> None:
+    operations: list[str] = []
+
+    def first(state: _BranchState) -> dict[str, Any]:
+        operations.append("first")
+        return {"ledger": ["first-result"]}
+
+    def second(state: _BranchState) -> dict[str, Any]:
+        operations.append("second")
+        return {"ledger": ["second-result"]}
+
+    cache = InMemoryCache[Sequence[tuple[str, Any]]]()
+    graphs: list[CompiledStateGraph] = []
+    wrapped_graphs: list[CompiledStateGraph] = []
+    for function in (first, second):
+        builder = StateGraph(_BranchState)
+        builder.add_node(
+            "cached",
+            function,
+            cache_policy=CachePolicy(key_func=lambda _: "same-input"),
+        )
+        builder.add_edge(START, "cached")
+        builder.add_edge("cached", END)
+        saver = InMemorySaver()
+        graph = builder.compile(checkpointer=saver, cache=cache)
+        graphs.append(graph)
+        adapter = ResponseCheckpointSaver(
+            saver, branching=True, response_key=function.__name__
+        )
+        wrapped_graphs.append(
+            adapter.task_recorder.bind(graph.copy({"checkpointer": adapter}))
+        )
+
+    inputs: _BranchState = {"messages": [], "ledger": []}
+    phases = (wrapped_graphs, graphs) if warm_wrapped else (graphs, wrapped_graphs)
+    for phase, phase_graphs in enumerate(phases):
+        outputs = []
+        for index, graph in enumerate(phase_graphs):
+            config: RunnableConfig = {
+                "configurable": {"thread_id": f"cache-{phase}-{index}"}
+            }
+            result = (
+                await graph.ainvoke(inputs, config, durability="sync")
+                if asynchronous
+                else graph.invoke(inputs, config, durability="sync")
+            )
+            outputs.append(result["ledger"])
+        assert outputs == [["first-result"], ["second-result"]]
+        assert operations == ["first", "second"]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -4027,7 +4249,11 @@ def test_partial_approval_reuses_completed_task_result(
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_partial_approval_applies_delta_channel_writes_once(stream: bool) -> None:
+@pytest.mark.parametrize("order", [("A", "B", "C"), ("C", "B", "A")])
+@pytest.mark.parametrize("fan_out", [False, True])
+def test_partial_approval_applies_delta_channel_writes_once(
+    stream: bool, order: tuple[str, ...], fan_out: bool
+) -> None:
     pytest.importorskip("langgraph.channels.delta")
 
     class DeltaState(TypedDict):
@@ -4053,22 +4279,34 @@ def test_partial_approval_applies_delta_channel_writes_once(stream: bool) -> Non
 
     builder = StateGraph(DeltaState)
     builder.add_node("seed", lambda _: {"ledger": ["seed"]})
-    builder.add_node("a", lambda _: approve("A"))
-    builder.add_node("b", lambda _: approve("B"))
     builder.add_node("finish", finish)
     builder.add_edge(START, "seed")
-    builder.add_edge("seed", "a")
-    builder.add_edge("seed", "b")
-    builder.add_edge(["a", "b"], "finish")
+    if fan_out:
+        builder.add_node("approve", lambda state: approve(state["question"]))
+        builder.add_conditional_edges(
+            "seed",
+            lambda _: [
+                Send("approve", {"question": question}) for question in ("A", "B", "C")
+            ],
+        )
+        builder.add_edge("approve", "finish")
+    else:
+        builder.add_node("a", lambda _: approve("A"))
+        builder.add_node("b", lambda _: approve("B"))
+        builder.add_node("c", lambda _: approve("C"))
+        for node in ("a", "b", "c"):
+            builder.add_edge("seed", node)
+        builder.add_edge(["a", "b", "c"], "finish")
     builder.add_edge("finish", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
     server = ResponsesHostServer(
-        builder.compile(checkpointer=InMemorySaver()),
+        graph,
         store=InMemoryResponseProvider(),
         enable_response_branching=True,
     )
     with TestClient(server.app) as client:
         paused = _post(client, "start", stream=stream)
-        for question in ("A", "B"):
+        for index, question in enumerate(order, 1):
             approval = next(
                 item
                 for item in paused["output"]
@@ -4088,11 +4326,15 @@ def test_partial_approval_applies_delta_channel_writes_once(stream: bool) -> Non
                 stream=stream,
             )
             assert paused["status"] == "completed", paused
-            if question == "A":
-                assert operations == ["A"]
+            assert operations == list(order[:index])
+        assert client.portal is not None
+        boundary = _boundary_ref(client, server, paused["id"])
+        reload_config: RunnableConfig = {"configurable": boundary.to_dict()}
+        reloaded = client.portal.call(graph.aget_state, reload_config)
+        assert reloaded.values["ledger"] == ["seed", "A", "B", "C"]
 
-    assert operations == ["A", "B"]
-    assert _text(paused) == "seed,A,B"
+    assert operations == list(order)
+    assert _text(paused) == "seed,A,B,C"
 
 
 @pytest.mark.parametrize("stream", [False, True])

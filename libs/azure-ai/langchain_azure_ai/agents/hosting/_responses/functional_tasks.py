@@ -35,11 +35,12 @@ class FunctionalTaskError(ValueError):
 
 @dataclass(frozen=True)
 class TaskFork:
-    """A task's new ID and its verified source and destination namespaces."""
+    """A task's new ID, write path, and verified checkpoint namespaces."""
 
     task_id: str
     source_namespace: str
     namespace: str
+    task_path: str
 
 
 def _path(value: Any) -> tuple[Any, ...]:
@@ -236,25 +237,17 @@ class FunctionalTaskRecorder:
         Returns:
             A graph copy with the original execution, writers, and tracing.
         """
-        # The complete node establishes context even when its function is untraced.
-        return graph.copy(
-            {
-                "nodes": {
-                    name: node.copy(
-                        {
-                            "bound": RunnableBinding(
-                                bound=node.node,
-                                config_factories=[self.configure],
-                            ),
-                            "writers": [],
-                        }
-                    )
-                    if node.node is not None
-                    else node
-                    for name, node in graph.nodes.items()
-                }
-            }
-        )
+        nodes = {}
+        for name, node in graph.nodes.items():
+            runnable = node.node
+            if runnable is not None:
+                node = node.copy({})
+                # Keep bound intact for native cache identity; observe the full runner.
+                node.node = RunnableBinding(
+                    bound=runnable, config_factories=[self.configure]
+                )
+            nodes[name] = node
+        return graph.copy({"nodes": nodes})
 
     def configure(self, config: RunnableConfig) -> RunnableConfig:
         """Observe LangGraph scheduling without changing task or cache execution."""
@@ -397,6 +390,8 @@ async def fork_functional_tasks(
     root_ids: Mapping[str, str],
 ) -> dict[str, TaskFork]:
     """Rebind persisted functional calls using verified upstream task identities."""
+    from langgraph.pregel._algo import task_path_str
+
     pending = {
         task_id
         for task_id, channel, _ in saved.pending_writes or ()
@@ -452,6 +447,7 @@ async def fork_functional_tasks(
                 fork_id,
                 f"{identity.parent_ns}|{identity.name}:{task_id}",
                 f"{parent_ns}|{identity.name}:{fork_id}",
+                task_path_str(fork_identity.path),
             )
             del identities[task_id]
             ready = True
