@@ -174,7 +174,7 @@ dev = ["ipykernel>=6.29,<8.0", "langchain-core", "codespell~=2.2"]
 lint = [
   "pydocstyle~=6.3",
   "pymongo~=4.5",
-  "ruff>=0.5,<0.17",
+  "ruff>=0.5,<0.18",
   "simsimd~=6.0",
   "mypy>=1.10,<3.0",
   "types-requests~=2.28",
