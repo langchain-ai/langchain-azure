@@ -2,6 +2,18 @@
 
 This package contains the LangChain integration for Microsoft Foundry (formerly known Azure AI). To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
 
+## Start here
+
+| I want to... | Start with |
+| --- | --- |
+| Call a Foundry model from LangChain or LangGraph | [Model quick start](#microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](../../samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
+| Build and deploy my first hosted agent | [Hosted-agent sample chooser](../../samples/hosting/langgraph-hosted-agents/README.md#start-here) |
+| Compose a graph with managed Foundry agent nodes | [Agent Service quick start](#microsoft-foundry-agent-service) |
+| Add guardrails or Azure tools | [Content Safety](#unified-moderation-guardrails) and [tools](#microsoft-foundry-tools) |
+| Trace graph, model, and tool calls | [Application Insights tracing](#auto-tracing-to-azure-application-insights) |
+| Persist graph state or long-term memory | [Azure Cosmos DB integrations](../azure-cosmosdb/README.md#langgraph-checkpointer) |
+
 ## Installation
 
 ```bash
@@ -39,13 +51,12 @@ The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and c
 
 This package includes:
 
-* [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/chat_models)
-* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/tools)
-* [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents/middleware)
-* [Microsoft Foundry Agent Service](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/agents)
-* [LangGraph hosting for Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting)
-* [Azure AI Search](https://github.com/langchain-ai/langchain-azure/libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools) (including Azure AI Content Understanding, Document Intelligence, and more)
+* [Microsoft Foundry Models inference](./langchain_azure_ai/chat_models)
+* [Microsoft Foundry Content Safety](./langchain_azure_ai/agents/middleware)
+* [Microsoft Foundry Agent Service](./langchain_azure_ai/agents)
+* [LangGraph hosting for Microsoft Foundry](./langchain_azure_ai/agents/hosting)
+* [Azure AI Search](./langchain_azure_ai/vectorstores)
+* [Microsoft Foundry Tools](./langchain_azure_ai/tools) (including Azure AI Content Understanding, Document Intelligence, and more)
 
 Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
 
@@ -164,6 +175,23 @@ You're not a genius and you don't love programming!
 
 ### Hosting LangGraph agents on Microsoft Foundry
 
+**Already have a compiled LangGraph graph?** Keep its implementation,
+model, and tools. Point `langgraph.json` at its exported graph, as shown
+in the [Responses run-entrypoint sample](../../samples/hosting/langgraph-hosted-agents/responses/09_run/README.md),
+then launch it from the directory containing that configuration:
+
+```bash
+pip install -U "langchain-azure-ai[hosting]"
+python -m langchain_azure_ai.agents.hosting.run --protocol responses
+```
+
+Use `--protocol invocations` for the Invocations endpoint; see the
+[Invocations run-entrypoint sample](../../samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md).
+For prerequisites, local requests, and Azure deployment, follow the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+or the [hosted-agent samples](../../samples/hosting/langgraph-hosted-agents/README.md#start-here).
+
+You can also host the graph directly from Python, as shown below.
 For a Responses API host, install the hosting extra. It includes
 the Agent Server version that uses a local file-backed ``FoundryStateStore``
 outside Foundry hosting:
@@ -366,7 +394,7 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 - **1.0.62**:
 
-    - We introduced support for asynchhronous agents operation and tracing using our OpenTelemetry tracer for context to propagate correctly. [#290].(https://github.com/langchain-ai/langchain-azure/pull/290).
+    - We introduced support for asynchhronous agents operation and tracing using our OpenTelemetry tracer for context to propagate correctly. [#290](https://github.com/langchain-ai/langchain-azure/pull/290).
     - We introduced support for Bash operations in `langchain-azure-dynamic-session`. [#238](https://github.com/langchain-ai/langchain-azure/pull/238).
     - We introduced support for Agent Service V2 in Microsoft Foundry. [PR #257](https://github.com/langchain-ai/langchain-azure/pull/257).
     - We added a new tool to generate images based on OpenAI-compatible image generation models. [PR #325](https://github.com/langchain-ai/langchain-azure/pull/325)
@@ -380,14 +408,14 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 - **1.0.5**:
 
-    - We fixed an issue with the content type of messages in `AzureAIChatCompletionsModel`. See [PR #245].
-    - We improve metadata generated for `AzureAIOpenTelemetryTracer`. See [PR ##233].
+    - We fixed an issue with the content type of messages in `AzureAIChatCompletionsModel`. See [#245](https://github.com/langchain-ai/langchain-azure/pull/245).
+    - We improve metadata generated for `AzureAIOpenTelemetryTracer`. See [#233](https://github.com/langchain-ai/langchain-azure/pull/233).
 
 - **1.0.4**:
 
-    - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [PR #221].
-    - We fixed an issue with `AzureAIOpenTelemetryTracer` where spans context was not correctly propagated when called from another service. See [PR #217].
-    - We fixed an issue where `AzureAIOpenTelemetryTracer` where context was deallocated incorrectly, preventing tools like `langdev` to correctly emit traces. See [Issue #212].
+    - We fixed an issue with dependencies resolution for `azure-ai-agents` where the incorrect version was picked up. See [#221](https://github.com/langchain-ai/langchain-azure/pull/221).
+    - We fixed an issue with `AzureAIOpenTelemetryTracer` where spans context was not correctly propagated when called from another service. See [#217](https://github.com/langchain-ai/langchain-azure/pull/217).
+    - We fixed an issue where `AzureAIOpenTelemetryTracer` where context was deallocated incorrectly, preventing tools like `langdev` to correctly emit traces. See [#212](https://github.com/langchain-ai/langchain-azure/issues/212).
     - We introduced improvements in the order in which environment variables `AZURE_AI_*` are read.
     - Internal: We improved `AzureAIOpenTelemetryTracer` test coverage. See [PR #239](https://github.com/langchain-ai/langchain-azure/pull/239).
 
@@ -401,13 +429,13 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 - **0.1.8**:
 
-    - We fixed some issues with `AzureAIOpenTelemetryTracer`, including compliant hierarchy, tool spans under chat, finish reason normalization, conversation id. See [PR #167]
+    - We fixed some issues with `AzureAIOpenTelemetryTracer`, including compliant hierarchy, tool spans under chat, finish reason normalization, conversation id. See [#167](https://github.com/langchain-ai/langchain-azure/pull/167)
     - We fixed an issue with taking image inputs for declarative agents created with Azure AI Foundry Agents service.
     - We enhanced tool descriptions to improve tool call accuracy. 
 
 - **0.1.7**:
 
-  - **[NEW]**: We introduce LangGraph support for declarative agents created in Azure AI Foundry. You can now compose complex graphs in LangGraph and add nodes that take advantage of Azure AI Agent Service. See [`AgentServiceFactory`](./langchain_azure_ai/agents/agent_service.py#L44)
+  - **[NEW]**: We introduce LangGraph support for declarative agents created in Azure AI Foundry. You can now compose complex graphs in LangGraph and add nodes that take advantage of Azure AI Agent Service. See [`AgentServiceFactory`](./langchain_azure_ai/agents/_v1/agent_service.py)
   - We fix an issue with the interface of `AzureAIEmbeddingsModel` [#158](https://github.com/langchain-ai/langchain-azure/issues/158).
   - We improve the signatures of the tools `AzureAIDocumentIntelligenceTool`, `AzureAIImageAnalysisTool`, and `AzureAITextAnalyticsHealthTool` [PR #160](https://github.com/langchain-ai/langchain-azure/pull/160).
 

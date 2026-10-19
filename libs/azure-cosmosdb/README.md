@@ -286,6 +286,19 @@ The LangGraph integrations that manage their own client — `CosmosDBSaverSync` 
 
 See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for runnable end-to-end examples of every integration.
 
+### Host a persistent LangGraph agent on Azure
+
+Start with the [checkpointer example](../../samples/cosmosdb-nosql/langgraph_checkpointer.py)
+([async](../../samples/cosmosdb-nosql/langgraph_checkpointer_async.py)) for per-thread
+graph state, or the [store example](../../samples/cosmosdb-nosql/langgraph_store.py)
+([async](../../samples/cosmosdb-nosql/langgraph_store_async.py)) for long-term memory.
+Compile your graph with the checkpointer or store, then follow the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+and the [existing-graph hosting sample](../../samples/hosting/langgraph-hosted-agents/responses/09_run/README.md)
+to serve it on Microsoft Foundry. Keep database clients and async context managers
+open for the host's lifetime, and ensure the deployed agent can authenticate to
+Cosmos DB as well as its Foundry project.
+
 ## Changelog
 
 ### 1.0.1
