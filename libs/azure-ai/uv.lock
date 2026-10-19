@@ -400,7 +400,7 @@ wheels = [
 
 [[package]]
 name = "azure-ai-agentserver-responses"
-version = "2.3.0b2"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -408,9 +408,9 @@ dependencies = [
     { name = "azure-core" },
     { name = "isodate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2b/be/7d7b91e609bd717c255955a62e2f71d9314f6064923025b3aed6bf5fcd8b/azure_ai_agentserver_responses-2.3.0b2.tar.gz", hash = "sha256:840469e47e3ecc8e9fc8c8e7f6962c4cf92aedfe8d0de0f87f89f4cbaea844e9", size = 826630, upload-time = "2026-10-01T06:12:27.558Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/68/3d8a02a4d850f1bb36315d5893033795cdfe784835ded8c0e6c255d7b57e/azure_ai_agentserver_responses-2.3.0.tar.gz", hash = "sha256:8878faf9708468608beab1a05b036ba1af61535a583d55709d5bd71c18a07dc7", size = 826536, upload-time = "2026-10-12T04:41:40.052Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/d8/31d0ca1709ce9a2170d9f2b7ae31c8181848c32788bec0c370c6f13d6576/azure_ai_agentserver_responses-2.3.0b2-py3-none-any.whl", hash = "sha256:f61465a4cad010687bf88fadd642444bd77ef5b716833784d7df298e4b6b5e7d", size = 435420, upload-time = "2026-10-01T06:12:29.775Z" },
+    { url = "https://files.pythonhosted.org/packages/92/6e/bbce1b5e7cb722b8ccadfa449b8bf8b4f777e43c0a7d1fa047b4d11d0dfb/azure_ai_agentserver_responses-2.3.0-py3-none-any.whl", hash = "sha256:f76cda5c28ef9e78aa988f12dedca80529a0d6a11ef6fc3d4c59329d17b0db70", size = 435401, upload-time = "2026-10-12T04:41:41.901Z" },
 ]
 
 [[package]]
