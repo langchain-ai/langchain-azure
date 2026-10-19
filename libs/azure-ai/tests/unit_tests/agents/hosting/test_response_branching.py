@@ -12,6 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, cast
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -169,6 +170,44 @@ def _branch_graph() -> tuple[CompiledStateGraph, list[str]]:
     builder.add_edge(START, "record")
     builder.add_edge("record", END)
     return builder.compile(checkpointer=InMemorySaver()), executions
+
+
+def _application_owned_subgraph_graph() -> tuple[CompiledStateGraph, dict[str, int]]:
+    class ChildState(TypedDict):
+        count: int
+
+    class RootState(_BranchState, total=False):
+        child_state_ref: str
+
+    snapshots: dict[str, int] = {}
+    child_builder = StateGraph(ChildState)
+    child_builder.add_node("count", lambda state: {"count": state["count"] + 1})
+    child_builder.add_edge(START, "count")
+    child_builder.add_edge("count", END)
+    child = child_builder.compile()
+
+    async def call_child(state: RootState) -> dict[str, Any]:
+        previous_ref = state.get("child_state_ref")
+        previous_count = snapshots[previous_ref] if previous_ref is not None else 0
+        result = await child.ainvoke({"count": previous_count})
+        state_ref = uuid4().hex
+        snapshots[state_ref] = result["count"]
+        text = next(
+            str(message.content)
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        )
+        return {
+            "messages": [AIMessage(content=f"child:{result['count']}")],
+            "ledger": [text],
+            "child_state_ref": state_ref,
+        }
+
+    builder = StateGraph(RootState)
+    builder.add_node("child", call_child)
+    builder.add_edge(START, "child")
+    builder.add_edge("child", END)
+    return builder.compile(checkpointer=InMemorySaver()), snapshots
 
 
 def _partial_approval_graph(
@@ -566,6 +605,163 @@ def test_paused_subgraph_fork_fails_without_mutating_parent() -> None:
     assert failed["status"] == "failed", failed
     assert "Paused subgraph branching is not supported" in failed["error"]["message"]
     assert saver.get_tuple(config) == saved
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_root_only_branching_leaves_private_subgraph_memory_application_owned(
+    stream: bool,
+) -> None:
+    class ChildState(TypedDict):
+        messages: Annotated[list[AnyMessage], add_messages]
+        count: int
+
+    root_inputs: list[list[str]] = []
+    child_counts: list[int] = []
+
+    def record_root(state: _BranchState) -> dict[str, Any]:
+        inputs = [
+            str(message.content)
+            for message in state["messages"]
+            if isinstance(message, HumanMessage)
+        ]
+        root_inputs.append(inputs)
+        return {"ledger": [inputs[-1]]}
+
+    def record_child(state: ChildState) -> dict[str, Any]:
+        count = state.get("count", 0) + 1
+        child_counts.append(count)
+        return {"count": count, "messages": [AIMessage(content=f"child:{count}")]}
+
+    child_builder = StateGraph(ChildState)
+    child_builder.add_node("record", record_child)
+    child_builder.add_edge(START, "record")
+    child_builder.add_edge("record", END)
+    builder = StateGraph(_BranchState)
+    builder.add_node("record", record_root)
+    builder.add_node("child", child_builder.compile(checkpointer=True))
+    builder.add_edge(START, "record")
+    builder.add_edge("record", "child")
+    builder.add_edge("child", END)
+    saver = InMemorySaver()
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "A", stream=stream)
+        root_ref = _boundary_ref(client, server, root["id"])
+        root_config: RunnableConfig = {
+            "configurable": {**root_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        saved = saver.get_tuple(root_config)
+        assert saved is not None
+        original = _post(client, "B", previous_response_id=root["id"], stream=stream)
+        fork = _post(client, "C", previous_response_id=root["id"], stream=stream)
+        fork_ref = _boundary_ref(client, server, fork["id"])
+        fork_state = saver.get_tuple(
+            {"configurable": {**fork_ref.to_dict(), "checkpoint_ns": ""}}
+        )
+
+    assert all(response["status"] == "completed" for response in (root, original, fork))
+    assert root_inputs == [["A"], ["A", "B"], ["A", "C"]]
+    assert child_counts == [1, 2, 3]
+    assert fork_state is not None
+    assert fork_state.checkpoint["channel_values"]["ledger"] == ["A", "C"]
+    assert "count" not in fork_state.checkpoint["channel_values"]
+    assert saver.get_tuple(root_config) == saved
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_application_owned_subgraph_snapshots_follow_root_branches(
+    stream: bool, concurrent: bool
+) -> None:
+    graph, snapshots = _application_owned_subgraph_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "A", stream=stream)
+        root_ref = _boundary_ref(client, server, root["id"])
+        root_config: RunnableConfig = {
+            "configurable": {**root_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        saved = saver.get_tuple(root_config)
+        assert saved is not None
+        if concurrent:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                original_future = executor.submit(
+                    _post, client, "B", previous_response_id=root["id"], stream=stream
+                )
+                fork_future = executor.submit(
+                    _post, client, "C", previous_response_id=root["id"], stream=stream
+                )
+                original, fork = original_future.result(), fork_future.result()
+        else:
+            original = _post(
+                client, "B", previous_response_id=root["id"], stream=stream
+            )
+            fork = _post(client, "C", previous_response_id=root["id"], stream=stream)
+        original_next = _post(
+            client, "D", previous_response_id=original["id"], stream=stream
+        )
+        fork_next = _post(client, "E", previous_response_id=fork["id"], stream=stream)
+        for response, ledger in (
+            (root, ["A"]),
+            (original, ["A", "B"]),
+            (fork, ["A", "C"]),
+            (original_next, ["A", "B", "D"]),
+            (fork_next, ["A", "C", "E"]),
+        ):
+            assert response["status"] == "completed", response
+            ref = _boundary_ref(client, server, response["id"])
+            checkpoint = saver.get_tuple(
+                {"configurable": {**ref.to_dict(), "checkpoint_ns": ""}}
+            )
+            assert checkpoint is not None
+            values = checkpoint.checkpoint["channel_values"]
+            assert values["ledger"] == ledger
+            assert snapshots[values["child_state_ref"]] == len(ledger)
+
+    assert [_text(response) for response in (root, original, fork)] == [
+        "child:1",
+        "child:2",
+        "child:2",
+    ]
+    assert _text(original_next) == _text(fork_next) == "child:3"
+    assert len(snapshots) == 5
+    assert snapshots[saved.checkpoint["channel_values"]["child_state_ref"]] == 1
+    assert saver.get_tuple(root_config) == saved
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_missing_application_owned_subgraph_snapshot_fails_explicitly(
+    stream: bool,
+) -> None:
+    graph, snapshots = _application_owned_subgraph_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        root = _post(client, "A", stream=stream)
+        root_ref = _boundary_ref(client, server, root["id"])
+        root_config: RunnableConfig = {
+            "configurable": {**root_ref.to_dict(), "checkpoint_ns": ""}
+        }
+        saved = saver.get_tuple(root_config)
+        assert saved is not None
+        del snapshots[saved.checkpoint["channel_values"]["child_state_ref"]]
+        failed = _post(client, "B", previous_response_id=root["id"], stream=stream)
+
+    assert failed["status"] == "failed"
+    assert failed["error"]["code"] == "server_error"
+    assert snapshots == {}
+    assert saver.get_tuple(root_config) == saved
 
 
 @pytest.mark.parametrize("enabled", [False, True])

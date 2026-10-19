@@ -729,8 +729,12 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     """Enforce exact checkpoint reads without changing graph state or metadata.
 
     Storage remains in the graph-owned saver. Paused resumes and task recovery
-    can use a request-local head so completed task writes are reused without
-    reading another branch's latest checkpoint. History is delegated unchanged.
+    can use a request-local root head so completed task writes are reused without
+    reading another branch's latest root checkpoint. This adapter does not
+    select private subgraph checkpoints: unpinned subgraph reads retain
+    LangGraph's behavior, and subgraph state isolation is application-owned.
+    Explicit checkpoint references are validated in any namespace. History is
+    delegated unchanged.
 
     Args:
         saver: The graph-owned saver. Ownership and lifecycle stay with its

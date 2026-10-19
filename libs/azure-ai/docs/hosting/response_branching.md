@@ -5,7 +5,9 @@
 `langchain-azure-ai` supports both `ResponsesHostServer` and
 `InvocationsHostServer` as hosting protocols. Response branching over
 HTTP is available only through Responses with `enable_response_branching=True`.
-The option defaults to `False`.
+The option defaults to `False`. Its checkpoint-selection guarantee is
+**root-only** (`checkpoint_ns=""`); private subgraph state remains
+application-owned, as described in [Root-Only State and Subgraphs](#root-only-state-and-subgraphs).
 
 Invocations supports checkpointed session continuation and configured task
 recovery, not user-selected historical checkpoints. Its `previous_invocation_id`
@@ -22,7 +24,7 @@ not necessarily restore that response's state.
 
 | Configuration and linkage | Starting checkpoint/state | Behavior |
 | --- | --- | --- |
-| Branching enabled, `previous_response_id`, no `conversation` | The exact checkpoint recorded for the authorized, stored, completed parent response | Continue, fork, or regenerate in the parent's thread without changing its checkpoint or pending writes. A paused parent requires matching resume/approval input; otherwise return its pending interrupt without running the graph. |
+| Branching enabled, `previous_response_id`, no `conversation` | The exact root checkpoint recorded for the authorized, stored, completed parent response | Continue, fork, or regenerate in the parent's thread without changing its root checkpoint or pending writes. Private subgraph state remains application-owned. A paused parent requires matching resume/approval input; otherwise return its pending interrupt without running the graph. |
 | Branching enabled, neither `previous_response_id` nor `conversation` supplied | A new response-scoped thread with no prior checkpoint | Start an independent root. Omitting a linkage field or setting it to `null` has the same effect. |
 | Either branching setting, explicit `conversation`, no `previous_response_id` | The conversation's saved checkpoint pointer, or the resolved conversation thread's latest checkpoint when no pointer exists | Use legacy conversation continuation, not response-boundary branching. A new conversation starts without saved state. |
 | Branching disabled, `previous_response_id`, no `conversation` | The legacy chain's saved checkpoint pointer, or the ancestry-resolved thread's latest checkpoint when no pointer exists | Continue legacy graph state; the parent ID does not guarantee restoration of that response's historical checkpoint. |
@@ -41,21 +43,69 @@ Response branching backed by LangGraph checkpoints follows the
 selects a response boundary, not an arbitrary or intermediate graph checkpoint.
 The API does not expose checkpoint selection or state editing.
 
-If B was created from A, another request selecting A starts from A, not B or the
-thread's latest state. Selecting B continues after B; it does not rerun B.
-Restored state includes non-message values. Send only new input, not a duplicate
-transcript of the selected response's history.
+If B was created from A, another request selecting A starts from A's root state,
+not B's or the thread's latest root state. Selecting B continues after B; it
+does not rerun B. Restored root state includes non-message values, subgraph
+outputs, and application state references saved in the root. Send only new
+input, not a duplicate transcript of the selected response's history.
+
+### Root-Only State and Subgraphs
+
+The host selects and preserves root checkpoints. It does not select, copy,
+rewind, or isolate private subgraph checkpoints, even when a subgraph uses the
+same saver and thread as the root. Root and subgraph namespaces have separate
+checkpoint histories; selecting a root checkpoint is not a whole-graph rollback.
+
+| Host responsibility | Application responsibility |
+| --- | --- |
+| Restore the selected response's exact root checkpoint and all state saved in it. | Choose the state or checkpoint from which each subgraph runs. |
+| Restore subgraph outputs and snapshot references already stored in root state. | Manage private subgraph snapshots, branching, concurrency, retention, and access isolation. |
+| Preserve the selected root checkpoint when creating another response. | Decide whether private subgraph memory is branch-local or intentionally shared. |
+
+Persistent subgraphs, including `compile(checkpointer=True)`, are not rejected
+merely because they retain memory across calls. Without application-managed
+selection, a persistent subgraph can read its latest state, including work from
+a sibling branch. For example, a private counter can advance A=1, B(A)=2,
+C(A)=3 even though C correctly restores A's root state. Applications requiring
+C(A)=2 must manage the child's state. The host does not change the subgraph's
+checkpointer setting or promise automatic subgraph isolation.
+
+Default per-invocation subgraphs (`compile()` or `checkpointer=None`) keep
+LangGraph's ordinary behavior: each invocation starts from its supplied input,
+without automatically inheriting the previous invocation's private memory.
+Subgraph output that is written back into root state is still covered by root
+checkpoint restoration.
+
+One application-managed pattern is:
+
+1. Save a reference such as `child_state_ref` in the root state.
+2. In the node that calls the child, load the immutable snapshot identified by
+   that reference and supply its state to a per-invocation subgraph.
+3. After successful execution, save a new snapshot under a new reference and
+   return that reference to the root. Do not mutate the parent's snapshot.
+4. Initialize fresh child state only when the root has no reference. A missing
+   or unreadable referenced snapshot must fail explicitly, not reset to empty
+   state or fall back to latest.
+
+Restoring A's root state restores A's reference, but loading and applying it is
+application code, not automatic host behavior. An in-memory snapshot store is
+suitable only for local single-worker use; durable deployments need application
+storage with compatible retention and user isolation.
+
+This responsibility split does not remove the existing restriction on
+[forking paused subgraphs](#recovery-and-approvals).
 
 ### Thread and Checkpoint Identity
 
 New continuation, fork, and regeneration requests retain the selected parent's
 LangGraph `thread_id`. Independently created roots still get separate threads.
-Each response selects an exact checkpoint; a shared thread's latest checkpoint
-does not select a branch.
+Each response selects an exact root checkpoint; a shared thread's latest root
+checkpoint does not select a branch. Private subgraph state follows the
+application's policy above.
 
-For a completed graph, execution starts directly from the parent's checkpoint.
+For a completed graph, execution starts directly from the parent's root checkpoint.
 For a paused graph, the host creates a new checkpoint in the same thread and root
-namespace (`checkpoint_ns=""`) before resuming. Pending writes are transferred
+namespace (`checkpoint_ns=""`) before resuming. Root pending writes are transferred
 to the fork's task IDs, preserving already answered sequential or parallel work.
 The client's original `call_id` or `approval_request_id` is mapped to the fork's
 interrupt ID, so clients do not need to discover new internal IDs before replying.
@@ -69,7 +119,7 @@ in the branch store, not inline in response metadata, whose value has a
 Sibling requests can overlap in the supported single-worker setup. If A is an
 eligible stored, completed parent, C can start from A while sibling B is still
 `in_progress`. C is not queued or rejected merely because B is running, and
-starts from A's checkpoint, not B's progress. Selecting the still-running B
+starts from A's root checkpoint, not B's root progress. Selecting the still-running B
 itself as the parent fails. SDK admission and resource limits still apply.
 
 Regenerating B submits its original input with A as `previous_response_id` and
@@ -304,8 +354,9 @@ server = ResponsesHostServer(graph, enable_response_branching=True)
 
 The host reuses the graph-owned saver; it does not create one automatically.
 `InMemorySaver` is suitable for local single-process use. Constructor validation
-cannot certify a custom saver's history retention. See the
-[Responses example][responses-example] for setup.
+cannot certify a custom saver's history retention. The basic
+[Responses hosting example][responses-example] shows server setup; checkpoint-based
+branching additionally requires the saver and opt-in described in this guide.
 
 The supported scope for checkpoint-based branching is single-worker execution:
 one host worker process, not one active request at a time. Persistent stores
@@ -330,15 +381,16 @@ retry contract; independent branches use new response identities.
 ### Parent Selection and Storage
 
 - Parents must be created through the response-branching path, authorized,
-  retained, and completed, with a readable exact graph checkpoint and matching
+  retained, and completed, with a readable exact root checkpoint and matching
   boundary and index records. Responses created with branching disabled or
   through explicit conversations are rejected as branch parents, even if they
   retain a checkpoint reference. Queued, in-progress, incomplete, failed, and
   cancelled responses are not eligible parents.
-- Missing, inconsistent, deleted, or unreadable required state fails explicitly.
-  The branching path never substitutes the latest checkpoint, empty state, or
-  reconstructed transcript. Parent checkpoints are not deleted or rewritten by
-  creating a child.
+- Missing, inconsistent, deleted, or unreadable required root state fails
+  explicitly. The root branching path never substitutes the latest root
+  checkpoint, empty state, or reconstructed transcript. Parent root checkpoints
+  are not deleted or rewritten by creating a child. Private subgraph storage
+  and its failure handling remain application-owned.
 - The branch store contains approval payloads as well as checkpoint references.
   Apply compatible access isolation and retention to it. Custom stores must
   accommodate the selected parent's pending approval payloads, which can exceed
@@ -379,12 +431,13 @@ retry contract; independent branches use new response identities.
 - Ordinary HITL approval, rejection, waiting, and partial approval remain
   supported. A response can be completed while its graph is paused. On the
   branching path, distinct responses selecting a paused parent have isolated
-  checkpoint pending writes and must each supply matching resume or approval
+  root checkpoint pending writes and must each supply matching resume or approval
   input. One branch's answer does not globally consume the parent's pause or
   approve another branch. Local approval checks cover simple, sequential, and
   parallel interrupt graphs. Forking a paused subgraph is explicitly rejected:
   its separate checkpoint history and nested interrupt IDs are not transferred.
   This restriction does not change legacy continuation or completed-root forks.
+  Completed-root forks still do not select or isolate private subgraph state.
 - Checkpoints do not roll back or isolate external tools, shared stores, or
   files. Recovery may repeat unconfirmed work; applications remain responsible
   for replay-safe side effects. Exactly-once execution is not guaranteed.
@@ -409,7 +462,7 @@ state without imposing new message-identity requirements.
 
 ## Internal Design
 
-Graph checkpoints, response envelopes, and branch indexes are stored separately.
+Root graph checkpoints, response envelopes, and branch indexes are stored separately.
 SDK task state and lifecycle remain SDK-managed. Durable deployments need stores with
 compatible retention and user/deployment isolation. The table below covers
 branch-execution failures and recovery of the same task, not a new client fork.
@@ -485,16 +538,19 @@ responsibility.
 
 ## Validation Status
 
-The latest full hosting run uses Python 3.14.6, Agent Server Core 2.2.0,
-Responses 2.3.0b2, and LangGraph 1.2.14. The branching suite also passed
-on Python 3.11.16 with frozen dependencies. Instruction-lifecycle and context-mode
-tests were removed with those features; compatibility tests now cover unchanged
+Local checks use Agent Server Core 2.2.0, Responses 2.3.0b2, and LangGraph
+1.2.14. The full hosting baseline predates the root-only contract and eight
+additional subgraph test cases; the branching suite below includes those
+additions. Both Python environments are uv-managed, and the Python 3.11
+environment uses frozen dependencies. Instruction-lifecycle and context-mode
+tests were removed with those features; compatibility tests cover unchanged
 message handling and default-path SDK validation.
 
 | Local check | Result |
 | --- | --- |
-| Full hosting suite, Python 3.14.6 in the uv-managed environment | 703 passed, including 215 branching and compatibility cases. |
-| Branching suite, Python 3.11.16 with frozen dependencies | 215 passed. This is not a minimum-dependency validation. |
+| Full hosting baseline, Python 3.14.6, before the additional subgraph tests | 719 passed. |
+| Branching suite, Python 3.14.6 | 239 passed, including root-only and application-owned subgraph cases. |
+| Branching suite, Python 3.11.16 with frozen dependencies | 239 passed. This is not a minimum-dependency validation. |
 | Ruff, formatting, and mypy for tests and changed runtime modules | Passed. |
 
 The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
@@ -510,8 +566,9 @@ test.
 | Scenario | Expected behavior | Validation status |
 | --- | --- | --- |
 | Root creation | No `previous_response_id` or `conversation` starts an independent root. | Local HTTP tests passed. |
-| Continuation and non-message state | Selecting B continues from B's exact state, including its ledger or other graph values. | Local HTTP JSON/SSE tests passed. |
-| Sibling branches | Selecting completed A while B is running or after B completes restores A, not B or the latest thread state; B does not impose a sibling queue. | Local HTTP JSON/SSE tests passed for completed siblings; event-controlled local JSON/SSE probes passed with B still running, with SDK tasks disabled and enabled. |
+| Continuation and non-message state | Selecting B continues from B's exact root state, including its ledger, saved subgraph outputs, and application state references. | Local HTTP JSON/SSE tests passed. |
+| Sibling branches | Selecting completed A while B is running or after B completes restores A's root state, not B's or the latest root state; B does not impose a sibling queue. | Local HTTP JSON/SSE tests passed for completed siblings; event-controlled local JSON/SSE probes passed with B still running, with SDK tasks disabled and enabled. |
+| Application-owned subgraph state | Root state restores exactly while private persistent child memory can remain shared. Applications can instead load immutable child snapshots using references restored in root state. | Local JSON/SSE tests cover shared child memory, branch-local snapshots, concurrent siblings, immutable parent state, and explicit failure for a missing child snapshot. |
 | Regeneration | Resubmitting B's input with A selected creates a new response ID from A's state. | Local HTTP JSON/SSE tests passed; identical model output is not guaranteed. |
 | Conversations, branching disabled, or no checkpointer | Use legacy pointer/latest-state continuation, or message history without a saver; no exact-parent guarantee. | Local configuration, history, state-store, and HTTP regression tests passed. |
 | JSON and SSE output | Return a new response, preserve its selected parent ID, and keep checkpoint signals private. | Local HTTP tests and documentation output probes passed. |
@@ -540,7 +597,7 @@ OpenAI Responses API conformance. Parent selection follows the
 host capability described here, with the existing instruction-lifetime limitation
 noted above.
 
-[responses-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md#opt-in-checkpoint-branches
+[responses-example]: ../../../../samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md
 [branching-tests]: ../../tests/unit_tests/agents/hosting/test_response_branching.py
 [hosting-tests]: ../../tests/unit_tests/agents/hosting/test_responses_host.py
 [openai-create]: https://developers.openai.com/api/reference/resources/responses/methods/create

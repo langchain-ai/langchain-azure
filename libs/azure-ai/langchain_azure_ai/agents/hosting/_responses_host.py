@@ -326,11 +326,19 @@ class ResponsesHostServer:
             atomic replacement, and explicit failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
-        enable_response_branching: Restore the exact parent response checkpoint
-            for response-ID chains. Defaults to ``False``, preserving legacy
-            graph selection. Requires a history-preserving saver with async
-            reads/writes and a stored, completed parent response. The host does
-            not create a saver. Steering and an injected ``app`` are unsupported.
+        enable_response_branching: Restore the exact parent response's root
+            checkpoint (``checkpoint_ns=""``) for response-ID chains. Defaults
+            to ``False``, preserving legacy graph selection. All saved root
+            state is restored, including subgraph outputs and state references
+            stored in the root. Private subgraph state and checkpoint selection
+            remain application-owned: the host does not rewind, copy, or isolate
+            subgraph histories. A persistent subgraph can read its latest state,
+            including another branch's memory, unless the application manages
+            its state selection. Persistent subgraphs are not prohibited, but
+            forking a paused subgraph remains unsupported.
+            Requires a history-preserving saver with async reads/writes and a
+            stored, completed parent response. The host does not create a saver.
+            Steering and an injected ``app`` are unsupported.
             Independent branches from paused parents require their own matching
             resume or approval input. Additional linkage validation applies only
             when this flag is enabled. Existing message-based instruction handling
@@ -776,9 +784,12 @@ class ResponsesHostServer:
         For ``previous_response_id`` chains, the root response is resolved
         through the Responses provider when possible. Checkpointed graphs
         additionally restore the exact ``(thread_id, checkpoint_id)`` saved
-        for this user and conversation chain. The full :class:`ResponseContext`
-        is exposed under ``configurable.response_context`` for transient
-        execution facts such as recovery state.
+        for this user and conversation chain in the root namespace. This does
+        not select or rewind private subgraph checkpoints; applications own
+        their subgraph state selection and isolation. The full
+        :class:`ResponseContext` is exposed under
+        ``configurable.response_context`` for transient execution facts such
+        as recovery state.
 
         Args:
             request: The parsed create-response request.
