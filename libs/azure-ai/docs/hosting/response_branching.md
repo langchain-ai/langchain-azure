@@ -436,6 +436,8 @@ retry contract; independent branches use new response identities.
   approve another branch. Local approval checks cover simple, sequential, and
   parallel interrupt graphs. Forking a paused subgraph is explicitly rejected:
   its separate checkpoint history and nested interrupt IDs are not transferred.
+  Completed subgraph tasks in the same root step do not block branching at a
+  root interrupt; their recorded outputs are reused without rerunning the tasks.
   This restriction does not change legacy continuation or completed-root forks.
   Completed-root forks still do not select or isolate private subgraph state.
 - Checkpoints do not roll back or isolate external tools, shared stores, or

@@ -483,7 +483,8 @@ class ResponseBranchStore:
                 "checkpoint_unavailable", "The parent checkpoint is unavailable."
             )
         parent = await guarded_graph.aget_state(config)
-        if any(task.state is not None for task in parent.tasks):
+        # Completed subgraphs retain state references in historical snapshots.
+        if any(task.state is not None and task.result is None for task in parent.tasks):
             raise BranchingError(
                 "invalid_branch_state", "Paused subgraph branching is not supported."
             )

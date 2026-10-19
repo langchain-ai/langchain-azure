@@ -563,7 +563,78 @@ def test_send_forks_match_tasks_by_path(stream: bool) -> None:
             )
 
 
-def test_paused_subgraph_fork_fails_without_mutating_parent() -> None:
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("child_checkpointer", [None, True])
+def test_completed_subgraph_does_not_block_root_approval(
+    stream: bool, child_checkpointer: bool | None
+) -> None:
+    executions: list[str] = []
+
+    def child_work(state: _BranchState) -> dict[str, Any]:
+        executions.append("child")
+        return {"ledger": ["child"]}
+
+    def approve(state: _BranchState) -> dict[str, Any]:
+        return {"ledger": [f"approval:{interrupt('approve?')}"]}
+
+    def finish(state: _BranchState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=",".join(sorted(state["ledger"])))]}
+
+    child = StateGraph(_BranchState)
+    child.add_node("work", child_work)
+    child.add_edge(START, "work")
+    child.add_edge("work", END)
+    builder = StateGraph(_BranchState)
+    builder.add_node("child", child.compile(checkpointer=child_checkpointer))
+    builder.add_node("approval", approve)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "child")
+    builder.add_edge(START, "approval")
+    builder.add_edge(["child", "approval"], "finish")
+    builder.add_edge("finish", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        pending = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        assert executions == ["child"]
+
+        for answer in ("Alice", "Bob"):
+            completed = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                ],
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert completed["status"] == "completed", completed
+            assert _text(completed) == f"approval:{answer},child"
+            assert executions == ["child"]
+
+        waiting = _post(
+            client, "waiting", previous_response_id=parent["id"], stream=stream
+        )
+        assert waiting["status"] == "completed", waiting
+        assert any(item["type"] == "function_call" for item in waiting["output"])
+        assert executions == ["child"]
+        assert (
+            client.get(f"/responses/{parent['id']}").json()["output"]
+            == parent["output"]
+        )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_paused_subgraph_fork_fails_without_mutating_parent(stream: bool) -> None:
     builder = StateGraph(_BranchState)
     builder.add_node("child", build_simple_interrupt_graph())
     builder.add_edge(START, "child")
@@ -575,7 +646,7 @@ def test_paused_subgraph_fork_fails_without_mutating_parent() -> None:
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
     with TestClient(server.app) as client:
-        parent = _post(client, "start")
+        parent = _post(client, "start", stream=stream)
         parent_ref = _boundary_ref(client, server, parent["id"])
         config: RunnableConfig = {
             "configurable": {**parent_ref.to_dict(), "checkpoint_ns": ""}
@@ -594,6 +665,7 @@ def test_paused_subgraph_fork_fails_without_mutating_parent() -> None:
                 }
             ],
             previous_response_id=parent["id"],
+            stream=stream,
         )
         assert client.portal is not None
         assert (
