@@ -1116,15 +1116,20 @@ class ResponsesHostServer:
             graph = self._graph
             request_saver = None
             saver = getattr(graph, "checkpointer", None)
-            if branching and isinstance(saver, BaseCheckpointSaver):
-                request_saver = ResponseCheckpointSaver(saver, branching=True)
-                graph = copy(graph)
-                graph.checkpointer = request_saver
-            elif branching:
+            if branching and not isinstance(saver, BaseCheckpointSaver):
                 raise BranchingError(
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
             config = await self.build_runnable_config(request, context)
+            if branching and isinstance(saver, BaseCheckpointSaver):
+                request_saver = ResponseCheckpointSaver(
+                    saver,
+                    branching=True,
+                    response_key=_scope_thread_id(context.response_id, context),
+                    origin=HostingRunnableConfig(config).checkpoint_ref,
+                )
+                graph = copy(graph)
+                graph.checkpointer = request_saver
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's
@@ -1189,6 +1194,8 @@ class ResponsesHostServer:
                     .with_checkpoint_ref(checkpoint_ref)
                     .runnable_config
                 )
+                if request_saver is not None:
+                    await request_saver.validate_progress(config)
                 graph_input = None
 
             else:

@@ -58,6 +58,18 @@ BRANCH_MODE_METADATA = "langgraph_response_branching"
 BRANCH_RESUME_IDS_CONFIG = "__langgraph_response_resume_ids"
 
 
+class _ResponseCheckpointMetadata(CheckpointMetadata):
+    langgraph_response_execution: str
+
+
+def _checkpoint_execution(response_key: str, origin: CheckpointRef | None) -> str:
+    return json.dumps(
+        [response_key, origin.thread_id, origin.checkpoint_id]
+        if origin is not None
+        else [response_key, None, None]
+    )
+
+
 def remap_pending_interrupts(
     pending: Sequence[Interrupt], resume_ids: Mapping[str, str]
 ) -> tuple[Interrupt, ...]:
@@ -465,7 +477,10 @@ class ResponseBranchStore:
 
     @staticmethod
     async def _fork_pause(
-        graph: CompiledStateGraph, ref: CheckpointRef, context: ResponseContext
+        graph: CompiledStateGraph,
+        ref: CheckpointRef,
+        context: ResponseContext,
+        response_key: str,
     ) -> tuple[CheckpointRef, dict[str, str]]:
         checkpointer = graph.checkpointer
         if not isinstance(checkpointer, BaseCheckpointSaver):
@@ -491,6 +506,13 @@ class ResponseBranchStore:
         checkpoint = create_checkpoint(
             copy_checkpoint(saved.checkpoint), None, saved.metadata.get("step", -1)
         )
+        metadata: _ResponseCheckpointMetadata = {
+            **saved.metadata,
+            "source": "fork",
+            "langgraph_response_execution": _checkpoint_execution(
+                response_key, CheckpointRef(ref.thread_id, checkpoint["id"])
+            ),
+        }
         parent_configurable = (saved.parent_config or {}).get("configurable", {})
         # Copied pending writes must not also appear in the fork's ancestor history.
         fork_config = await saver.aput(
@@ -502,7 +524,7 @@ class ResponseBranchStore:
                 },
             },
             checkpoint,
-            {**saved.metadata, "source": "fork"},
+            metadata,
             checkpoint["channel_versions"],
         )
         fork_ref = CheckpointRef.from_dict(fork_config.get("configurable"))
@@ -638,7 +660,7 @@ class ResponseBranchStore:
                     "checkpoint_unavailable",
                     "The graph is unavailable for paused branching.",
                 )
-            ref, resume_ids = await self._fork_pause(graph, ref, context)
+            ref, resume_ids = await self._fork_pause(graph, ref, context, response_key)
             _, parent_resume_ids = self._origin(boundary)
             parent_ids = {
                 internal_id: wire_id
@@ -727,7 +749,7 @@ class ResponseBranchStore:
 
 
 class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
-    """Enforce exact checkpoint reads without changing graph state or metadata.
+    """Enforce exact reads and record root checkpoint execution ownership.
 
     Storage remains in the graph-owned saver. Paused resumes and task recovery
     can use a request-local root head so completed task writes are reused without
@@ -744,19 +766,70 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             rejects unavailable or mismatched explicit checkpoints; otherwise
             reads preserve the wrapped saver's behavior. Both modes propagate
             backend errors.
+        response_key: The current response's user-scoped key, or ``None`` to
+            preserve checkpoint metadata unchanged. Defaults to ``None``.
+        origin: The current response's confirmed starting checkpoint, or
+            ``None`` for a new root execution. Defaults to ``None``.
 
     """
 
-    def __init__(self, saver: BaseCheckpointSaver[Any], *, branching: bool) -> None:
+    def __init__(
+        self,
+        saver: BaseCheckpointSaver[Any],
+        *,
+        branching: bool,
+        response_key: str | None = None,
+        origin: CheckpointRef | None = None,
+    ) -> None:
         super().__init__(serde=saver.serde)
         self._saver = saver
         self._branching = branching
+        self._execution = (
+            _checkpoint_execution(response_key, origin)
+            if branching and response_key is not None
+            else None
+        )
         self._resume_head: CheckpointRef | None = None
 
     @property
     def config_specs(self) -> Any:
         """Preserve the wrapped saver's configurable fields."""
         return self._saver.config_specs
+
+    async def validate_progress(self, config: RunnableConfig) -> None:
+        """Require a recovery checkpoint owned by this response and origin.
+
+        Args:
+            config: The exact root checkpoint recorded as current progress.
+
+        Raises:
+            BranchingError: The checkpoint is unavailable or its execution
+                ownership cannot be verified, including older unmarked progress.
+        """
+        saved = await self.aget_tuple(config)
+        if (
+            self._execution is None
+            or saved is None
+            or saved.metadata.get("langgraph_response_execution") != self._execution
+        ):
+            raise BranchingError(
+                "invalid_branch_state",
+                "The recovery checkpoint's response ownership could not be verified.",
+            )
+
+    def _metadata(
+        self, config: RunnableConfig, metadata: CheckpointMetadata
+    ) -> CheckpointMetadata:
+        if (
+            self._execution is None
+            or (config.get("configurable") or {}).get("checkpoint_ns", "") != ""
+        ):
+            return metadata
+        stamped: _ResponseCheckpointMetadata = {
+            **metadata,
+            "langgraph_response_execution": self._execution,
+        }
+        return stamped
 
     def resume_config(self, config: RunnableConfig) -> RunnableConfig:
         """Resume a branch without replaying its completed tasks.
@@ -877,7 +950,9 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     ) -> RunnableConfig:
         """Write a checkpoint using the original saver."""
         config = self._resolve(config)
-        saved_config = self._saver.put(config, checkpoint, metadata, new_versions)
+        saved_config = self._saver.put(
+            config, checkpoint, self._metadata(config, metadata), new_versions
+        )
         return self._advance_head(config, checkpoint, saved_config)
 
     async def aput(
@@ -890,7 +965,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         """Write an asynchronous checkpoint using the original saver."""
         config = self._resolve(config)
         saved_config = await self._saver.aput(
-            config, checkpoint, metadata, new_versions
+            config, checkpoint, self._metadata(config, metadata), new_versions
         )
         return self._advance_head(config, checkpoint, saved_config)
 

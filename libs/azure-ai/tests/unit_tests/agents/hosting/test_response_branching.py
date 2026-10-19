@@ -39,6 +39,7 @@ from langgraph.checkpoint.base import (
     CheckpointMetadata,
     PendingWrite,
     empty_checkpoint,
+    get_checkpoint_metadata,
 )
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -1179,6 +1180,58 @@ async def test_checkpoint_saver_read_policy(enabled: bool, asynchronous: bool) -
         assert await read() is None
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("namespace", ["", "child:task"])
+async def test_checkpoint_saver_records_only_root_response_ownership(
+    enabled: bool, asynchronous: bool, namespace: str
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses.branching import BranchingError
+
+    saver = InMemorySaver()
+    origin = CheckpointRef("root", "origin")
+    adapter = ResponseCheckpointSaver(
+        saver, branching=enabled, response_key="user-a:child", origin=origin
+    )
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "root", "checkpoint_ns": namespace}
+    }
+    metadata = get_checkpoint_metadata(
+        {"metadata": {"langgraph_response_execution": "untrusted-owner"}},
+        {"source": "loop", "step": 1, "parents": {}},
+    )
+    original_metadata = deepcopy(metadata)
+    checkpoint = empty_checkpoint()
+    saved_config = (
+        await adapter.aput(config, checkpoint, metadata, {})
+        if asynchronous
+        else adapter.put(config, checkpoint, metadata, {})
+    )
+    saved = await saver.aget_tuple(saved_config)
+    assert saved is not None
+    assert metadata == original_metadata
+    assert saved.metadata["source"] == "loop"
+    assert saved.metadata["step"] == 1
+    assert saved.metadata["parents"] == {}
+    if not enabled or namespace:
+        assert saved.metadata == original_metadata
+        return
+
+    recreated = ResponseCheckpointSaver(
+        saver, branching=True, response_key="user-a:child", origin=origin
+    )
+    await recreated.validate_progress(saved_config)
+    for response_key, selected_origin in (
+        ("user-b:child", origin),
+        ("user-a:child", CheckpointRef("root", "other-origin")),
+    ):
+        foreign = ResponseCheckpointSaver(
+            saver, branching=True, response_key=response_key, origin=selected_origin
+        )
+        with pytest.raises(BranchingError, match="ownership could not be verified"):
+            await foreign.validate_progress(saved_config)
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_resume_saver_keeps_branch_head_and_writes_isolated(
     asynchronous: bool,
@@ -1578,7 +1631,10 @@ def test_formatted_messages_remain_compatible(
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-@pytest.mark.parametrize("progress", ["none", "saved", "missing", "malformed"])
+@pytest.mark.parametrize(
+    "progress",
+    ["none", "saved", "unowned", "invalid_owner", "missing", "malformed"],
+)
 @pytest.mark.parametrize("boundary_published", [False, True])
 async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     enabled: bool, progress: str, boundary_published: bool
@@ -1591,14 +1647,36 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     assert parent_ref is not None
     saved_ref = parent_ref
     metadata: dict[str, Any] = {BRANCH_MODE_METADATA: BRANCH_MODE}
-    if progress == "saved" or boundary_published:
-        await graph.ainvoke({"messages": [HumanMessage(content="B")]}, parent_config)
+    if progress in {"saved", "unowned", "invalid_owner"} or boundary_published:
+        execution_graph = graph
+        execution_config = parent_config
+        if progress == "invalid_owner":
+            execution_config = {
+                **parent_config,
+                "metadata": {"langgraph_response_execution": 0},
+            }
+        elif progress != "unowned":
+            saver = graph.checkpointer
+            assert isinstance(saver, BaseCheckpointSaver)
+            execution_graph = graph.copy(
+                {
+                    "checkpointer": ResponseCheckpointSaver(
+                        saver,
+                        branching=True,
+                        response_key="child",
+                        origin=parent_ref,
+                    )
+                }
+            )
+        await execution_graph.ainvoke(
+            {"messages": [HumanMessage(content="B")]}, execution_config
+        )
         completed_ref = HostingRunnableConfig(
             (await graph.aget_state(config)).config
         ).checkpoint_ref
         assert completed_ref is not None
         saved_ref = completed_ref
-    if progress == "saved":
+    if progress in {"saved", "unowned", "invalid_owner"}:
         metadata[METADATA_LANGGRAPH_THREAD_ID] = saved_ref.thread_id
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = saved_ref.checkpoint_id
     elif progress == "missing":
@@ -1643,7 +1721,12 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
     ]
 
     terminal = events[-1]["response"]
-    if boundary_published or progress in {"missing", "malformed"}:
+    if boundary_published or progress in {
+        "unowned",
+        "invalid_owner",
+        "missing",
+        "malformed",
+    }:
         assert terminal["status"] == "failed"
         assert terminal["error"]["code"] == "server_error"
         assert executions == []
@@ -1651,6 +1734,92 @@ async def test_recovery_uses_confirmed_origin_and_recorded_progress(
         assert terminal["status"] == "completed", terminal
         assert executions == (["B"] if progress == "none" else [])
     provider.get_response.assert_not_awaited()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("progress", ["own", "sibling", "parent", "different_origin"])
+async def test_recovery_requires_progress_from_the_same_response_execution(
+    enabled: bool, stream: bool, progress: str
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        parent = _post(client, "A")
+        parent_ref = _boundary_ref(client, server, parent["id"])
+        sibling = _post(client, "C", previous_response_id=parent["id"])
+        sibling_ref = _boundary_ref(client, server, sibling["id"])
+
+    response_id = parent["id"][:-32] + uuid4().hex
+    context = _context(response_id=response_id, conversation_id=None, current_text="B")
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    request = _request(previous_response_id=parent["id"], stream=stream)
+    interrupted = server.handle_create(request, context, asyncio.Event())
+    assert isinstance(interrupted, AsyncGenerator)
+    persisted = None
+    try:
+        async for event in interrupted:
+            if isinstance(event, dict):
+                continue
+            metadata = json.loads(
+                event.response.get("metadata", {}).get("_internal_metadata", "{}")
+            )
+            if metadata.get(METADATA_LANGGRAPH_CHECKPOINT_ID):
+                assert (
+                    metadata[METADATA_LANGGRAPH_CHECKPOINT_ID]
+                    != parent_ref.checkpoint_id
+                )
+                persisted = deepcopy(event.response)
+                break
+    finally:
+        await interrupted.aclose()
+    assert persisted is not None
+    executions_before = list(executions)
+    if progress in {"sibling", "parent"}:
+        foreign_ref = sibling_ref if progress == "sibling" else parent_ref
+        metadata = json.loads(persisted["metadata"]["_internal_metadata"])
+        assert metadata[METADATA_LANGGRAPH_THREAD_ID] == foreign_ref.thread_id
+        metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = foreign_ref.checkpoint_id
+        persisted["metadata"]["_internal_metadata"] = json.dumps(metadata)
+    elif progress == "different_origin":
+        origin = await server._conversation_chain_store.get(
+            response_id, BRANCH_ORIGIN_KEY
+        )
+        assert origin is not None
+        await server._conversation_chain_store.set(
+            response_id,
+            BRANCH_ORIGIN_KEY,
+            {**origin, **sibling_ref.to_dict()},
+        )
+
+    recreated = ResponsesHostServer(
+        graph, store=provider, enable_response_branching=enabled
+    )
+    recovery = _context(response_id=response_id, conversation_id=None)
+    recovery.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    recovery.is_recovery = True
+    recovery.persisted_response = persisted
+    events = [
+        event
+        async for event in recreated.handle_create(request, recovery, asyncio.Event())
+    ]
+    terminal = events[-1]["response"]
+    recovery.get_input_items.assert_not_awaited()
+    if progress != "own":
+        assert terminal["status"] == "failed", terminal
+        assert terminal["error"]["code"] == "server_error"
+        assert executions == executions_before
+        assert (
+            await recreated._conversation_chain_store.get(
+                response_id, BRANCH_BOUNDARY_KEY
+            )
+            is None
+        )
+    else:
+        assert terminal["status"] == "completed", terminal
+        assert _text(terminal) == "A,B"
+        assert executions == ["A", "C", "B"]
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -1672,7 +1841,27 @@ async def test_recovery_preserves_application_messages(enabled: bool) -> None:
     graph_input = await server.build_input(request, context)
     graph_input["messages"].append(SystemMessage(content="application-owned"))
     config: RunnableConfig = {"configurable": {"thread_id": "root"}}
-    await graph.ainvoke(graph_input, config, interrupt_before=["record"])
+    execution_graph = graph
+    execution_config = config
+    origin_ref = None
+    if enabled:
+        await graph.ainvoke({"messages": [HumanMessage(content="A")]}, config)
+        execution_config = (await graph.aget_state(config)).config
+        origin_ref = HostingRunnableConfig(execution_config).checkpoint_ref
+        assert origin_ref is not None
+        saver = graph.checkpointer
+        assert isinstance(saver, BaseCheckpointSaver)
+        execution_graph = graph.copy(
+            {
+                "checkpointer": ResponseCheckpointSaver(
+                    saver, branching=True, response_key="child", origin=origin_ref
+                )
+            }
+        )
+        executions.clear()
+    await execution_graph.ainvoke(
+        graph_input, execution_config, interrupt_before=["record"]
+    )
     paused = await graph.aget_state(config)
     assert paused.next == ("record",)
     saved_ref = HostingRunnableConfig(paused.config).checkpoint_ref
@@ -1682,13 +1871,14 @@ async def test_recovery_preserves_application_messages(enabled: bool) -> None:
         METADATA_LANGGRAPH_CHECKPOINT_ID: saved_ref.checkpoint_id,
     }
     if enabled:
+        assert origin_ref is not None
         metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
         context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
         await server._conversation_chain_store.set(
             "child",
             BRANCH_ORIGIN_KEY,
             {
-                **ResponseBranchStore._record(saved_ref, paused=False),
+                **ResponseBranchStore._record(origin_ref, paused=False),
                 "mode": BRANCH_MODE,
                 "parent_response_id": "parent",
             },
@@ -2984,35 +3174,35 @@ def test_partial_send_approvals_reuse_completed_and_empty_results(
 
 async def test_recovery_reuses_completed_partial_approval_results() -> None:
     operations: list[str] = []
-    graph = _partial_approval_graph(InMemorySaver(), operations)
-    config: RunnableConfig = {"configurable": {"thread_id": "root"}}
-    await graph.ainvoke({"messages": [HumanMessage(content="start")]}, config)
-    initial = await graph.aget_state(config)
-    parent_ref = HostingRunnableConfig(initial.config).checkpoint_ref
-    assert parent_ref is not None
-    approval = next(item for item in initial.interrupts if item.value == "A")
-    await graph.ainvoke(Command(resume={approval.id: "A"}), config)
-    progress = await graph.aget_state(config)
-    progress_ref = HostingRunnableConfig(progress.config).checkpoint_ref
-    assert progress_ref is not None
+    saver = InMemorySaver()
+    graph = _partial_approval_graph(saver, operations)
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
-    await server._conversation_chain_store.set(
-        "child",
-        BRANCH_ORIGIN_KEY,
-        {
-            **ResponseBranchStore._record(parent_ref, paused=True),
-            "mode": BRANCH_MODE,
-            "parent_response_id": "parent",
-        },
-    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "start")
     context = _context(response_id="child", conversation_id=None)
     context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    request = _request(previous_response_id=parent["id"])
+    config = await server.build_runnable_config(request, context)
+    initial = await graph.aget_state(config)
+    origin_ref = HostingRunnableConfig(initial.config).checkpoint_ref
+    assert origin_ref is not None
+    approval = next(item for item in initial.interrupts if item.value == "A")
+    adapter = ResponseCheckpointSaver(
+        saver, branching=True, response_key="child", origin=origin_ref
+    )
+    execution_graph = graph.copy({"checkpointer": adapter})
+    await execution_graph.ainvoke(
+        Command(resume={approval.id: "A"}), adapter.resume_config(config)
+    )
+    progress = await graph.aget_state(config)
+    progress_ref = HostingRunnableConfig(progress.config).checkpoint_ref
+    assert progress_ref == origin_ref
     context.is_recovery = True
     context.persisted_response = _response_object(
         "child",
-        previous_response_id="parent",
+        previous_response_id=parent["id"],
         internal_metadata={
             BRANCH_MODE_METADATA: BRANCH_MODE,
             METADATA_LANGGRAPH_THREAD_ID: progress_ref.thread_id,
@@ -3020,10 +3210,7 @@ async def test_recovery_reuses_completed_partial_approval_results() -> None:
         },
     )
     events = [
-        event
-        async for event in server.handle_create(
-            _request(previous_response_id="parent"), context, asyncio.Event()
-        )
+        event async for event in server.handle_create(request, context, asyncio.Event())
     ]
     recovered = events[-1]["response"]
     assert recovered["status"] == "completed", recovered
@@ -3597,6 +3784,98 @@ async def test_persisted_parent_survives_host_and_saver_recreation(
     assert _text(fork) == "A,C"
     assert _text(next_original) == "A,B,D"
     assert executions == ["C", "D"]
+
+
+@pytest.mark.parametrize("progress", ["own", "sibling"])
+async def test_progress_ownership_survives_host_and_saver_recreation(
+    progress: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    sqlite = pytest.importorskip("langgraph.checkpoint.sqlite.aio")
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    database = str(tmp_path / "progress-checkpoints.sqlite")
+    config: RunnableConfig = {"configurable": {"thread_id": "root"}}
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        graph, _ = _branch_graph()
+        graph.checkpointer = saver
+        await graph.ainvoke({"messages": [HumanMessage(content="A")]}, config)
+        parent_config = (await graph.aget_state(config)).config
+        origin_ref = HostingRunnableConfig(parent_config).checkpoint_ref
+        assert origin_ref is not None
+        progress_refs = {}
+        for response_key, text in (("child", "B"), ("sibling", "C")):
+            execution_graph = graph.copy(
+                {
+                    "checkpointer": ResponseCheckpointSaver(
+                        saver,
+                        branching=True,
+                        response_key=response_key,
+                        origin=origin_ref,
+                    )
+                }
+            )
+            await execution_graph.ainvoke(
+                {"messages": [HumanMessage(content=text)]}, parent_config
+            )
+            ref = HostingRunnableConfig(
+                (await graph.aget_state(config)).config
+            ).checkpoint_ref
+            assert ref is not None
+            progress_refs[response_key] = ref
+        selected = progress_refs["child" if progress == "own" else "sibling"]
+        server = ResponsesHostServer(
+            graph, store=InMemoryResponseProvider(), enable_response_branching=True
+        )
+        await server._conversation_chain_store.set(
+            "child",
+            BRANCH_ORIGIN_KEY,
+            {
+                **ResponseBranchStore._record(origin_ref, paused=False),
+                "mode": BRANCH_MODE,
+                "parent_response_id": "parent",
+            },
+        )
+
+    async with sqlite.AsyncSqliteSaver.from_conn_string(database) as saver:
+        graph, executions = _branch_graph()
+        graph.checkpointer = saver
+        recreated = ResponsesHostServer(
+            graph, store=InMemoryResponseProvider(), enable_response_branching=True
+        )
+        context = _context(response_id="child", conversation_id=None)
+        context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+        context.is_recovery = True
+        context.persisted_response = _response_object(
+            "child",
+            previous_response_id="parent",
+            internal_metadata={
+                BRANCH_MODE_METADATA: BRANCH_MODE,
+                METADATA_LANGGRAPH_THREAD_ID: selected.thread_id,
+                METADATA_LANGGRAPH_CHECKPOINT_ID: selected.checkpoint_id,
+            },
+        )
+        events = [
+            event
+            async for event in recreated.handle_create(
+                _request(previous_response_id="parent"), context, asyncio.Event()
+            )
+        ]
+        terminal = events[-1]["response"]
+        assert terminal["status"] == ("completed" if progress == "own" else "failed")
+        assert executions == []
+        context.get_input_items.assert_not_awaited()
+        boundary = await recreated._conversation_chain_store.get(
+            "child", BRANCH_BOUNDARY_KEY
+        )
+        if progress == "own":
+            assert CheckpointRef.from_dict(boundary) == selected
+        else:
+            assert boundary is None
 
 
 async def test_persisted_partial_approval_reuses_completed_task_after_recreation(

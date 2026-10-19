@@ -496,6 +496,15 @@ root checkpoint writes. It never substitutes the thread's global latest
 checkpoint. Explicit state reads and ordinary historical branch execution keep
 their existing checkpoint-selection semantics.
 
+Root checkpoint writes also record the current response's user-scoped identity
+and confirmed origin in checkpoint metadata. Before resuming recorded progress,
+the host verifies that this execution identity matches both the recovering
+response and its origin. Sharing a thread or descending from the same parent is
+not sufficient: sibling responses can share both. A paused fork is marked when
+it is created, so valid progress may equal that response's paused origin without
+losing completed pending writes. An ordinary completed parent's checkpoint is
+not progress for a new child response. Private subgraph metadata is unchanged.
+
 If B starts from its confirmed origin X and records progress at Y without publishing
 its own boundary, recovery continues B from Y without adding B's input again.
 With no progress or published boundary, B restarts from X with its original
@@ -503,7 +512,17 @@ input; unsaved work may run again. Recovery retains B's admitted mode and does
 not fork its parent again. Same-thread fork checkpoints isolate LangGraph state;
 they are not a separate execution-admission or task-management mechanism.
 New origins use version 2 and require a valid resume mapping. Previously confirmed
-version-1 origins remain recoverable without changing their recorded thread.
+version-1 origins remain recoverable without changing their recorded thread when
+they have no recorded progress, or their progress has verifiable execution
+ownership.
+
+Older progress checkpoints without execution ownership cannot reliably be
+distinguished from another response's progress. Recovery now fails explicitly
+for such checkpoints instead of accepting them or replaying input. Before
+upgrading a durable deployment, drain recoverable tasks whose progress was
+recorded by an older host. Completed responses remain usable as branch parents;
+they do not need to be relabelled. This validation adds no exactly-once or
+execution-admission guarantee.
 
 Paused origins also snapshot the parent's approval items. Before graph execution,
 the host persists which snapshots remain unanswered, so recovery cannot reuse an
@@ -528,6 +547,7 @@ parent.
 | Approval snapshots or their ID bindings are invalid, or the unanswered-snapshot write fails | Fail before graph execution; do not silently replace the approvals or discard the storage error. |
 | Confirmed origin; no recorded progress or published boundary | Restart the current task from its confirmed starting checkpoint with its original input; unsaved work may run again. |
 | Valid recorded progress; no published boundary | Continue the current task from its saved progress without adding its input again. |
+| Progress belongs to another response or origin, or its execution ownership is missing or invalid | Fail before graph execution or boundary publication; do not replay input or fall back to another checkpoint. |
 | Boundary-index write fails | Fail the response; graph work may already have executed. |
 | Boundary published; terminal persistence fails or the same task re-enters | Do not admit it as a parent without a stored completed response. Recovery fails before graph execution; no automatic terminal repair or fabricated completed response. |
 
