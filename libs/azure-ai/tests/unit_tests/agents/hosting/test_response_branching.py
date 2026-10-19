@@ -6,18 +6,20 @@ import asyncio
 import json
 import operator
 import threading
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, cast
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
 
+from azure.ai.agentserver.responses import ResponseContext, ResponseExitForRecovery
+from azure.ai.agentserver.responses.models import CreateResponse
 from azure.ai.agentserver.responses.store._memory import InMemoryResponseProvider
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware, before_model
@@ -33,11 +35,15 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.utils import ConfigurableFieldSpec
 from langgraph import channels
 from langgraph.cache.memory import InMemoryCache
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
     CheckpointMetadata,
+    CheckpointTuple,
     PendingWrite,
     empty_checkpoint,
     get_checkpoint_metadata,
@@ -140,6 +146,77 @@ def _boundary_ref(
 class _BranchState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     ledger: Annotated[list[str], operator.add]
+
+
+class _ConfiguredSaver(InMemorySaver):
+    @property
+    def config_specs(self) -> list[ConfigurableFieldSpec]:
+        return [ConfigurableFieldSpec(id="tenant_id", annotation=str, is_shared=True)]
+
+    @staticmethod
+    def _require_tenant(config: RunnableConfig) -> None:
+        if (config.get("configurable") or {}).get("tenant_id") != "tenant":
+            raise ValueError("The checkpoint tenant configuration is missing.")
+
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        self._require_tenant(config)
+        return super().get_tuple(config)
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        self._require_tenant(config)
+        return super().put(config, checkpoint, metadata, new_versions)
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        self._require_tenant(config)
+        super().put_writes(config, writes, task_id, task_path)
+
+
+class _ConfiguredHost(ResponsesHostServer):
+    async def build_runnable_config(
+        self, request: CreateResponse, context: ResponseContext
+    ) -> RunnableConfig:
+        config = await super().build_runnable_config(request, context)
+        return {
+            **config,
+            "configurable": {
+                **(config.get("configurable") or {}),
+                "tenant_id": "tenant",
+            },
+        }
+
+
+def _configured_server(
+    graph: CompiledStateGraph,
+    configuration: str,
+    *,
+    enabled: bool = True,
+    provider: InMemoryResponseProvider | None = None,
+) -> ResponsesHostServer:
+    host_class: type[ResponsesHostServer] = _ConfiguredHost
+    if configuration == "bound":
+        graph = graph.with_config({"configurable": {"tenant_id": "tenant"}})
+        host_class = ResponsesHostServer
+    elif configuration == "override":
+        graph = graph.with_config({"configurable": {"tenant_id": "overridden"}})
+    elif configuration != "hook":
+        raise ValueError(f"Unknown configuration source: {configuration}")
+    return host_class(
+        graph,
+        store=provider if provider is not None else InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
 
 
 class _ModelInputCapture(BaseCallbackHandler):
@@ -424,6 +501,239 @@ def test_branches_keep_parent_thread(paused: bool, stream: bool) -> None:
                 origin_ids.add(origin["checkpoint_id"])
                 assert origin["checkpoint_id"] != parent_ref.checkpoint_id
             assert len(origin_ids) == 2
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+def test_branches_preserve_checkpoint_configuration(
+    enabled: bool, stream: bool, paused: bool, configuration: str
+) -> None:
+    graph = build_simple_interrupt_graph() if paused else _branch_graph()[0]
+    saver = _ConfiguredSaver()
+    graph.checkpointer = saver
+    server = _configured_server(graph, configuration, enabled=enabled)
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        assert parent["status"] == "completed", parent
+        parent_config: RunnableConfig | None = None
+        parent_checkpoint = None
+        if enabled:
+            parent_config = {
+                "configurable": {
+                    **_boundary_ref(client, server, parent["id"]).to_dict(),
+                    "checkpoint_ns": "",
+                    "tenant_id": "tenant",
+                }
+            }
+            parent_checkpoint = saver.get_tuple(parent_config)
+            assert parent_checkpoint is not None
+        call_id = (
+            next(
+                item["call_id"]
+                for item in parent["output"]
+                if item["type"] == "function_call"
+            )
+            if paused
+            else None
+        )
+        for answer in ("Alice", "Bob") if enabled else ("Alice",):
+            child = _post(
+                client,
+                (
+                    [
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps({"resume": answer}),
+                        }
+                    ]
+                    if paused
+                    else answer
+                ),
+                previous_response_id=parent["id"],
+                stream=stream,
+            )
+            assert child["status"] == "completed", child
+            assert _text(child) == (f"ok:{answer}" if paused else f"start,{answer}")
+        if parent_config is not None:
+            assert saver.get_tuple(parent_config) == parent_checkpoint
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("inside_task", [False, True])
+@pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+def test_functional_branches_preserve_checkpoint_configuration(
+    stream: bool, inside_task: bool, configuration: str
+) -> None:
+    operations: list[str] = []
+    saver = _ConfiguredSaver()
+    graph = (
+        _functional_interrupt_graph(saver, operations, "nested")
+        if inside_task
+        else _functional_graph(saver, operations, "nested")
+    )
+    server = _configured_server(graph, configuration)
+    expected_operations = ["one"] if inside_task else ["prepare", "prepare"]
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        assert parent["status"] == "completed", parent
+        waiting = _post(
+            client, "wait", previous_response_id=parent["id"], stream=stream
+        )
+        assert waiting["status"] == "completed", waiting
+        call = next(
+            item for item in waiting["output"] if item["type"] == "function_call"
+        )
+        for answer in ("Alice", "Bob"):
+            child = _post(
+                client,
+                [
+                    {
+                        "type": "function_call_output",
+                        "call_id": call["call_id"],
+                        "output": json.dumps({"resume": answer}),
+                    }
+                ],
+                previous_response_id=waiting["id"],
+                stream=stream,
+            )
+            assert child["status"] == "completed", child
+            assert _text(child) == (
+                f"one-1:{answer}" if inside_task else f"1,2:{answer}"
+            )
+            assert operations == expected_operations
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+def test_branch_configuration_preserves_bound_metadata_and_callbacks(
+    stream: bool, configuration: str
+) -> None:
+    calls: list[UUID] = []
+
+    class Callback(BaseCallbackHandler):
+        def on_chain_start(
+            self,
+            serialized: dict[str, Any] | None,
+            inputs: Any,
+            *,
+            run_id: UUID,
+            **kwargs: Any,
+        ) -> None:
+            calls.append(run_id)
+
+    class MetadataSaver(_ConfiguredSaver):
+        def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+            assert (config.get("metadata") or {}).get("graph_marker") == "bound"
+            return super().get_tuple(config)
+
+    graph = build_simple_interrupt_graph()
+    graph.checkpointer = MetadataSaver()
+    graph = graph.with_config(
+        {"metadata": {"graph_marker": "bound"}, "callbacks": [Callback()]}
+    )
+    server = _configured_server(graph, configuration)
+    bound_config = server._graph.config
+    with TestClient(server.app) as client:
+        parent = _post(client, "start", stream=stream)
+        assert parent["status"] == "completed", parent
+        call = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        child = _post(
+            client,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": call["call_id"],
+                    "output": "Alice",
+                }
+            ],
+            previous_response_id=parent["id"],
+            stream=stream,
+        )
+    assert child["status"] == "completed", child
+    assert _text(child) == "ok:Alice"
+    assert calls
+    assert len(calls) == len(set(calls))
+    assert server._graph.config is bound_config
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("kind", ["completed", "paused", "functional"])
+@pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+async def test_recovery_preserves_checkpoint_configuration(
+    enabled: bool, kind: str, configuration: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saver = _ConfiguredSaver()
+    executions: list[str] = []
+    if kind == "functional":
+        graph = _functional_interrupt_graph(saver, executions, "nested")
+    elif kind == "paused":
+        graph = build_simple_interrupt_graph()
+    else:
+        graph, executions = _branch_graph()
+    graph.checkpointer = saver
+    provider = InMemoryResponseProvider()
+    server = _configured_server(graph, configuration, provider=provider)
+    with TestClient(server.app) as client:
+        parent = _post(client, "start")
+    context = _context(
+        response_id="configured-child", conversation_id=None, current_text="next"
+    )
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    request = _request(previous_response_id=parent["id"])
+    if kind != "completed":
+        call = next(
+            item for item in parent["output"] if item["type"] == "function_call"
+        )
+        context.get_input_items.return_value = [
+            {
+                "type": "function_call_output",
+                "call_id": call["call_id"],
+                "output": json.dumps({"resume": "Alice"}),
+            }
+        ]
+    monkeypatch.setattr(
+        server._branch_store,
+        "publish",
+        AsyncMock(side_effect=ResponseExitForRecovery),
+    )
+    persisted = None
+    with pytest.raises(ResponseExitForRecovery):
+        async for event in server.handle_create(request, context, asyncio.Event()):
+            if not isinstance(event, dict):
+                metadata = json.loads(
+                    event.response.get("metadata", {}).get("_internal_metadata", "{}")
+                )
+                if metadata.get(METADATA_LANGGRAPH_CHECKPOINT_ID):
+                    persisted = deepcopy(event.response)
+    assert persisted is not None
+
+    recreated = _configured_server(
+        graph, configuration, enabled=enabled, provider=provider
+    )
+    recovery = _context(response_id="configured-child", conversation_id=None)
+    recovery.client_headers = context.client_headers
+    recovery.is_recovery = True
+    recovery.persisted_response = persisted
+    events = [
+        event
+        async for event in recreated.handle_create(request, recovery, asyncio.Event())
+    ]
+    terminal = events[-1]["response"]
+    assert terminal["status"] == "completed", terminal
+    if kind == "functional":
+        assert _text(terminal) == "one-1:Alice", terminal
+        assert executions == ["one"]
+    elif kind == "paused":
+        assert _text(terminal) == "ok:Alice", terminal
+    else:
+        assert _text(terminal) == "start,next", terminal
+        assert executions == ["start", "next"]
+    recovery.get_input_items.assert_not_awaited()
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -3942,6 +4252,15 @@ async def test_recovery_reuses_completed_partial_approval_results(
     context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
     request = _request(previous_response_id=parent["id"])
     config = await server.build_runnable_config(request, context)
+    ref, _ = await server._branch_store.prepare(
+        response_key="child",
+        parent_key=parent["id"],
+        parent_id=parent["id"],
+        context=context,
+        graph=graph,
+        config=config,
+    )
+    config = HostingRunnableConfig(config).with_checkpoint_ref(ref).runnable_config
     initial = await graph.aget_state(config)
     origin_ref = HostingRunnableConfig(initial.config).checkpoint_ref
     assert origin_ref is not None

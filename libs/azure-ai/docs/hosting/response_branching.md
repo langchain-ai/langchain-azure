@@ -493,6 +493,15 @@ Terms refer to the current task:
   that the response metadata and checkpoint mapping agree.
 
 Paused-fork creation uses the strict saver for checkpoint reads and writes.
+The config hook first selects the exact parent checkpoint; the host creates the
+fork only after the complete `build_runnable_config()` override returns.
+The host merges graph-bound defaults with that final request config, with
+request values taking precedence. A request-local graph copy uses the effective
+config without reapplying its original binding, preventing duplicate callbacks
+and keeping execution consistent across supported LangGraph versions. The
+shared application graph is not modified. Application-specific fields remain
+available for fork reads, writes, functional-task identity records, and recovery
+validation even when the saver returns only checkpoint reference fields.
 The copy shares the selected checkpoint's parent rather than extending its
 history, so ancestor-reconstructed channels such as `DeltaChannel` do not replay
 the transferred pending writes twice.

@@ -792,6 +792,10 @@ class ResponsesHostServer:
         ``configurable.response_context`` for transient execution facts such
         as recovery state.
 
+        For response branching, this hook selects the parent checkpoint.
+        Paused-fork creation runs after the complete override returns, so
+        subclasses can supply application-specific checkpointer configuration.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -811,6 +815,7 @@ class ResponsesHostServer:
                 parent_id=parent_id,
                 context=context,
                 graph=self._graph,
+                select_only=True,
             )
             config = HostingRunnableConfig.create_from_checkpoint(
                 ref, context
@@ -1122,7 +1127,30 @@ class ResponsesHostServer:
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
             config = await self.build_runnable_config(request, context)
+            bound_config = getattr(graph, "config", None)
+            if bound_config:
+                config = merge_configs(bound_config, config)
+                # Keep one effective config without reapplying bound callbacks.
+                graph = copy(graph)
+                graph.config = None
             if branching and isinstance(saver, BaseCheckpointSaver):
+                parent_id = request.get("previous_response_id")
+                if parent_id:
+                    branch_ref, resume_ids = await self._branch_store.prepare(
+                        response_key=_scope_thread_id(context.response_id, context),
+                        parent_key=_scope_thread_id(parent_id, context),
+                        parent_id=parent_id,
+                        context=context,
+                        graph=graph,
+                        config=config,
+                    )
+                    config = (
+                        HostingRunnableConfig(config)
+                        .with_checkpoint_ref(branch_ref)
+                        .with_response_context(context)
+                        .runnable_config
+                    )
+                    config["configurable"][BRANCH_RESUME_IDS_CONFIG] = resume_ids
                 request_saver = ResponseCheckpointSaver(
                     saver,
                     branching=True,

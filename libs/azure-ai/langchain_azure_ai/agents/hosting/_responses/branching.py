@@ -19,6 +19,7 @@ from azure.ai.agentserver.responses import (
     ResponseProviderProtocol,
 )
 from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import merge_configs
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     ChannelVersions,
@@ -526,6 +527,7 @@ class ResponseBranchStore:
         ref: CheckpointRef,
         context: ResponseContext,
         response_key: str,
+        config: RunnableConfig | None = None,
     ) -> tuple[CheckpointRef, dict[str, str]]:
         checkpointer = graph.checkpointer
         if not isinstance(checkpointer, BaseCheckpointSaver):
@@ -534,10 +536,15 @@ class ResponseBranchStore:
             )
         saver = ResponseCheckpointSaver(checkpointer, branching=True)
         guarded_graph = graph.copy({"checkpointer": saver})
-        config = HostingRunnableConfig.create_from_checkpoint(
-            ref, context
-        ).runnable_config
-        saved = await saver.aget_tuple(config)
+        config = (
+            HostingRunnableConfig(config or {})
+            .with_checkpoint_ref(ref)
+            .with_response_context(context)
+            .runnable_config
+        )
+        # State reads merge bound config themselves; direct saver I/O does not.
+        saver_config = merge_configs(graph.config, config)
+        saved = await saver.aget_tuple(saver_config)
         if saved is None:
             raise BranchingError(
                 "checkpoint_unavailable", "The parent checkpoint is unavailable."
@@ -562,9 +569,9 @@ class ResponseBranchStore:
         # Copied pending writes must not also appear in the fork's ancestor history.
         fork_config = await saver.aput(
             {
-                **config,
+                **saver_config,
                 "configurable": {
-                    **config["configurable"],
+                    **saver_config["configurable"],
                     "checkpoint_id": parent_configurable.get("checkpoint_id"),
                 },
             },
@@ -584,17 +591,16 @@ class ResponseBranchStore:
                 "checkpoint_unavailable", "The fork checkpoint is unavailable."
             )
         fork_config = (
-            HostingRunnableConfig(fork_config)
-            .with_response_context(context)
-            .runnable_config
+            HostingRunnableConfig(config).with_checkpoint_ref(fork_ref).runnable_config
         )
         fork = await guarded_graph.aget_state(fork_config)
+        fork_saver_config = merge_configs(graph.config, fork_config)
         root_tasks = _pause_task_forks(parent.tasks, fork.tasks)
         try:
             functional_tasks = await fork_functional_tasks(
                 checkpointer,
-                saved,
-                fork_config,
+                saved._replace(config=saver_config),
+                fork_saver_config,
                 checkpoint,
                 {task_id: task.task_id for task_id, task in root_tasks.items()},
             )
@@ -607,7 +613,7 @@ class ResponseBranchStore:
             functional_tasks=functional_tasks,
         )
         for task_id, writes in writes_by_task.items():
-            await saver.aput_writes(fork_config, writes, task_id)
+            await saver.aput_writes(fork_saver_config, writes, task_id)
         return fork_ref, resume_ids
 
     async def prepare(
@@ -618,8 +624,10 @@ class ResponseBranchStore:
         parent_id: str,
         context: ResponseContext,
         graph: CompiledStateGraph | None = None,
+        config: RunnableConfig | None = None,
+        select_only: bool = False,
     ) -> tuple[CheckpointRef, dict[str, str]]:
-        """Confirm a same-thread origin and its parent-to-fork interrupt IDs."""
+        """Select a parent or confirm an origin after config hooks finish."""
         existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
         if context.is_recovery:
             if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
@@ -712,6 +720,9 @@ class ResponseBranchStore:
                 )
             return self._origin(existing)
 
+        if select_only:
+            return ref, {}
+
         resume_ids = {}
         if boundary["paused"] == "true":
             if graph is None:
@@ -719,7 +730,9 @@ class ResponseBranchStore:
                     "checkpoint_unavailable",
                     "The graph is unavailable for paused branching.",
                 )
-            ref, resume_ids = await self._fork_pause(graph, ref, context, response_key)
+            ref, resume_ids = await self._fork_pause(
+                graph, ref, context, response_key, config=config
+            )
             _, parent_resume_ids = self._origin(boundary)
             parent_ids = {
                 internal_id: wire_id
