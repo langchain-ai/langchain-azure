@@ -1186,7 +1186,7 @@ def _functional_graph(
         return execute()
 
     cache_policy: CachePolicy[Callable[[], str | bytes]] | None = (
-        CachePolicy() if kind == "cached" else None
+        CachePolicy() if kind.startswith("cached") else None
     )
     prepare_task = task(cache_policy=cache_policy)(prepare)
 
@@ -1198,13 +1198,15 @@ def _functional_graph(
     async def async_prepare() -> int:
         return execute()
 
+    async_prepare.cache_policy = cache_policy
+
     def finish(values: list[int]) -> dict[str, Any]:
         answer = interrupt("approve?")
         prepared = ",".join(str(value) for value in values)
         return {"messages": [AIMessage(content=f"{prepared}:{answer}")]}
 
     def ask(state: _BranchState) -> dict[str, Any]:
-        if kind == "nested":
+        if kind in {"nested", "cached_nested"}:
             return finish(nested_prepare().result())
         values = [prepare_task().result()]
         if kind == "repeated":
@@ -1219,17 +1221,29 @@ def _functional_graph(
         return finish([await async_prepare()])
 
     builder = StateGraph(_BranchState)
-    builder.add_node("ask", ask_async if kind.startswith("async") else ask)
+    builder.add_node(
+        "ask", ask_async if kind.startswith("async") or kind == "cached_async" else ask
+    )
     builder.add_edge(START, "ask")
     builder.add_edge("ask", END)
     return builder.compile(
-        checkpointer=saver, cache=InMemoryCache() if kind == "cached" else None
+        checkpointer=saver, cache=InMemoryCache() if cache_policy is not None else None
     )
 
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
-    "kind", ["single", "repeated", "nested", "async", "async_parallel", "cached"]
+    "kind",
+    [
+        "single",
+        "repeated",
+        "nested",
+        "async",
+        "async_parallel",
+        "cached",
+        "cached_async",
+        "cached_nested",
+    ],
 )
 def test_paused_branches_reuse_completed_functional_tasks(
     stream: bool, kind: str
@@ -1243,11 +1257,13 @@ def test_paused_branches_reuse_completed_functional_tasks(
     expected_result = ",".join(
         str(value) for value in range(1, len(expected_operations) + 1)
     )
+    if kind == "cached_nested":
+        expected_result = "1,1"
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
     with TestClient(server.app) as client:
-        if kind == "cached":
+        if kind.startswith("cached"):
             _post(client, "warm cache", stream=stream)
         parent = _post(client, "start", stream=stream)
         pending = next(
@@ -1260,6 +1276,8 @@ def test_paused_branches_reuse_completed_functional_tasks(
         before = saver.get_tuple(config)
         assert before is not None
         assert operations == expected_operations
+        if graph.cache is not None:
+            graph.cache.clear()
 
         for answer in ("left", "right"):
             completed = _post(
@@ -2244,22 +2262,29 @@ async def test_checkpoint_saver_records_only_root_response_ownership(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hidden", [False, True])
+@pytest.mark.parametrize("kind", ["nested", "cached"])
 async def test_checkpoint_saver_persists_functional_task_identities(
-    asynchronous: bool,
+    asynchronous: bool, hidden: bool, kind: str
 ) -> None:
     saver = InMemorySaver()
     adapter = ResponseCheckpointSaver(saver, branching=True, response_key="functional")
     operations: list[str] = []
-    graph = _functional_graph(adapter, operations, "nested")
-    config: RunnableConfig = {
-        "configurable": {"thread_id": "functional"},
-        "callbacks": [adapter.task_recorder],
-    }
+    graph = adapter.task_recorder.bind(_functional_graph(adapter, operations, kind))
+    if hidden:
+        graph = graph.with_config(tags=["langsmith:hidden"])
+    config: RunnableConfig = {"configurable": {"thread_id": "functional"}}
     inputs = {"messages": [HumanMessage(content="start")]}
+    if kind == "cached":
+        warm_config: RunnableConfig = {"configurable": {"thread_id": "warm"}}
+        if asynchronous:
+            await graph.ainvoke(inputs, warm_config, durability="sync")
+        else:
+            graph.invoke(inputs, warm_config, durability="sync")
     if asynchronous:
-        await graph.ainvoke(inputs, config)
+        await graph.ainvoke(inputs, config, durability="sync")
     else:
-        graph.invoke(inputs, config)
+        graph.invoke(inputs, config, durability="sync")
     saved = await saver.aget_tuple(config)
     assert saved is not None
     task_ids = {
@@ -2274,8 +2299,8 @@ async def test_checkpoint_saver_persists_functional_task_identities(
             "__langgraph_response_tasks__:"
         )
     ]
-    assert len(indexes) == len(task_ids) == 3
-    assert operations == ["prepare", "prepare"]
+    assert len(indexes) == len(task_ids) == (3 if kind == "nested" else 1)
+    assert operations == (["prepare", "prepare"] if kind == "nested" else ["prepare"])
     assert {
         item.config["configurable"]["checkpoint_ns"].rsplit(":", 1)[-1]
         for item in indexes

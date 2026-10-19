@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import asdict, dataclass, replace
+from functools import partial
+from inspect import isawaitable
 from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableBinding, RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     Checkpoint,
     CheckpointTuple,
     empty_checkpoint,
 )
+from langgraph.types import PregelExecutableTask
 
 from .checkpoint_ref import CheckpointRef
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
+    from langgraph.pregel._algo import Call
 
 _IDENTITY_NAMESPACE = "__langgraph_response_tasks__"
 _NULL_TASK_ID = "00000000-0000-0000-0000-000000000000"
@@ -203,51 +209,143 @@ async def _save_index(
         )
 
 
-class FunctionalTaskRecorder(BaseCallbackHandler):
-    """Capture functional call metadata before its completed writes are saved."""
-
-    run_inline = True
-    raise_error = True
+class FunctionalTaskRecorder:
+    """Capture scheduled functional calls, including calls served from cache."""
 
     def __init__(self) -> None:
         self._identities: dict[str, _Identity] = {}
+        self._checkpoints: dict[str, Checkpoint] = {}
         self._lock = Lock()
 
-    def on_chain_start(
-        self,
-        serialized: dict[str, Any] | None,
-        inputs: Any,
-        *,
-        metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """Record functional calls without storing their inputs or executing work."""
-        metadata = metadata or {}
-        path = metadata.get("langgraph_path", ())
-        if (
-            not isinstance(path, (list, tuple))
-            or len(path) != 4
-            or path[0] != "__pregel_push"
-            or path[3] is not True
-        ):
+    def record_checkpoint(self, config: RunnableConfig, checkpoint: Checkpoint) -> None:
+        """Retain checkpoint identity and format without retaining graph state."""
+        if (config.get("configurable") or {}).get("checkpoint_ns", "") != "":
             return
-        namespace = metadata.get("langgraph_checkpoint_ns")
-        name = metadata.get("langgraph_node")
-        if not isinstance(namespace, str) or not isinstance(name, str):
-            raise FunctionalTaskError("The functional task namespace is invalid.")
-        task_id = namespace.rsplit(":", 1)[-1]
-        suffix = f"|{name}:{task_id}"
-        if not task_id or not namespace.endswith(suffix):
-            raise FunctionalTaskError("The functional task namespace is invalid.")
+        header = empty_checkpoint()
+        header["id"] = checkpoint["id"]
+        header["v"] = checkpoint["v"]
+        with self._lock:
+            self._checkpoints[checkpoint["id"]] = header
+
+    def bind(self, graph: CompiledStateGraph) -> CompiledStateGraph:
+        """Return a graph copy that observes calls before cache lookup.
+
+        Args:
+            graph: Graph whose node runnables need request-scoped observation.
+
+        Returns:
+            A graph copy with the original execution, writers, and tracing.
+        """
+        # The complete node establishes context even when its function is untraced.
+        return graph.copy(
+            {
+                "nodes": {
+                    name: node.copy(
+                        {
+                            "bound": RunnableBinding(
+                                bound=node.node,
+                                config_factories=[self.configure],
+                            ),
+                            "writers": [],
+                        }
+                    )
+                    if node.node is not None
+                    else node
+                    for name, node in graph.nodes.items()
+                }
+            }
+        )
+
+    def configure(self, config: RunnableConfig) -> RunnableConfig:
+        """Observe LangGraph scheduling without changing task or cache execution."""
+        call = (config.get("configurable") or {}).get("__pregel_call")
+        if not isinstance(call, partial) or not callable(
+            call.keywords.get("schedule_task")
+        ):
+            raise FunctionalTaskError(
+                "This LangGraph version cannot record functional task identities."
+            )
+        schedule = call.keywords["schedule_task"]
+
+        def record(
+            parent: PregelExecutableTask, index: int, call: Call | None = None
+        ) -> Any:
+            if call is None:
+                return schedule(parent, index, call)
+            self._record_call(parent, index, call)
+            scheduled = schedule(parent, index, call)
+            if isawaitable(scheduled):
+                return self._persist_reused_async(parent, scheduled)
+            if scheduled is not None and any(
+                channel == "__return__" for channel, _ in scheduled.writes
+            ):
+                saver, write_config, task_path = self._reused_write_config(
+                    parent, scheduled
+                )
+                saver.put_writes(
+                    write_config, scheduled.writes, scheduled.id, task_path
+                )
+            return scheduled
+
+        return {"configurable": {"__pregel_call": partial(call, schedule_task=record)}}
+
+    @staticmethod
+    def _reused_write_config(
+        parent: PregelExecutableTask, task: PregelExecutableTask
+    ) -> tuple[BaseCheckpointSaver[Any], RunnableConfig, str]:
+        from langgraph.pregel._algo import task_path_str
+
+        configurable = parent.config.get("configurable") or {}
+        saver = configurable.get("__pregel_checkpointer")
+        if not isinstance(saver, BaseCheckpointSaver):
+            raise FunctionalTaskError("The functional task saver is unavailable.")
+        config: RunnableConfig = {
+            **parent.config,
+            "configurable": {
+                **configurable,
+                "checkpoint_ns": "",
+                "checkpoint_id": (configurable.get("checkpoint_map") or {}).get(""),
+            },
+        }
+        return saver, config, task_path_str(task.path)
+
+    async def _persist_reused_async(
+        self,
+        parent: PregelExecutableTask,
+        scheduled: Awaitable[PregelExecutableTask | None],
+    ) -> PregelExecutableTask | None:
+        task = await scheduled
+        if task is not None and any(
+            channel == "__return__" for channel, _ in task.writes
+        ):
+            # Older LangGraph versions emit cache hits without persisting them.
+            saver, config, task_path = self._reused_write_config(parent, task)
+            await saver.aput_writes(config, task.writes, task.id, task_path)
+        return task
+
+    def _record_call(
+        self, parent: PregelExecutableTask, index: int, call: Call
+    ) -> None:
+        from langgraph.pregel._call import get_runnable_for_task
+
+        configurable = parent.config.get("configurable") or {}
+        checkpoint_id = (configurable.get("checkpoint_map") or {}).get("")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise FunctionalTaskError("The functional task checkpoint is invalid.")
+        with self._lock:
+            checkpoint = self._checkpoints.get(checkpoint_id)
+        if checkpoint is None:
+            raise FunctionalTaskError("The functional task checkpoint is unavailable.")
         identity = _Identity.parse(
             {
-                "name": name,
-                "parent_ns": namespace[: -len(suffix)],
-                "path": path,
-                "step": metadata.get("langgraph_step"),
+                "name": get_runnable_for_task(call.func).name,
+                "parent_ns": configurable.get("checkpoint_ns"),
+                "path": ("__pregel_push", parent.path, index, True),
+                "step": (parent.config.get("metadata") or {}).get("langgraph_step"),
                 "version": 1,
             }
         )
+        task_id = identity.task_id(checkpoint)
         with self._lock:
             _check_existing(identity, self._identities.get(task_id))
             self._identities[task_id] = identity

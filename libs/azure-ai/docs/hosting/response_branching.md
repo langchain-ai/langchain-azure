@@ -510,8 +510,11 @@ Root task and pending-write remapping is a pure transformation keyed by
 
 Functional calls additionally need their call identity: a completed `@task`
 result in pending writes does not contain its function name or full calling
-context. A request-scoped callback captures the name, parent namespace, call
-path, and step, without storing task inputs. Before saving that task's writes,
+context. Request-scoped runnable bindings capture the name, parent namespace,
+call path, and step when LangGraph schedules a call, including cache hits that
+skip execution callbacks, without storing task inputs. Reused successful results
+are persisted before returning the task, including on LangGraph versions that
+only emit cached values. Before saving that task's writes,
 the saver persists this identity in a reserved
 `__langgraph_response_tasks__:<checkpoint_id>:<task_id>` namespace in the same
 thread and backend. These are internal identity checkpoints, not application

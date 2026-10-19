@@ -969,6 +969,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
                     "The branch resume checkpoint was not saved.",
                 )
             self._resume_head = ref
+        self.task_recorder.record_checkpoint(config, checkpoint)
         return saved_config
 
     def _validate(
@@ -998,12 +999,18 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read a checkpoint and validate an explicit branch selection."""
         config = self._resolve(config)
-        return self._validate(config, self._saver.get_tuple(config))
+        saved = self._validate(config, self._saver.get_tuple(config))
+        if saved is not None:
+            self.task_recorder.record_checkpoint(config, saved.checkpoint)
+        return saved
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read an async checkpoint and validate an explicit branch selection."""
         config = self._resolve(config)
-        return self._validate(config, await self._saver.aget_tuple(config))
+        saved = self._validate(config, await self._saver.aget_tuple(config))
+        if saved is not None:
+            self.task_recorder.record_checkpoint(config, saved.checkpoint)
+        return saved
 
     def list(self, *args: Any, **kwargs: Any) -> Iterator[CheckpointTuple]:
         """Delegate checkpoint history without changing retention."""

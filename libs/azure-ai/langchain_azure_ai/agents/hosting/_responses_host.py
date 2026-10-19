@@ -1159,9 +1159,7 @@ class ResponsesHostServer:
                 )
                 graph = copy(graph)
                 graph.checkpointer = request_saver
-                config = merge_configs(
-                    config, {"callbacks": [request_saver.task_recorder]}
-                )
+                graph = request_saver.task_recorder.bind(graph)
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's
