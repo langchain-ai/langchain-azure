@@ -618,22 +618,7 @@ SDK leases, concurrency conflicts, recovery, and task cleanup follow the
 configured SDK. Response/checkpoint retention remains a separate caller
 responsibility.
 
-## Validation Status
-
-Local checks use Agent Server Core 2.2.0, Responses 2.3.0b2, and LangGraph
-1.2.14. The full hosting baseline predates the root-only contract and eight
-additional subgraph test cases; the branching suite below includes those
-additions. Both Python environments are uv-managed, and the Python 3.11
-environment uses frozen dependencies. Instruction-lifecycle and context-mode
-tests were removed with those features; compatibility tests cover unchanged
-message handling and default-path SDK validation.
-
-| Local check | Result |
-| --- | --- |
-| Full hosting baseline, Python 3.14.6, before the additional subgraph tests | 719 passed. |
-| Branching suite, Python 3.14.6 | 239 passed, including root-only and application-owned subgraph cases. |
-| Branching suite, Python 3.11.16 with frozen dependencies | 239 passed. This is not a minimum-dependency validation. |
-| Ruff, formatting, and mypy for tests and changed runtime modules | Passed. |
+## Validation Scope
 
 The [branching tests][branching-tests] and [legacy hosting tests][hosting-tests]
 use local graphs and stores; local HTTP tests run the real SDK host, not Foundry.
@@ -641,9 +626,8 @@ use local graphs and stores; local HTTP tests run the real SDK host, not Foundry
 Coverage includes JSON/SSE `Send` fan-out with repeated node names, stable
 unanswered approval items, independent fork answers, immutable response history,
 and recovery with repeated prompts and string or dictionary resume values.
-The required task-path and interrupt-ID APIs were also checked in the LangGraph
-1.1.1 source; this was a source-compatibility check, not a minimum-version runtime
-test.
+Functional-task branching was also exercised with LangGraph 1.1.1, including
+reuse of completed task results after clearing the cache.
 
 | Scenario | Expected behavior | Validation status |
 | --- | --- | --- |
@@ -668,8 +652,8 @@ test.
 | Live services, actual crashes, multi-worker execution, and operational lifecycle | Preserve graph isolation, SDK-managed execution/recovery, and compatible retention across persistent deployments. | Unverified; local failures or object recreation do not establish these guarantees. |
 
 These results do not cover the full supported Python/dependency combinations.
-Minimum dependency versions have not been runtime-tested for this implementation.
-SDK admission probes used the current SDK versions above, not a
+The full minimum-dependency combination remains unverified.
+SDK admission probes used Agent Server Core 2.2.0 and Responses 2.3.0b2, not a
 minimum-dependency combination.
 
 The supported contract is the Responses selection behavior above. Local passing
