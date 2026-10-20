@@ -5452,21 +5452,20 @@ async def test_persisted_partial_approval_reuses_completed_task_after_recreation
                 == partial["output"]
             )
             waiting = _post(client, "waiting", previous_response_id=partial["id"])
-            assert (
-                next(
-                    item
-                    for item in waiting["output"]
-                    if item["type"] == "mcp_approval_request"
-                )
-                == original_b
-            )
+            assert [
+                item
+                for item in waiting["output"]
+                if item["type"] == "mcp_approval_request"
+            ] == [original_b]
             history = client.get(f"/responses/{waiting['id']}/input_items")
             assert history.status_code == 200, history.text
-            assert [
+            historical_approvals = [
                 item
                 for item in history.json()["data"]
                 if item.get("id") == original_b["id"]
-            ] == [original_b]
+            ]
+            assert historical_approvals
+            assert all(item == original_b for item in historical_approvals)
             completed = _post(
                 client,
                 [

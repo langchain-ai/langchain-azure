@@ -206,6 +206,11 @@ containing response's `id`, not an approval item's `response_id`, as the parent
 for the next continuation. Function-call item IDs can still change; their
 `call_id` identifies the outstanding approval.
 
+History listing remains SDK-managed. Responses SDK 2.1.0b2 can list an unchanged
+approval ID more than once in `/input_items`; each occurrence retains the same
+original payload, not a separate outstanding approval. SDK versions with history
+deduplication, including Responses 2.3.0, list that ID once.
+
 A changed approval payload or a new interrupt after an answered approval gets a
 new identity, even in the same node with identical prompt text. An update-only
 command does not count as answering an interrupt. Stale answered IDs cannot
@@ -669,6 +674,9 @@ reuse of completed task results after clearing the cache.
 
 These results do not cover the full supported Python/dependency combinations.
 The full minimum-dependency combination remains unverified.
+Separately, hosting tests cover Core/Responses 2.1.0b2 and Invocations 1.1.0b1
+with the locked graph dependencies, including the SDK-managed history-listing
+difference described above.
 SDK admission probes used Agent Server Core 2.2.0 and Responses 2.3.0b2, not a
 minimum-dependency combination.
 
