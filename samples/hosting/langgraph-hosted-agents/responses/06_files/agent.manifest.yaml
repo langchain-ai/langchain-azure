@@ -1,8 +1,7 @@
 name: langchain-azure-agent-with-files-responses
 description: >
-  A LangGraph agent that reads files from a configurable data
-  directory through local filesystem tools, hosted over the Responses
-  protocol.
+  A LangGraph agent that reads image and file request attachments
+  directly with a Responses-compatible model.
 metadata:
   tags:
     - LangChain

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Iterable, get_type_hints
 
 from langchain_core.messages import AIMessage, BaseMessage
@@ -65,6 +66,31 @@ def extract_text(content: Any) -> str:
                     parts.append(text)
         return "".join(parts)
     return str(content)
+
+
+def tool_output(content: Any) -> Any:
+    """Preserve Responses-native tool attachments instead of extracting only text.
+
+    Args:
+        content: Model-visible tool content, excluding application artifacts.
+
+    Returns:
+        Text for text-only results, or ordered Responses text/image/file parts.
+    """
+    if not isinstance(content, list) or not any(
+        isinstance(part, dict) and part.get("type") in {"input_image", "input_file"}
+        for part in content
+    ):
+        return extract_text(content)
+    parts = []
+    for part in deepcopy(content):
+        if isinstance(part, dict) and part.get("type") in {"input_image", "input_file"}:
+            if part["type"] == "input_image":
+                part.setdefault("detail", "auto")
+            parts.append(part)
+        elif text := extract_text([part]):
+            parts.append({"type": "input_text", "text": text})
+    return parts
 
 
 def extract_reasoning_summary_fragments(content: Any) -> list[str]:

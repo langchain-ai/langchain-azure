@@ -2631,7 +2631,10 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             return
         if finish.return_values:
             record.span.set_attribute(
-                Attrs.OUTPUT_MESSAGES, _as_json_attribute(finish.return_values)
+                Attrs.OUTPUT_MESSAGES,
+                _as_json_attribute(
+                    _scrub_value(finish.return_values, self._content_recording)
+                ),
             )
         record.span.set_status(Status(StatusCode.OK))
         self._propagate_agent_usage_totals(record)
@@ -2675,7 +2678,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.TOOL_NAME: serialized.get("name", "retriever"),
             Attrs.TOOL_DESCRIPTION: serialized.get("description", "retriever"),
             Attrs.TOOL_TYPE: "retriever",
-            Attrs.RETRIEVER_QUERY: query,
+            Attrs.RETRIEVER_QUERY: query if self._content_recording else "[redacted]",
         }
         parent_provider = None
         if resolved_parent and resolved_parent in self._spans:
@@ -2745,6 +2748,26 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             status=Status(StatusCode.ERROR, str(error)),
             error=error,
         )
+
+    def on_interrupt(self, event: Any) -> Any:
+        """Ignore LangGraph graph interrupt events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_interrupt`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphInterruptEvent``.
+        """
+
+    def on_resume(self, event: Any) -> Any:
+        """Ignore LangGraph graph resume events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_resume`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphResumeEvent``.
+        """
 
     # ------------------------------------------------------------------
     # Internal helpers

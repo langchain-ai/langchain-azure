@@ -2705,6 +2705,36 @@ def test_agent_finish_records_output_and_ends_span() -> None:
     assert json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES]) == {"final": "ok"}
 
 
+def test_agent_finish_redacts_output_when_content_recording_disabled() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
+    agent_run = uuid4()
+    tracer.on_chain_start(
+        {},
+        {"messages": [{"role": "user", "content": "hi"}]},
+        run_id=agent_run,
+        metadata={"otel_agent_span": True, "agent_name": "Agent"},
+    )
+
+    finish = cast(
+        SimpleNamespace,
+        SimpleNamespace(return_values={"output": "private answer"}),
+    )
+    tracer.on_agent_finish(cast(Any, finish), run_id=agent_run)
+
+    span = get_last_span_for(tracer)
+    assert span.ended is True
+    assert json.loads(span.attributes[tracing.Attrs.OUTPUT_MESSAGES]) == "[redacted]"
+
+
+def test_retriever_start_redacts_query_when_content_recording_disabled() -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(enable_content_recording=False)
+    run_id = uuid4()
+    tracer.on_retriever_start({"name": "search"}, "private query", run_id=run_id)
+    span = get_last_span_for(tracer)
+    assert span.attributes[tracing.Attrs.RETRIEVER_QUERY] == "[redacted]"
+    tracer.on_retriever_end([], run_id=run_id)
+
+
 def test_retriever_error_sets_status() -> None:
     tracer = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()

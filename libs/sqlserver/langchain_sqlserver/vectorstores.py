@@ -712,6 +712,7 @@ class SQLServerVectorStore(VectorStore):
                 result = session.execute(statement).fetchall()
         except DBAPIError as e:
             logging.error(e.__cause__)
+            raise
         return result
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -1418,6 +1419,7 @@ class SQLServerVectorStore(VectorStore):
                 session.commit()
         except DBAPIError as e:
             logging.error(e.__cause__)
+            return 0
         return result
 
     # ------------------------------------------------------------------
@@ -1573,7 +1575,7 @@ class SQLServerVectorStore(VectorStore):
                 rows = (await session.execute(statement)).fetchall()
         except DBAPIError as e:
             logging.error(e.__cause__)
-            return documents
+            raise
 
         for item in rows:
             if item is not None:

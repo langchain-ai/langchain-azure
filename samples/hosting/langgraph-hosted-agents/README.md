@@ -21,6 +21,26 @@ Each sample is a self-contained folder with its own `main.py`,
 and `agent.yaml` so it can be run locally with the command in its README
 or deployed to Foundry with `azd`.
 
+## Start here
+
+**New to hosting? Start with [Responses Basic](responses/01_basic/README.md).**
+It is the smallest end-to-end example. Use the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+for the concepts and protocol comparison.
+
+| Your goal | Start with |
+| --- | --- |
+| Host an existing compiled graph without changing its implementation | [Responses run entrypoint](responses/09_run/README.md) or [Invocations run entrypoint](invocations/03_run/README.md); point `langgraph.json` at your exported graph |
+| Build a custom multi-node workflow | [Responses Workflows](responses/05_workflows/README.md) |
+| Persist graph state in Foundry State Store | [Responses Workflows](responses/05_workflows/README.md) uses `FoundryCheckpointSaver` when hosted and an in-memory saver locally; see [durable graph state](../../../libs/azure-ai/README.md#durable-graph-state) |
+| Use the Invocations protocol with session continuity | [Invocations Basic](invocations/01_basic/README.md) |
+| Add local, remote MCP, or managed Toolbox tools | [Tools](responses/02_tools/README.md), [MCP](responses/03_mcp/README.md), or [Foundry Toolbox](responses/04_foundry_toolbox/README.md) |
+| Add tracing or human approval | [Observability](responses/07_observability/README.md) or [HITL](responses/08_hitl/README.md) |
+| Recover background work after a restart | [Responses Resilient](responses/10_resilient/README.md) or [Invocations Resilient](invocations/04_resilient/README.md) |
+
+After choosing a sample, follow [local setup](#running-the-agent-host-locally),
+use its README for requests, then follow [deployment](#deploying-the-agent-to-foundry).
+
 ## Samples
 
 ### Responses protocol
@@ -32,7 +52,7 @@ or deployed to Foundry with `azd`.
 | 3 | [MCP](responses/03_mcp/) | Tools loaded at startup from a remote MCP server (GitHub by default) via `langchain_mcp_adapters.client.MultiServerMCPClient`. |
 | 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools loaded at startup from an Azure AI Foundry Toolbox (managed multi-MCP gateway) via `langchain_azure_ai.tools.AzureAIProjectToolbox`. |
 | 5 | [Workflows](responses/05_workflows/) | Hand-built multi-node `StateGraph` (plan -> tools -> synthesize) hosted as the Responses API. |
-| 6 | [Files](responses/06_files/) | Filesystem tools (`list_files`, `read_text_file`) that let the agent read files shipped with the container under a configurable data root. |
+| 6 | [Files](responses/06_files/) | Image and file request attachments passed directly to a Responses-compatible model. |
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
 | 8 | [HITL](responses/08_hitl/) | Approval-style human-in-the-loop using `langgraph.types.interrupt`. Pending interrupts surface as the standard OpenAI `mcp_approval_request` output item; the client approves (or rejects) via `mcp_approval_response` — the same flow OpenAI uses for MCP server tool approvals. A paired `function_call` item is also emitted for callers that need to override the proposed payload via `function_call_output`. |
 | 9 | [Run entrypoint](responses/09_run/) | The basic `create_agent` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
@@ -141,7 +161,7 @@ PowerShell equivalent:
 1. An existing Foundry project
 2. A deployed model in your Foundry project
 3. Azure CLI installed and authenticated (`az login`)
-4. Python 3.10 or later
+4. Python 3.11 through 3.14
 
 #### Environment setup
 
