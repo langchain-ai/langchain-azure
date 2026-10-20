@@ -277,6 +277,12 @@ Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including
 checkpoints and pending writes, in **Foundry State Store** so a hosted graph
 can resume across turns and container restarts. It is an async-only
 checkpointer, separate from the Responses transcript store described above.
+Latest and history queries follow LangGraph checkpoint IDs, independent of
+storage write order. They enumerate matching key pages and fetch only selected
+checkpoint values; query cost therefore grows with retained checkpoint history.
+The `before` argument is an exclusive checkpoint-ID bound and does not require
+the boundary checkpoint to remain in storage.
+
 Compile the graph with the saver and keep its async context open for the
 host's lifetime:
 
