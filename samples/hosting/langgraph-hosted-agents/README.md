@@ -8,7 +8,8 @@ package. The hosting layer adapts any compiled LangGraph runnable into a
 REST endpoint that speaks either the **Responses** protocol or the
 **Invocations** protocol (or both, on the same port).
 
-All samples use the Responses API for model calls, with
+Unless noted in the [Deep Agents sample](responses/12_deep_agents/#model-integration),
+samples use the Responses API for model calls, with
 `use_responses_api=True` and `output_version="responses/v1"`. We recommend
 Responses when your model and endpoint support it. If you prefer Chat
 Completions and your model and endpoint support it, set
@@ -20,6 +21,9 @@ Each sample is a self-contained folder with its own `main.py`,
 `README.md`, `requirements.txt`, `Dockerfile`, `agent.manifest.yaml`,
 and `agent.yaml` so it can be run locally with the command in its README
 or deployed to Foundry with `azd`.
+
+The [Deep Agents sample](responses/12_deep_agents/#deploying-the-agent-to-foundry)
+uses a unified `azure.yaml` instead of separate agent manifests.
 
 ## Start here
 
@@ -57,6 +61,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 8 | [HITL](responses/08_hitl/) | Approval-style human-in-the-loop using `langgraph.types.interrupt`. Pending interrupts surface as the standard OpenAI `mcp_approval_request` output item; the client approves (or rejects) via `mcp_approval_response` — the same flow OpenAI uses for MCP server tool approvals. A paired `function_call` item is also emitted for callers that need to override the proposed payload via `function_call_output`. |
 | 9 | [Run entrypoint](responses/09_run/) | The basic `create_agent` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
 | 10 | [Resilient](responses/10_resilient/) | Resilient background Responses with replayable SSE, crash recovery, durable checkpoints, HITL approval, cancellation, and optional active-turn steering. Includes a Textual recovery client. |
+| 12 | [Deep Agents](responses/12_deep_agents/) | Official Deep Research workflow with planning, research subagents, Foundry web search, and checkpoint-backed virtual files. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the

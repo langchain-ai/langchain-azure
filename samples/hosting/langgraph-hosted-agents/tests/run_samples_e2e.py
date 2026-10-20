@@ -18,7 +18,9 @@ Prereqs:
 * ``FOUNDRY_PROJECT_ENDPOINT`` set in the shell or in
   ``samples/hosting/langgraph-hosted-agents/.env``,
 * optionally ``AZURE_AI_MODEL_DEPLOYMENT_NAME`` (defaults to ``gpt-4o``),
-* for the Foundry-Toolbox sample: ``TOOLBOX_NAME``.
+* for the Foundry-Toolbox and local Deep Agents samples: ``TOOLBOX_NAME``;
+* optionally ``DEEP_AGENTS_NAME`` to validate an already-deployed Deep Agent
+  instead of launching its local host.
 
 Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
 
@@ -54,6 +56,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1203,6 +1206,229 @@ def check_07_toolbox_streaming() -> None:
 
 
 # ---------------------------------------------------------------------------
+def _deep_agents_response(
+    client: Any, *, stream: bool, **request: Any
+) -> dict[str, Any]:
+    request.setdefault("max_output_tokens", 12000)
+    exchange = _start_raw_api_exchange(
+        method="POST",
+        url=f"{str(client.base_url).rstrip('/')}/responses",
+        path="/responses",
+        stream=stream,
+        timeout=600,
+        request_json={**request, "stream": stream},
+    )
+    response = None
+    try:
+        if not stream:
+            raw = client.responses.with_raw_response.create(stream=False, **request)
+            exchange.response_status = raw.status_code
+            exchange.response_headers = dict(raw.headers)
+            exchange.response_body = raw.http_response.text
+            response = raw.parse().model_dump()
+        else:
+            with client.responses.with_streaming_response.create(
+                stream=True,
+                **request,
+            ) as raw:
+                exchange.response_status = raw.status_code
+                exchange.response_headers = dict(raw.headers)
+                exchange.response_body = "\n".join(raw.iter_lines())
+            for event_type, event in _parse_sse(exchange.response_body):
+                if event_type in {
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                }:
+                    response = event.get("response")
+    except Exception as exc:
+        exchange.error = f"{exc.__class__.__name__}: {exc}"
+        raise
+    if not isinstance(response, dict):
+        raise AssertionError("Response is missing a terminal snapshot")
+    _dump_json("Deep Research response", response)
+    _assert(
+        response.get("status") == "completed",
+        f"response completed: {response.get('status')}; "
+        f"error={response.get('error')}; "
+        f"incomplete_details={response.get('incomplete_details')}",
+    )
+    return response
+
+
+def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
+    read_ids = {
+        item["call_id"]
+        for item in response.get("output", [])
+        if item.get("type") == "function_call"
+        and item.get("name") == "read_file"
+        and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
+    }
+    return [
+        str(item.get("output", ""))
+        for item in response.get("output", [])
+        if item.get("type") == "function_call_output"
+        and item.get("call_id") in read_ids
+    ]
+
+
+def _check_deep_agents(*, stream: bool) -> None:
+    requires_foundry_endpoint()
+    from azure.ai.projects import AIProjectClient
+    from azure.identity import DefaultAzureCredential
+    from openai import OpenAI
+
+    with ExitStack() as resources:
+        agent_name = os.environ.get("DEEP_AGENTS_NAME")
+        if agent_name:
+            credential = resources.enter_context(DefaultAzureCredential())
+            project = resources.enter_context(
+                AIProjectClient(
+                    endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+                    credential=credential,
+                )
+            )
+            client = resources.enter_context(
+                project.get_openai_client(
+                    agent_name=agent_name,
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
+        else:
+            requires_foundry_toolbox()
+            server = start_sample("responses/12_deep_agents/main.py")
+            resources.callback(server.terminate)
+            client = resources.enter_context(
+                OpenAI(
+                    base_url=server.base_url,
+                    api_key="local",
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
+        marker = f"research-{uuid.uuid4().hex}"
+        _step("Research with planning, delegation, and a saved report")
+        response = _deep_agents_response(
+            client,
+            stream=stream,
+            input=(
+                "Research how LangGraph checkpoints support multi-turn agents. "
+                "Plan with write_todos, save /research_request.md, delegate to one "
+                "research-agent which must use web_search and think_tool, and "
+                "write a short cited report to /final_report.md. Read back the "
+                "report before returning it. Limit this to one search. "
+                f"Include this exact label in the report: {marker}"
+            ),
+        )
+        calls = [
+            item
+            for item in response.get("output", [])
+            if item.get("type") == "function_call"
+        ]
+        names = {item.get("name") for item in calls}
+        _assert(
+            {"write_todos", "task", "write_file", "read_file"} <= names,
+            "coordinator planned, delegated, wrote, and read working files",
+        )
+        _assert(
+            any(
+                item.get("name") == "task"
+                and json.loads(item["arguments"]).get("subagent_type")
+                == "research-agent"
+                for item in calls
+            ),
+            "coordinator used the configured research-agent",
+        )
+        _assert(
+            any(
+                item.get("name") == "write_file"
+                and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
+                for item in calls
+            ),
+            "coordinator wrote /final_report.md",
+        )
+        task_outputs = [
+            item.get("output", "")
+            for item in response.get("output", [])
+            if item.get("type") == "function_call_output"
+            and item.get("call_id")
+            in {call.get("call_id") for call in calls if call.get("name") == "task"}
+        ]
+        _assert(
+            any(
+                isinstance(output, str) and "https://" in output
+                for output in task_outputs
+            ),
+            "delegated researcher returned findings with source URLs",
+        )
+        _assert(
+            marker in _response_text(response), "final response contains report label"
+        )
+        _assert("https://" in _response_text(response), "report contains source URLs")
+        _assert(
+            any(marker in output for output in _deep_agents_file_outputs(response)),
+            "read_file returned the report written during research",
+        )
+
+        _step("Read the report in the same conversation")
+        continued = _deep_agents_response(
+            client,
+            stream=stream,
+            previous_response_id=response["id"],
+            input="Use read_file to return /final_report.md without researching again.",
+        )
+        _assert(
+            "read_file" in _tool_call_names(continued), "continuation read saved state"
+        )
+        _assert(
+            not {"task", "web_search", "write_file", "edit_file"}
+            & set(_tool_call_names(continued)),
+            "continuation did not research or rewrite the report",
+        )
+        _assert(
+            any(marker in output for output in _deep_agents_file_outputs(continued)),
+            "continued read_file returned saved content, not just model recall",
+        )
+        _assert(
+            marker in _response_text(continued), "report survived the response boundary"
+        )
+
+        _step("Check a new conversation cannot read that report")
+        isolated = _deep_agents_response(
+            client,
+            stream=stream,
+            input=(
+                "Use read_file on /final_report.md. If it is missing, report that; "
+                "do not create or research anything."
+            ),
+        )
+        _assert(
+            "read_file" in _tool_call_names(isolated),
+            "new conversation checked the file",
+        )
+        _assert(
+            any(
+                "not found" in output.lower()
+                for output in _deep_agents_file_outputs(isolated)
+            ),
+            "the report does not exist in the new conversation",
+        )
+        _assert(
+            marker not in json.dumps(isolated), "new conversation has no prior report"
+        )
+
+
+def check_12_deep_agents() -> None:
+    """responses/12_deep_agents: research, virtual files, continuation, isolation."""
+    _check_deep_agents(stream=False)
+
+
+def check_12_deep_agents_streaming() -> None:
+    """responses/12_deep_agents: same research workflow and state over SSE."""
+    _check_deep_agents(stream=True)
+
+
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1247,6 +1473,8 @@ def _build_registry() -> list[Check]:
         Check("responses/06_files", "files", check_06_files, check_06_files.__doc__ or ""),
         Check("responses/07_observability", "observability", check_07_observability, check_07_observability.__doc__ or ""),
         Check("responses/08_hitl", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
+        Check("responses/12_deep_agents", "research", check_12_deep_agents, check_12_deep_agents.__doc__ or ""),
+        Check("responses/12_deep_agents", "streaming", check_12_deep_agents_streaming, check_12_deep_agents_streaming.__doc__ or ""),
         Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
         Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
         Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
