@@ -1,4 +1,4 @@
-langchain-azure-ai[hosting,opentelemetry] @ https://codeload.github.com/Jiahui-Gu/langchain-azure/tar.gz/812466417bb3f640db37733d90129c6fc09d18ab#subdirectory=libs/azure-ai
+langchain-azure-ai[hosting,opentelemetry] @ https://github.com/tanvir-ux/langchain-azure/archive/d889e513ab56f7e4cbb5790da781a5d3779b72d1.tar.gz#subdirectory=libs/azure-ai
 langchain==1.4.6
 langgraph==1.2.16
 langchain-openai==1.7.2

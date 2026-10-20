@@ -39,8 +39,8 @@ installing this sample's [requirements.txt](requirements.txt) and configuring
 python main.py
 ```
 
-The requirements temporarily pin a LangChain Azure source commit for checkpoint
-fixes pending release; replace it with a containing published release when available.
+The requirements temporarily pin [LangChain Azure #1070](https://github.com/langchain-ai/langchain-azure/pull/1070)
+for checkpoint fixes; replace it with a containing published release when available.
 
 See the [shared tracing guide](../../README.md#tracing) for exporter setup. Both
 `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` and
