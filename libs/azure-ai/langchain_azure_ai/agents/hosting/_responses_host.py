@@ -726,8 +726,9 @@ class ResponsesHostServer:
 
         With response branching enabled, this hook selects the completed
         parent's exact root checkpoint instead of the conversation-chain head.
-        Checkpoint validation finishes after subclass overrides return, so they
-        can supply application-specific saver configuration.
+        Parent record selection is reused within the request. Graph checkpoint
+        validation finishes after subclass overrides return, so they can supply
+        application-specific saver configuration.
 
         Args:
             request: The parsed create-response request.
@@ -1048,37 +1049,38 @@ class ResponsesHostServer:
                 raise BranchingError(
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
-            config = await self.build_runnable_config(request, context)
-            if branching and isinstance(saver, BaseCheckpointSaver):
-                bound_config = getattr(graph, "config", None)
-                if bound_config:
-                    config = merge_configs(bound_config, config)
-                    graph = copy(graph)
-                    graph.config = None
-                parent_id = request.get("previous_response_id")
-                if parent_id:
-                    branch_ref = await self._branch_store.prepare(
+            with self._branch_store.selection_scope():
+                config = await self.build_runnable_config(request, context)
+                if branching and isinstance(saver, BaseCheckpointSaver):
+                    bound_config = getattr(graph, "config", None)
+                    if bound_config:
+                        config = merge_configs(bound_config, config)
+                        graph = copy(graph)
+                        graph.config = None
+                    parent_id = request.get("previous_response_id")
+                    if parent_id:
+                        branch_ref = await self._branch_store.prepare(
+                            response_key=_scope_thread_id(context.response_id, context),
+                            parent_key=_scope_thread_id(parent_id, context),
+                            parent_id=parent_id,
+                            context=context,
+                            graph=graph,
+                            config=config,
+                        )
+                        config = (
+                            HostingRunnableConfig(config)
+                            .with_checkpoint_ref(branch_ref)
+                            .with_response_context(context)
+                            .runnable_config
+                        )
+                    request_saver = ResponseCheckpointSaver(
+                        saver,
+                        branching=True,
                         response_key=_scope_thread_id(context.response_id, context),
-                        parent_key=_scope_thread_id(parent_id, context),
-                        parent_id=parent_id,
-                        context=context,
-                        graph=graph,
-                        config=config,
+                        origin=HostingRunnableConfig(config).checkpoint_ref,
                     )
-                    config = (
-                        HostingRunnableConfig(config)
-                        .with_checkpoint_ref(branch_ref)
-                        .with_response_context(context)
-                        .runnable_config
-                    )
-                request_saver = ResponseCheckpointSaver(
-                    saver,
-                    branching=True,
-                    response_key=_scope_thread_id(context.response_id, context),
-                    origin=HostingRunnableConfig(config).checkpoint_ref,
-                )
-                graph = copy(graph)
-                graph.checkpointer = request_saver
+                    graph = copy(graph)
+                    graph.checkpointer = request_saver
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's

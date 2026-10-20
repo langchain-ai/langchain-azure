@@ -7,7 +7,9 @@ import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import copy
+from dataclasses import dataclass
 from inspect import signature
 from threading import Lock
 from typing import TYPE_CHECKING, Any
@@ -42,6 +44,22 @@ BRANCH_MODE = "checkpoint-v1"
 BRANCH_ORIGIN_KEY = "langgraph_branch_origin_v1"
 BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
+
+
+@dataclass(frozen=True)
+class _BranchSelection:
+    ref: CheckpointRef
+    origin: dict[str, str] | None = None
+    save_origin: bool = False
+
+
+_branch_selections: ContextVar[
+    dict[
+        tuple[ResponseBranchStore, ResponseContext, str, str, str, bool],
+        _BranchSelection,
+    ]
+    | None
+] = ContextVar("langchain_azure_ai_branch_selections", default=None)
 
 
 class _ResponseCheckpointMetadata(CheckpointMetadata):
@@ -160,6 +178,15 @@ class ResponseBranchStore:
         self._store = store
         self._provider = provider
 
+    @contextmanager
+    def selection_scope(self) -> Iterator[None]:
+        """Reuse parent selections only during one request's config preparation."""
+        token = _branch_selections.set({})
+        try:
+            yield
+        finally:
+            _branch_selections.reset(token)
+
     @staticmethod
     def _record(ref: CheckpointRef, *, paused: bool) -> dict[str, str]:
         return {
@@ -221,6 +248,50 @@ class ResponseBranchStore:
         select_only: bool = False,
     ) -> CheckpointRef:
         """Select a completed parent, then confirm it after config hooks."""
+        selections = _branch_selections.get()
+        key = (self, context, response_key, parent_key, parent_id, context.is_recovery)
+        selection = selections.get(key) if selections is not None else None
+        if selection is None:
+            selection = await self._select(
+                response_key=response_key,
+                parent_key=parent_key,
+                parent_id=parent_id,
+                context=context,
+            )
+            if selections is not None:
+                selections[key] = selection
+        ref = selection.ref
+        if select_only or selection.origin is None:
+            return ref
+        if graph is None or not isinstance(graph.checkpointer, BaseCheckpointSaver):
+            raise BranchingError(
+                "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
+            )
+        selected = copy(graph)
+        selected.checkpointer = ResponseCheckpointSaver(
+            graph.checkpointer, branching=True
+        )
+        selected_config = (
+            HostingRunnableConfig(config or {}).with_checkpoint_ref(ref).runnable_config
+        )
+        snapshot = await selected.aget_state(selected_config)
+        if snapshot.next or any(task.interrupts for task in snapshot.tasks):
+            raise BranchingError(
+                "unsupported_branch_parent",
+                "Response branching does not support paused parent graphs.",
+            )
+        if selection.save_origin:
+            await self._store.set(response_key, BRANCH_ORIGIN_KEY, selection.origin)
+        return ref
+
+    async def _select(
+        self,
+        *,
+        response_key: str,
+        parent_key: str,
+        parent_id: str,
+        context: ResponseContext,
+    ) -> _BranchSelection:
         existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
         if context.is_recovery:
             if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
@@ -238,7 +309,7 @@ class ResponseBranchStore:
                 raise BranchingError(
                     "invalid_branch_state", "The confirmed branch origin is invalid."
                 )
-            return ref
+            return _BranchSelection(ref)
 
         if self._provider is None:
             raise BranchingError(
@@ -301,28 +372,7 @@ class ResponseBranchStore:
             raise BranchingError(
                 "invalid_branch_state", "The confirmed branch origin is invalid."
             )
-        if select_only:
-            return ref
-        if graph is None or not isinstance(graph.checkpointer, BaseCheckpointSaver):
-            raise BranchingError(
-                "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
-            )
-        selected = copy(graph)
-        selected.checkpointer = ResponseCheckpointSaver(
-            graph.checkpointer, branching=True
-        )
-        selected_config = (
-            HostingRunnableConfig(config or {}).with_checkpoint_ref(ref).runnable_config
-        )
-        snapshot = await selected.aget_state(selected_config)
-        if snapshot.next or any(task.interrupts for task in snapshot.tasks):
-            raise BranchingError(
-                "unsupported_branch_parent",
-                "Response branching does not support paused parent graphs.",
-            )
-        if existing is None:
-            await self._store.set(response_key, BRANCH_ORIGIN_KEY, origin)
-        return ref
+        return _BranchSelection(ref, origin, save_origin=existing is None)
 
     async def publish(
         self,

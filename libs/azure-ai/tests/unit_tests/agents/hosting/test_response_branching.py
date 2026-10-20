@@ -528,6 +528,13 @@ def test_invalid_parent_checkpoint_fails_without_running_graph(
 
             monkeypatch.setattr(saver, "aget_tuple", read)
         child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
+        assert client.portal is not None
+        assert (
+            client.portal.call(
+                server._conversation_chain_store.get, child["id"], BRANCH_ORIGIN_KEY
+            )
+            is None
+        )
     assert child["status"] == "failed", child
     assert "private checkpoint" not in child["error"]["message"]
     assert executions == ["A"]
@@ -582,8 +589,62 @@ class _ConfiguredHost(ResponsesHostServer):
         }
 
 
+class _ReplacementConfiguredHost(ResponsesHostServer):
+    async def build_runnable_config(
+        self, request: CreateResponse, context: ResponseContext
+    ) -> RunnableConfig:
+        return {
+            "configurable": {
+                "thread_id": f"custom-{context.response_id}",
+                "tenant_id": "tenant",
+            }
+        }
+
+
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("configuration", ["hook", "bound", "override"])
+@pytest.mark.parametrize(
+    "host_class", [ResponsesHostServer, _ConfiguredHost, _ReplacementConfiguredHost]
+)
+def test_child_branch_reads_records_once_per_request(
+    stream: bool, host_class: type[ResponsesHostServer]
+) -> None:
+    graph, _ = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = host_class(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        parent = _post(client, "A")
+        with (
+            patch.object(
+                server._conversation_chain_store,
+                "get",
+                wraps=server._conversation_chain_store.get,
+            ) as records,
+            patch.object(
+                provider, "get_response", wraps=provider.get_response
+            ) as parents,
+        ):
+            for value in ("B", "C"):
+                records.reset_mock()
+                parents.reset_mock()
+                child = _post(
+                    client, value, previous_response_id=parent["id"], stream=stream
+                )
+                assert child["status"] == "completed", child
+                assert _text(child) == f"A,{value}"
+                reads = [record.args for record in records.await_args_list]
+                assert reads.count((child["id"], BRANCH_ORIGIN_KEY)) == 1
+                assert reads.count((parent["id"], BRANCH_BOUNDARY_KEY)) == 1
+                assert (
+                    sum(
+                        lookup.args[0] == parent["id"]
+                        for lookup in parents.await_args_list
+                    )
+                    == 1
+                )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("configuration", ["hook", "bound", "override", "replacement"])
 def test_branching_preserves_application_checkpoint_configuration(
     stream: bool, configuration: str
 ) -> None:
@@ -596,7 +657,10 @@ def test_branching_preserves_application_checkpoint_configuration(
         }
     graph = graph.with_config(config)
     original_config = deepcopy(graph.config)
-    host_class = ResponsesHostServer if configuration == "bound" else _ConfiguredHost
+    host_class = {
+        "bound": ResponsesHostServer,
+        "replacement": _ReplacementConfiguredHost,
+    }.get(configuration, _ConfiguredHost)
     server = host_class(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
@@ -607,6 +671,49 @@ def test_branching_preserves_application_checkpoint_configuration(
     assert [_text(item) for item in (a, b, c)] == ["A", "A,B", "A,C"]
     assert graph.checkpointer is server.graph.checkpointer
     assert graph.config == original_config
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_concurrent_config_hooks_keep_branch_selections_isolated(stream: bool) -> None:
+    ready = asyncio.Event()
+    selected: list[str] = []
+
+    class ConcurrentHost(ResponsesHostServer):
+        async def build_runnable_config(
+            self, request: CreateResponse, context: ResponseContext
+        ) -> RunnableConfig:
+            config = await super().build_runnable_config(request, context)
+            if request.get("previous_response_id"):
+                selected.append(context.response_id)
+                if len(selected) == 2:
+                    ready.set()
+                await asyncio.wait_for(ready.wait(), timeout=10)
+            return config
+
+    graph, _ = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ConcurrentHost(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        a = _post(client, "A")
+        d = _post(client, "D")
+        with (
+            patch.object(
+                provider, "get_response", wraps=provider.get_response
+            ) as parents,
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            b = executor.submit(
+                _post, client, "B", previous_response_id=a["id"], stream=stream
+            )
+            e = executor.submit(
+                _post, client, "E", previous_response_id=d["id"], stream=stream
+            )
+            children = [future.result(timeout=15) for future in (b, e)]
+            assert [child["status"] for child in children] == ["completed", "completed"]
+            assert [_text(child) for child in children] == ["A,B", "D,E"]
+            assert sorted(
+                lookup.args[0] for lookup in parents.await_args_list
+            ) == sorted((a["id"], d["id"]))
 
 
 @pytest.mark.parametrize("stream", [False, True])

@@ -38,6 +38,13 @@ The existing default and explicit-conversation paths are unchanged. The new
 branching path does not silently fall back to those paths for an unsupported
 parent. Approval and tool-result aggregation can be addressed separately.
 
+Parent records selected by `build_runnable_config()` are reused only within
+the same request. Graph checkpoint validation still runs after configuration
+hook overrides return and bound graph configuration is merged, so custom
+savers receive application-specific configuration. The child origin is saved
+only after validation succeeds. Overrides that do not call `super()` still
+receive parent selection and validation before graph execution.
+
 ## Example
 
 For a local single-worker host, replace the graph and host construction in the
@@ -108,12 +115,13 @@ it does not delete history, replay stored SSE events, or undo external effects.
 
 Local unit tests passed with frozen dependencies:
 
-- Python 3.14.6: all 563 hosting tests.
-- Python 3.11.16: all 133 branching and existing Responses-host tests.
-- The 88 branching cases cover JSON/SSE, exact parent state and DeltaChannel
-  history, running siblings, rejection of both complete and partial resume
-  batches, unchanged legacy partial approvals, checkpoint failures, terminal
-  storage failure, durable recreation, and response-owned recovery progress.
+- Python 3.14.6: all 143 branching and existing Responses-host tests.
+- Python 3.11.16: all 143 branching and existing Responses-host tests.
+- The 98 branching cases cover JSON/SSE, request-scoped storage reads,
+  concurrent config hooks, exact parent state and DeltaChannel history,
+  running siblings, rejection of both complete and partial resume batches,
+  unchanged legacy partial approvals, checkpoint failures, terminal storage
+  failure, durable recreation, and response-owned recovery progress.
 - Scoped Ruff lint/format and mypy checks passed.
 
 Live Foundry execution, minimum dependency combinations, cross-worker execution,
