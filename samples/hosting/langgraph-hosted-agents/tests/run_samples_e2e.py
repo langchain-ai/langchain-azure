@@ -42,6 +42,7 @@ for troubleshooting.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -56,6 +57,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1202,6 +1204,139 @@ def check_07_toolbox_streaming() -> None:
         server.terminate()
 
 
+def check_11_middleware(decision: str, *, stream: bool) -> None:
+    """responses/11_middleware: native approval decisions over JSON or SSE."""
+    requires_foundry_endpoint()
+    spec = importlib.util.spec_from_file_location(
+        "middleware_sample_reviewer", SAMPLES_DIR / "responses/11_middleware/client.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load the middleware sample reviewer")
+    reviewer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reviewer)
+    server = start_sample("responses/11_middleware/main.py")
+
+    def post_response(input_items: Any, **options: Any) -> dict[str, Any]:
+        response = _post(
+            server,
+            "/responses",
+            json_body={"input": input_items, "stream": stream, **options},
+            stream=stream,
+        )
+        _assert(response.status_code == 200, f"HTTP 200 (got {response.status_code})")
+        if stream:
+            events = _parse_sse(response.text)
+            event_types = [event_type for event_type, _ in events]
+            _assert(
+                "response.created" in event_types, "stream contains response.created"
+            )
+            _assert(
+                "response.completed" in event_types,
+                "stream contains response.completed",
+            )
+            failures = set(event_types) & {
+                "error", "response.failed", "response.incomplete"
+            }
+            _assert(not failures, "stream has no terminal errors")
+            payload = next(
+                event["response"]
+                for event_type, event in reversed(events)
+                if event_type == "response.completed"
+            )
+        else:
+            payload = response.json()
+        _assert(payload.get("status") == "completed", "response status == completed")
+        return payload
+
+    try:
+        _step(f"{decision}: pause before tool execution (stream={stream})")
+        paused = post_response(reviewer.DEFAULT_PROMPT)
+        interrupts = [
+            item
+            for item in paused["output"]
+            if item.get("type") == "function_call"
+            and item.get("name") == reviewer.INTERRUPT_NAME
+        ]
+        _assert(len(interrupts) == 1, "response contains one native middleware review")
+        actions = json.loads(interrupts[0]["arguments"])["value"]["action_requests"]
+        _assert(
+            len(actions) == 1 and actions[0]["name"] == "send_email",
+            "review proposes one send_email action",
+        )
+        arguments = actions[0]["args"]
+        _assert(
+            arguments["recipient"] == "alice@example.com",
+            "review has the requested recipient",
+        )
+        _assert(
+            "function_call_output" not in _output_types(paused),
+            "paused response has no tool result",
+        )
+        transport = "rich edit" if decision == "edit" else "standard MCP approval"
+        _step(f"{decision}: resume through the {transport} channel")
+        replies = reviewer.build_resume_items(paused, decision, "bob@example.com")
+        expected_type = (
+            "function_call_output" if decision == "edit" else "mcp_approval_response"
+        )
+        _assert(
+            len(replies) == 1 and replies[0]["type"] == expected_type,
+            f"reviewer uses {expected_type} without a fallback",
+        )
+        finished = post_response(
+            replies,
+            previous_response_id=paused["id"],
+        )
+        _assert(
+            reviewer.INTERRUPT_NAME not in _tool_call_names(finished),
+            "resume does not leave another pending review",
+        )
+        outputs = [
+            str(item.get("output", ""))
+            for item in finished["output"]
+            if item.get("type") == "function_call_output"
+        ]
+        _assert(len(outputs) == 1, "response contains the native tool result")
+        if decision == "reject":
+            _assert(
+                "Rejected by the reviewer" in outputs[0],
+                "rejection returns native feedback",
+            )
+        else:
+            recipient = (
+                "bob@example.com" if decision == "edit" else arguments["recipient"]
+            )
+            receipt = (
+                f"Simulated email to {recipient}: {arguments['subject']}\n"
+                f"{arguments['body']}"
+            )
+            _assert(
+                receipt in outputs[0],
+                "tool receives the reviewed recipient, subject, and body",
+            )
+            if decision == "edit":
+                calls = [
+                    item
+                    for item in finished["output"]
+                    if item.get("type") == "function_call"
+                    and item.get("name") == "send_email"
+                ]
+                _assert(
+                    len(calls) == 1 and json.loads(calls[0]["arguments"]) == arguments,
+                    "edit preserves the model-generated tool call",
+                )
+                _assert(
+                    "human reviewer" in outputs[0]
+                    and "Executed instead: send_email" in outputs[0],
+                    "tool result explains the human edit",
+                )
+        _assert(
+            bool(_response_text(finished).strip()),
+            "assistant completes the review round",
+        )
+    finally:
+        server.terminate()
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -1247,6 +1382,12 @@ def _build_registry() -> list[Check]:
         Check("responses/06_files", "files", check_06_files, check_06_files.__doc__ or ""),
         Check("responses/07_observability", "observability", check_07_observability, check_07_observability.__doc__ or ""),
         Check("responses/08_hitl", "pause_then_resume", check_06_pause_then_resume, check_06_pause_then_resume.__doc__ or ""),
+        Check("responses/11_middleware", "approve_json", partial(check_11_middleware, "approve", stream=False), "Native middleware approve (JSON)."),
+        Check("responses/11_middleware", "approve_sse", partial(check_11_middleware, "approve", stream=True), "Native middleware approve (SSE)."),
+        Check("responses/11_middleware", "edit_json", partial(check_11_middleware, "edit", stream=False), "Native middleware edit (JSON)."),
+        Check("responses/11_middleware", "edit_sse", partial(check_11_middleware, "edit", stream=True), "Native middleware edit (SSE)."),
+        Check("responses/11_middleware", "reject_json", partial(check_11_middleware, "reject", stream=False), "Native middleware reject (JSON)."),
+        Check("responses/11_middleware", "reject_sse", partial(check_11_middleware, "reject", stream=True), "Native middleware reject (SSE)."),
         Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
         Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
         Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
