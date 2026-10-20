@@ -1007,7 +1007,7 @@ wheels = [
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.2.10"
+version = "1.2.11"
 source = { editable = "../azure-ai" }
 dependencies = [
     { name = "aiohttp" },
@@ -1077,7 +1077,7 @@ lint = [
     { name = "mypy", specifier = ">=1.10,<3.0" },
     { name = "pydocstyle", specifier = "~=6.3" },
     { name = "pymongo", specifier = "~=4.5" },
-    { name = "ruff", specifier = ">=0.5,<0.17" },
+    { name = "ruff", specifier = ">=0.5,<0.18" },
     { name = "simsimd", specifier = "~=6.0" },
     { name = "types-requests", specifier = "~=2.28" },
 ]
