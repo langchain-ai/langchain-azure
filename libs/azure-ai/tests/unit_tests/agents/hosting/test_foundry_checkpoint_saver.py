@@ -463,7 +463,7 @@ async def test_alist_filters_before_loading_checkpoint_state_and_writes(
     history = [item async for item in saver.alist(_config(), filter={"owner": "match"})]
 
     assert [item.config for item in history] == [matching]
-    assert history[0].metadata["owner"] == "match"
+    assert history[0].metadata.get("owner") == "match"
     assert history[0].pending_writes == [("task-keep", "messages", "kept write")]
     write_queries = [
         call["tags"]["ckpt"]
@@ -522,7 +522,7 @@ async def test_alist_exact_namespace_and_id_do_not_scan(
         call["tags"].get("kind") == "checkpoint" for call in store.list_keys_calls
     )
     if expected:
-        assert history[0].metadata["owner"] == "match"
+        assert history[0].metadata.get("owner") == "match"
         assert store.get_item_calls == [f"{checkpoint_ns}/checkpoint-2"]
     if metadata_filter and not expected:
         assert store.list_keys_calls == []
