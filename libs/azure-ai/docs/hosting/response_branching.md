@@ -502,9 +502,10 @@ and keeping execution consistent across supported LangGraph versions. The
 shared application graph is not modified. Application-specific fields remain
 available for fork reads, writes, functional-task identity records, and recovery
 validation even when the saver returns only checkpoint reference fields.
-Checkpoint reads also retain these configurable fields on ancestor references,
-so channel-history reconstruction, including `DeltaChannel`, uses the same
-application configuration without changing checkpoint identities. Pending-write
+Checkpoint reads retain these configurable fields and effective top-level
+metadata on both selected and ancestor references, so channel-history
+reconstruction, including `DeltaChannel`, uses the same application configuration
+without changing checkpoint identities or reapplying callbacks. Pending-write
 delegation preserves LangGraph's support for three-argument saver methods;
 `task_path` is forwarded only when the corresponding method accepts it.
 The copy shares the selected checkpoint's parent rather than extending its

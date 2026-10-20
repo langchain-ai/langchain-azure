@@ -183,6 +183,13 @@ class _ConfiguredSaver(InMemorySaver):
         super().put_writes(config, writes, task_id, task_path)
 
 
+class _MetadataSaver(_ConfiguredSaver):
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        if (config.get("metadata") or {}).get("graph_marker") != "bound":
+            raise ValueError("The checkpoint graph metadata is missing.")
+        return super().get_tuple(config)
+
+
 class _ConfiguredHost(ResponsesHostServer):
     async def build_runnable_config(
         self, request: CreateResponse, context: ResponseContext
@@ -698,8 +705,9 @@ def test_functional_branches_preserve_checkpoint_configuration(
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("configuration", ["bound", "hook", "override"])
+@pytest.mark.parametrize("delta", [False, True])
 def test_branch_configuration_preserves_bound_metadata_and_callbacks(
-    stream: bool, configuration: str
+    stream: bool, configuration: str, delta: bool
 ) -> None:
     calls: list[UUID] = []
 
@@ -714,13 +722,13 @@ def test_branch_configuration_preserves_bound_metadata_and_callbacks(
         ) -> None:
             calls.append(run_id)
 
-    class MetadataSaver(_ConfiguredSaver):
-        def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-            assert (config.get("metadata") or {}).get("graph_marker") == "bound"
-            return super().get_tuple(config)
-
-    graph = build_simple_interrupt_graph()
-    graph.checkpointer = MetadataSaver()
+    saver = _MetadataSaver()
+    graph = (
+        _delta_branch_graph(saver, paused=True)
+        if delta
+        else build_simple_interrupt_graph()
+    )
+    graph.checkpointer = saver
     graph = graph.with_config(
         {"metadata": {"graph_marker": "bound"}, "callbacks": [Callback()]}
     )
@@ -745,7 +753,7 @@ def test_branch_configuration_preserves_bound_metadata_and_callbacks(
             stream=stream,
         )
     assert child["status"] == "completed", child
-    assert _text(child) == "ok:Alice"
+    assert _text(child) == ("start,Alice" if delta else "ok:Alice")
     assert calls
     assert len(calls) == len(set(calls))
     assert server._graph.config is bound_config
@@ -2345,14 +2353,17 @@ async def test_checkpoint_saver_supports_three_argument_writes(
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("with_metadata", [False, True])
 async def test_checkpoint_saver_restores_configured_delta_history(
-    asynchronous: bool,
+    asynchronous: bool, with_metadata: bool
 ) -> None:
-    saver = _ConfiguredSaver()
+    saver = _MetadataSaver() if with_metadata else _ConfiguredSaver()
     graph = _delta_branch_graph(saver)
     config: RunnableConfig = {
         "configurable": {"thread_id": "configured-delta", "tenant_id": "tenant"}
     }
+    if with_metadata:
+        config["metadata"] = {"graph_marker": "bound"}
     inputs = {"messages": [HumanMessage(content="A")]}
     if asynchronous:
         await graph.ainvoke(inputs, config, durability="sync")
@@ -2361,7 +2372,8 @@ async def test_checkpoint_saver_restores_configured_delta_history(
         graph.invoke(inputs, config, durability="sync")
         native = graph.get_state(config)
     selected_config: RunnableConfig = {
-        "configurable": {**config["configurable"], **native.config["configurable"]}
+        **config,
+        "configurable": {**config["configurable"], **native.config["configurable"]},
     }
     original = deepcopy(saver.get_tuple(selected_config))
     original_config = deepcopy(selected_config)

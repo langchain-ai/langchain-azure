@@ -1067,14 +1067,19 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             for key, value in requested.items()
             if key not in {"thread_id", "checkpoint_ns", "checkpoint_id"}
         }
+        execution_metadata: RunnableConfig = (
+            {"metadata": config["metadata"]} if "metadata" in config else {}
+        )
         return saved._replace(
             config={
                 **saved.config,
+                **execution_metadata,
                 "configurable": {**execution_options, **actual},
             },
             parent_config=(
                 {
                     **saved.parent_config,
+                    **execution_metadata,
                     "configurable": {
                         **execution_options,
                         **(saved.parent_config.get("configurable") or {}),
