@@ -116,6 +116,10 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     encoded in item keys within that store. The saver is async-only; use it
     with ``graph.ainvoke`` or ``graph.astream``.
 
+    Latest and history queries enumerate matching checkpoint keys to order by
+    LangGraph ID, independently of storage creation order. Exact lookups in a
+    known namespace read the checkpoint directly.
+
     Args:
         credential: Optional async Azure credential. Omit to use
             ``DefaultAzureCredential``.
@@ -230,7 +234,10 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        """List checkpoints newest-first for one known thread."""
+        """List checkpoints by descending LangGraph ID for one known thread.
+
+        ``before`` is an exclusive ID bound and need not exist in storage.
+        """
         if config is None:
             raise ValueError("config with a thread_id is required")
         if limit is not None and limit < 1:
@@ -255,24 +262,31 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
         store = await self._get_or_create_store(thread_id)
         try:
+            if checkpoint_id and before_id and checkpoint_id >= before_id:
+                return
             # Sort/filter by LangGraph checkpoint id from storage keys first.
             # Foundry order uses second-level created_at plus hash-derived ids,
             # which can reverse true checkpoint order within the same second.
             # Fetch values only for keys that survive filters / limit.
             candidates: list[tuple[str, str]] = []
-            async for storage_key in self._iter_checkpoint_keys(
-                store, cast(Mapping[str, str], tags)
-            ):
-                item_ns, item_id = self._parse_checkpoint_key(storage_key)
-                if not item_id:
-                    continue
-                if namespace_is_set and item_ns != checkpoint_ns:
-                    continue
-                if checkpoint_id and item_id != checkpoint_id:
-                    continue
-                if before_id and item_id >= before_id:
-                    continue
-                candidates.append((item_id, storage_key))
+            if checkpoint_id and namespace_is_set:
+                candidates.append(
+                    (checkpoint_id, self._checkpoint_key(checkpoint_ns, checkpoint_id))
+                )
+            else:
+                async for storage_key in self._iter_checkpoint_keys(
+                    store, cast(Mapping[str, str], tags)
+                ):
+                    item_ns, item_id = self._parse_checkpoint_key(storage_key)
+                    if not item_id:
+                        continue
+                    if namespace_is_set and item_ns != checkpoint_ns:
+                        continue
+                    if checkpoint_id and item_id != checkpoint_id:
+                        continue
+                    if before_id and item_id >= before_id:
+                        continue
+                    candidates.append((item_id, storage_key))
 
             candidates.sort(key=lambda item: item[0], reverse=True)
             yielded = 0
@@ -281,16 +295,17 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 if item is None:
                     continue
                 value = cast(_CheckpointItemValue, item.value)
-                checkpoint_tuple = await self._checkpoint_tuple(
-                    store, thread_id, value
+                metadata = cast(
+                    CheckpointMetadata, self._deserialize(value["metadata"])
                 )
                 if filter and not all(
-                    checkpoint_tuple.metadata.get(name) == expected
-                    for name, expected in filter.items()
+                    metadata.get(name) == expected for name, expected in filter.items()
                 ):
                     continue
 
-                yield checkpoint_tuple
+                yield await self._checkpoint_tuple(
+                    store, thread_id, value, metadata=metadata
+                )
                 yielded += 1
                 if limit is not None and yielded >= limit:
                     return
@@ -514,6 +529,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         store: FoundryStateStore,
         thread_id: str,
         value: _CheckpointItemValue,
+        *,
+        metadata: CheckpointMetadata | None = None,
     ) -> CheckpointTuple:
         checkpoint_id = value["checkpoint_id"]
         checkpoint_ns = value.get("checkpoint_ns", "")
@@ -526,7 +543,11 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         return CheckpointTuple(
             config=self._config(thread_id, checkpoint_ns, checkpoint_id),
             checkpoint=cast(Checkpoint, self._deserialize(value["checkpoint"])),
-            metadata=cast(CheckpointMetadata, self._deserialize(value["metadata"])),
+            metadata=(
+                metadata
+                if metadata is not None
+                else cast(CheckpointMetadata, self._deserialize(value["metadata"]))
+            ),
             parent_config=(
                 self._config(thread_id, checkpoint_ns, parent_checkpoint_id)
                 if parent_checkpoint_id

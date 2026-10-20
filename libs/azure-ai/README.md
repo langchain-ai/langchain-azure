@@ -293,6 +293,11 @@ async def main() -> None:
     await ResponsesHostServer(graph).run_async()
 ```
 
+Latest and history queries order by LangGraph checkpoint ID, not storage write
+time. They enumerate matching key pages, so query cost grows with retained
+history; checkpoint values are fetched only as needed. Exact lookups with an
+explicit namespace and checkpoint ID do not scan checkpoint keys.
+
 `FoundryCheckpointSaver` is intended for a Foundry-hosted agent using container
 protocol `2.0.0`, which supplies the request context required by the state-store
 API. Use an in-memory or database-backed LangGraph saver for local development.
