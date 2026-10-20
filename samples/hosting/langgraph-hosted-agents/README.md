@@ -32,6 +32,7 @@ for the concepts and protocol comparison.
 | --- | --- |
 | Host an existing compiled graph without changing its implementation | [Responses run entrypoint](responses/09_run/README.md) or [Invocations run entrypoint](invocations/03_run/README.md); point `langgraph.json` at your exported graph |
 | Build a custom multi-node workflow | [Responses Workflows](responses/05_workflows/README.md) |
+| Persist graph state in Foundry State Store | [Responses Workflows](responses/05_workflows/README.md) uses `FoundryCheckpointSaver` when hosted and an in-memory saver locally; see [durable graph state](../../../libs/azure-ai/README.md#durable-graph-state) |
 | Use the Invocations protocol with session continuity | [Invocations Basic](invocations/01_basic/README.md) |
 | Add local, remote MCP, or managed Toolbox tools | [Tools](responses/02_tools/README.md), [MCP](responses/03_mcp/README.md), or [Foundry Toolbox](responses/04_foundry_toolbox/README.md) |
 | Add tracing or human approval | [Observability](responses/07_observability/README.md) or [HITL](responses/08_hitl/README.md) |
