@@ -479,6 +479,61 @@ async def test_alist_filters_before_loading_checkpoint_state_and_writes(
 
 
 @pytest.mark.asyncio
+async def test_alist_custom_metadata_filter_applies_before_limit(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    for number in range(1, 7):
+        checkpoint_id = f"checkpoint-{number}"
+        selected = await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(
+                CheckpointMetadata,
+                {
+                    "source": "loop",
+                    "step": number,
+                    "owner": "match" if number in (1, 2, 4) else "other",
+                },
+            ),
+            {},
+        )
+        await saver.aput_writes(
+            selected, [("messages", checkpoint_id)], f"task-{number}"
+        )
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+    store.closed = False
+
+    history = [
+        item
+        async for item in saver.alist(_config(), filter={"owner": "match"}, limit=2)
+    ]
+
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-4",
+        "checkpoint-2",
+    ]
+    assert [item.pending_writes for item in history] == [
+        [("task-4", "messages", "checkpoint-4")],
+        [("task-2", "messages", "checkpoint-2")],
+    ]
+    assert [
+        call["tags"]["ckpt"]
+        for call in store.list_keys_calls
+        if call["tags"].get("kind") == "write"
+    ] == ["checkpoint-4", "checkpoint-2"]
+    assert [key for key in store.get_item_calls if "/writes/" not in key] == [
+        "/checkpoint-6",
+        "/checkpoint-5",
+        "/checkpoint-4",
+        "/checkpoint-3",
+        "/checkpoint-2",
+    ]
+    assert store.closed
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("checkpoint_ns", ["", "child/inner"])
 @pytest.mark.parametrize(
     ("metadata_filter", "before_id", "expected"),

@@ -117,8 +117,9 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     with ``graph.ainvoke`` or ``graph.astream``.
 
     Latest and history queries enumerate matching checkpoint keys to order by
-    LangGraph ID, independently of storage creation order. Exact lookups in a
-    known namespace read the checkpoint directly.
+    LangGraph ID, independently of storage creation order. Key-listing cost
+    grows with retained history; checkpoint values are fetched only as needed.
+    Exact lookups in a known namespace read the checkpoint directly.
 
     Args:
         credential: Optional async Azure credential. Omit to use
