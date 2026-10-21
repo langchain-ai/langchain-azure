@@ -90,8 +90,6 @@ from ._converters import (
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
-    METADATA_LANGGRAPH_CHECKPOINT_ID,
-    METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
     ConversationChainStoreProtocol,
     FoundryConversationChainStore,
@@ -104,8 +102,11 @@ from ._responses.branching import (
     BRANCH_MODE_METADATA,
     BranchingAdmissionMiddleware,
     BranchingError,
-    ResponseBranchStore,
     ResponseCheckpointSaver,
+    branch_selection_scope,
+    mark_response_boundary,
+    select_branch_checkpoint,
+    validate_branch_checkpoint,
 )
 
 if TYPE_CHECKING:
@@ -326,6 +327,8 @@ class ResponsesHostServer:
             atomic replacement, and explicit failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
+            Branching requests use response metadata instead and do not
+            read or write this store.
         enable_response_branching: Opt in to checkpoint-based response branching.
             Defaults to ``False``.
 
@@ -370,6 +373,10 @@ class ResponsesHostServer:
                private subgraph histories and handle external tool effects.
                Undo/rewind is client-side selection of an earlier parent, not
                deletion of history or rollback of those effects.
+
+            Child recovery resumes saved, response-owned graph progress, or
+            reselects the parent and replays input if no progress was persisted.
+            It follows SDK recovery semantics, not an exactly-once guarantee.
 
             For a local, single-worker demo only, use ``InMemorySaver``.
             Its checkpoints disappear on restart::
@@ -504,7 +511,7 @@ class ResponsesHostServer:
                 **host_kwargs,
             )
 
-        self._branch_store = ResponseBranchStore(self._conversation_chain_store, store)
+        self._response_provider = store
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self._app)
         self._app.add_middleware(
@@ -755,9 +762,10 @@ class ResponsesHostServer:
 
         With response branching enabled, this hook selects the completed
         parent's exact root checkpoint instead of the conversation-chain head.
-        Parent record selection is reused within the request. Graph checkpoint
-        validation finishes after subclass overrides return, so they can supply
-        application-specific saver configuration.
+        Recovery selects the current response's persisted progress when present;
+        otherwise it selects the parent again. Selection is reused within the
+        request. Graph checkpoint validation finishes after subclass overrides
+        return, so they can supply application-specific saver configuration.
 
         Args:
             request: The parsed create-response request.
@@ -772,12 +780,10 @@ class ResponsesHostServer:
                 return HostingRunnableConfig.create(
                     _scope_thread_id(context.response_id, context), context
                 ).runnable_config
-            ref = await self._branch_store.prepare(
-                response_key=_scope_thread_id(context.response_id, context),
-                parent_key=_scope_thread_id(parent_id, context),
+            ref = await select_branch_checkpoint(
+                self._response_provider,
                 parent_id=parent_id,
                 context=context,
-                select_only=True,
             )
             return HostingRunnableConfig.create_from_checkpoint(
                 ref, context
@@ -1078,7 +1084,8 @@ class ResponsesHostServer:
                 raise BranchingError(
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
-            with self._branch_store.selection_scope():
+            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
+            with branch_selection_scope():
                 config = await self.build_runnable_config(request, context)
                 if branching and isinstance(saver, BaseCheckpointSaver):
                     bound_config = getattr(graph, "config", None)
@@ -1088,13 +1095,10 @@ class ResponsesHostServer:
                         graph.config = None
                     parent_id = request.get("previous_response_id")
                     if parent_id:
-                        branch_ref = await self._branch_store.prepare(
-                            response_key=_scope_thread_id(context.response_id, context),
-                            parent_key=_scope_thread_id(parent_id, context),
+                        branch_ref = await select_branch_checkpoint(
+                            self._response_provider,
                             parent_id=parent_id,
                             context=context,
-                            graph=graph,
-                            config=config,
                         )
                         config = (
                             HostingRunnableConfig(config)
@@ -1102,11 +1106,13 @@ class ResponsesHostServer:
                             .with_response_context(context)
                             .runnable_config
                         )
+                        if not (recovering and checkpoint_ref is not None):
+                            await validate_branch_checkpoint(graph, config)
                     request_saver = ResponseCheckpointSaver(
                         saver,
                         branching=True,
                         response_key=_scope_thread_id(context.response_id, context),
-                        origin=HostingRunnableConfig(config).checkpoint_ref,
+                        parent_response_id=parent_id,
                     )
                     graph = copy(graph)
                     graph.checkpointer = request_saver
@@ -1123,26 +1129,6 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
-            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
-
-            if branching and recovering:
-                progress_recorded = any(
-                    key in stream.internal_metadata
-                    for key in (
-                        METADATA_LANGGRAPH_THREAD_ID,
-                        METADATA_LANGGRAPH_CHECKPOINT_ID,
-                    )
-                )
-                origin_ref = HostingRunnableConfig(config).checkpoint_ref
-                if progress_recorded and (
-                    checkpoint_ref is None
-                    or origin_ref is None
-                    or checkpoint_ref.thread_id != origin_ref.thread_id
-                ):
-                    raise BranchingError(
-                        "invalid_branch_state",
-                        "The recorded execution checkpoint is invalid.",
-                    )
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -1250,7 +1236,7 @@ class ResponsesHostServer:
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None:
+            if checkpoint_ref is not None and not branching:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,
@@ -1293,8 +1279,7 @@ class ResponsesHostServer:
                     yield event
 
             if publish_branch:
-                await self._branch_store.publish(
-                    _scope_thread_id(context.response_id, context),
+                mark_response_boundary(
                     stream,
                     checkpoint_ref,
                     paused=bool(new_pending),

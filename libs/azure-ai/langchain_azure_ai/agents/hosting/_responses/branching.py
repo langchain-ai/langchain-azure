@@ -9,7 +9,6 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy
-from dataclasses import dataclass
 from inspect import signature
 from threading import Lock
 from typing import TYPE_CHECKING, Any
@@ -32,33 +31,24 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .checkpoint_ref import CheckpointRef
-from .conversation_chain_store import ConversationChainStoreProtocol
 from .hosting_runnable_config import HostingRunnableConfig
-from .task_storage_manager import TaskStorageManager
+from .task_storage_manager import (
+    METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_THREAD_ID,
+    TaskStorageManager,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
 BRANCH_MODE = "checkpoint-v1"
-BRANCH_ORIGIN_KEY = "langgraph_branch_origin_v1"
 BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
 
 
-@dataclass(frozen=True)
-class _BranchSelection:
-    ref: CheckpointRef
-    origin: dict[str, str] | None = None
-    save_origin: bool = False
-
-
 _branch_selections: ContextVar[
-    dict[
-        tuple[ResponseBranchStore, ResponseContext, str, str, str, bool],
-        _BranchSelection,
-    ]
-    | None
+    dict[tuple[int, ResponseContext, str], CheckpointRef] | None
 ] = ContextVar("langchain_azure_ai_branch_selections", default=None)
 
 
@@ -162,160 +152,87 @@ class BranchingAdmissionMiddleware:
         return None
 
 
-class ResponseBranchStore:
-    """Keep confirmed origins separate from completed response boundaries.
+@contextmanager
+def branch_selection_scope() -> Iterator[None]:
+    """Reuse checkpoint selections only during one request's config preparation."""
+    token = _branch_selections.set({})
+    try:
+        yield
+    finally:
+        _branch_selections.reset(token)
 
-    Args:
-        store: The existing conversation-chain store for checkpoint records.
-        provider: The configured response provider for authorized parent lookup.
-    """
 
-    def __init__(
-        self,
-        store: ConversationChainStoreProtocol,
-        provider: ResponseProviderProtocol | None = None,
-    ) -> None:
-        self._store = store
-        self._provider = provider
-
-    @contextmanager
-    def selection_scope(self) -> Iterator[None]:
-        """Reuse parent selections only during one request's config preparation."""
-        token = _branch_selections.set({})
+def _response_metadata(response: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (response.get("metadata") or {}).get("_internal_metadata") or {}
+    if isinstance(metadata, str):
         try:
-            yield
-        finally:
-            _branch_selections.reset(token)
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError as exc:
+            raise BranchingError(
+                "invalid_branch_state", "The response checkpoint metadata is invalid."
+            ) from exc
+    if not isinstance(metadata, Mapping):
+        raise BranchingError(
+            "invalid_branch_state", "The response checkpoint metadata is invalid."
+        )
+    return dict(metadata)
 
-    @staticmethod
-    def _record(ref: CheckpointRef, *, paused: bool) -> dict[str, str]:
-        return {
-            "version": "1",
-            "checkpoint_ns": "",
-            "paused": str(paused).lower(),
-            **ref.to_dict(),
-        }
 
-    @staticmethod
-    def _reference(record: Any) -> CheckpointRef:
-        if (
-            not isinstance(record, dict)
-            or record.get("version") != "1"
-            or record.get("checkpoint_ns") != ""
-            or record.get("paused") not in {"true", "false"}
+def _require_completed_tools(parent: Mapping[str, Any]) -> None:
+    output = parent.get("output") or ()
+    calls = {
+        item.get("call_id") for item in output if item.get("type") == "function_call"
+    }
+    results = {
+        item.get("call_id")
+        for item in output
+        if item.get("type") == "function_call_output"
+    }
+    if calls - results or any(
+        item.get("type") == "mcp_approval_request" for item in output
+    ):
+        raise BranchingError(
+            "unsupported_branch_parent",
+            "Response branching does not support parents with pending "
+            "approvals or tool results.",
+        )
+
+
+async def select_branch_checkpoint(
+    provider: ResponseProviderProtocol | None,
+    *,
+    parent_id: str,
+    context: ResponseContext,
+) -> CheckpointRef:
+    """Select saved response progress, or the completed parent's exact boundary."""
+    if provider is None:
+        provider = getattr(context, "_provider", None)
+    selections = _branch_selections.get()
+    key = (id(provider), context, parent_id)
+    if selections is not None and key in selections:
+        return selections[key]
+
+    ref = None
+    if context.is_recovery and context.persisted_response is not None:
+        metadata = _response_metadata(context.persisted_response)
+        ref = TaskStorageManager(metadata).checkpoint_ref
+        if ref is None and any(
+            name in metadata
+            for name in (
+                METADATA_LANGGRAPH_THREAD_ID,
+                METADATA_LANGGRAPH_CHECKPOINT_ID,
+            )
         ):
             raise BranchingError(
-                "invalid_branch_state", "The response checkpoint record is invalid."
-            )
-        ref = CheckpointRef.from_dict(record)
-        if ref is None:
-            raise BranchingError(
-                "checkpoint_unavailable", "The response checkpoint is unavailable."
-            )
-        return ref
-
-    @staticmethod
-    def _require_completed_tools(parent: Mapping[str, Any]) -> None:
-        output = parent.get("output") or ()
-        calls = {
-            item.get("call_id")
-            for item in output
-            if item.get("type") == "function_call"
-        }
-        results = {
-            item.get("call_id")
-            for item in output
-            if item.get("type") == "function_call_output"
-        }
-        if calls - results or any(
-            item.get("type") == "mcp_approval_request" for item in output
-        ):
-            raise BranchingError(
-                "unsupported_branch_parent",
-                "Response branching does not support parents with pending "
-                "approvals or tool results.",
+                "invalid_branch_state", "The recorded execution checkpoint is invalid."
             )
 
-    async def prepare(
-        self,
-        *,
-        response_key: str,
-        parent_key: str,
-        parent_id: str,
-        context: ResponseContext,
-        graph: CompiledStateGraph | None = None,
-        config: RunnableConfig | None = None,
-        select_only: bool = False,
-    ) -> CheckpointRef:
-        """Select a completed parent, then confirm it after config hooks."""
-        selections = _branch_selections.get()
-        key = (self, context, response_key, parent_key, parent_id, context.is_recovery)
-        selection = selections.get(key) if selections is not None else None
-        if selection is None:
-            selection = await self._select(
-                response_key=response_key,
-                parent_key=parent_key,
-                parent_id=parent_id,
-                context=context,
-            )
-            if selections is not None:
-                selections[key] = selection
-        ref = selection.ref
-        if select_only or selection.origin is None:
-            return ref
-        if graph is None or not isinstance(graph.checkpointer, BaseCheckpointSaver):
-            raise BranchingError(
-                "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
-            )
-        selected = copy(graph)
-        selected.checkpointer = ResponseCheckpointSaver(
-            graph.checkpointer, branching=True
-        )
-        selected_config = (
-            HostingRunnableConfig(config or {}).with_checkpoint_ref(ref).runnable_config
-        )
-        snapshot = await selected.aget_state(selected_config)
-        if snapshot.next or any(task.interrupts for task in snapshot.tasks):
-            raise BranchingError(
-                "unsupported_branch_parent",
-                "Response branching does not support paused parent graphs.",
-            )
-        if selection.save_origin:
-            await self._store.set(response_key, BRANCH_ORIGIN_KEY, selection.origin)
-        return ref
-
-    async def _select(
-        self,
-        *,
-        response_key: str,
-        parent_key: str,
-        parent_id: str,
-        context: ResponseContext,
-    ) -> _BranchSelection:
-        existing = await self._store.get(response_key, BRANCH_ORIGIN_KEY)
-        if context.is_recovery:
-            if await self._store.get(response_key, BRANCH_BOUNDARY_KEY) is not None:
-                raise BranchingError(
-                    "invalid_branch_state",
-                    "A response with a published boundary cannot be resumed.",
-                )
-            ref = self._reference(existing)
-            if (
-                existing is None
-                or existing.get("mode") != BRANCH_MODE
-                or existing.get("parent_response_id") != parent_id
-                or existing.get("paused") != "false"
-            ):
-                raise BranchingError(
-                    "invalid_branch_state", "The confirmed branch origin is invalid."
-                )
-            return _BranchSelection(ref)
-
-        if self._provider is None:
+    if ref is None:
+        if provider is None:
             raise BranchingError(
                 "invalid_branch_state", "The Responses provider is unavailable."
             )
-        parent = await self._provider.get_response(
+        parent = await provider.get_response(
             parent_id, context=context.platform_context
         )
         if parent is None or parent.get("status") != "completed":
@@ -323,18 +240,7 @@ class ResponseBranchStore:
                 "invalid_branch_state",
                 "The parent response must be stored and completed.",
             )
-        metadata = (parent.get("metadata") or {}).get("_internal_metadata") or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except json.JSONDecodeError as exc:
-                raise BranchingError(
-                    "invalid_branch_state", "The parent checkpoint metadata is invalid."
-                ) from exc
-        if not isinstance(metadata, Mapping):
-            raise BranchingError(
-                "invalid_branch_state", "The parent checkpoint metadata is invalid."
-            )
+        metadata = _response_metadata(parent)
         boundary = metadata.get(BRANCH_BOUNDARY_KEY)
         if boundary is None:
             raise BranchingError(
@@ -342,70 +248,73 @@ class ResponseBranchStore:
                 "The parent response has no completed response-branching boundary.",
             )
         if (
-            isinstance(boundary, dict)
-            and "thread_id" not in boundary
-            and "checkpoint_id" not in boundary
+            not isinstance(boundary, dict)
+            or boundary.get("version") != "1"
+            or boundary.get("checkpoint_ns") != ""
+            or boundary.get("paused") not in ("true", "false")
         ):
-            captured_ref = TaskStorageManager(dict(metadata)).checkpoint_ref
-            if captured_ref is None:
-                raise BranchingError(
-                    "checkpoint_unavailable", "The parent has no completed checkpoint."
-                )
-            boundary = {**boundary, **captured_ref.to_dict()}
-        ref = self._reference(boundary)
+            raise BranchingError(
+                "invalid_branch_state", "The response checkpoint record is invalid."
+            )
+        ref = TaskStorageManager(metadata).checkpoint_ref
+        if ref is None:
+            raise BranchingError(
+                "checkpoint_unavailable", "The parent has no completed checkpoint."
+            )
+        if any(name in boundary for name in ("thread_id", "checkpoint_id")) and (
+            CheckpointRef.from_dict(boundary) != ref
+        ):
+            raise BranchingError(
+                "invalid_branch_state", "The parent checkpoint metadata does not agree."
+            )
         if boundary["paused"] == "true":
             raise BranchingError(
                 "unsupported_branch_parent",
                 "Response branching does not support paused parent graphs.",
             )
-        self._require_completed_tools(parent)
-        if await self._store.get(parent_key, BRANCH_BOUNDARY_KEY) != boundary:
-            raise BranchingError(
-                "invalid_branch_state", "The parent checkpoint records do not agree."
-            )
-        origin = {
-            **boundary,
-            "mode": BRANCH_MODE,
-            "parent_response_id": parent_id,
-        }
-        if existing is not None and existing != origin:
-            raise BranchingError(
-                "invalid_branch_state", "The confirmed branch origin is invalid."
-            )
-        return _BranchSelection(ref, origin, save_origin=existing is None)
+        _require_completed_tools(parent)
 
-    async def publish(
-        self,
-        response_key: str,
-        stream: ResponseEventStream,
-        ref: CheckpointRef | None,
-        *,
-        paused: bool,
-    ) -> None:
-        """Index a boundary before the SDK commits the terminal response."""
-        if ref is None:
-            raise BranchingError(
-                "checkpoint_unavailable",
-                "The response produced no checkpoint boundary.",
-            )
-        record = self._record(ref, paused=paused)
-        existing = await self._store.get(response_key, BRANCH_BOUNDARY_KEY)
-        if existing is not None and existing != record:
-            raise BranchingError(
-                "invalid_branch_state", "The response boundary cannot be replaced."
-            )
-        if TaskStorageManager.from_stream(stream).checkpoint_ref != ref:
-            raise BranchingError(
-                "invalid_branch_state",
-                "The completed boundary does not match the execution checkpoint.",
-            )
-        stream.internal_metadata[BRANCH_BOUNDARY_KEY] = {
-            key: value
-            for key, value in record.items()
-            if key not in {"thread_id", "checkpoint_id"}
-        }
-        if existing is None:
-            await self._store.set(response_key, BRANCH_BOUNDARY_KEY, record)
+    if selections is not None:
+        selections[key] = ref
+    return ref
+
+
+async def validate_branch_checkpoint(
+    graph: CompiledStateGraph, config: RunnableConfig
+) -> None:
+    """Validate the exact parent state after application config hooks return."""
+    if not isinstance(graph.checkpointer, BaseCheckpointSaver):
+        raise BranchingError(
+            "checkpoint_unavailable", "The graph checkpoint saver is unavailable."
+        )
+    selected = copy(graph)
+    selected.checkpointer = ResponseCheckpointSaver(graph.checkpointer, branching=True)
+    snapshot = await selected.aget_state(config)
+    if snapshot.next or any(task.interrupts for task in snapshot.tasks):
+        raise BranchingError(
+            "unsupported_branch_parent",
+            "Response branching does not support paused parent graphs.",
+        )
+
+
+def mark_response_boundary(
+    stream: ResponseEventStream, ref: CheckpointRef | None, *, paused: bool
+) -> None:
+    """Mark the response's final graph checkpoint for SDK terminal persistence."""
+    if ref is None:
+        raise BranchingError(
+            "checkpoint_unavailable", "The response produced no checkpoint boundary."
+        )
+    if TaskStorageManager.from_stream(stream).checkpoint_ref != ref:
+        raise BranchingError(
+            "invalid_branch_state",
+            "The completed boundary does not match the execution checkpoint.",
+        )
+    stream.internal_metadata[BRANCH_BOUNDARY_KEY] = {
+        "version": "1",
+        "checkpoint_ns": "",
+        "paused": str(paused).lower(),
+    }
 
 
 class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
@@ -420,7 +329,8 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         branching: Whether explicit checkpoint reads must match exactly.
         response_key: Current response's user-scoped key, or ``None`` to leave
             checkpoint metadata unchanged.
-        origin: Confirmed parent checkpoint, or ``None`` for a new root.
+        parent_response_id: The requested parent response ID, or ``None`` for a
+            new root. Recovery ownership does not require the parent's storage.
     """
 
     def __init__(
@@ -429,7 +339,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
         *,
         branching: bool,
         response_key: str | None = None,
-        origin: CheckpointRef | None = None,
+        parent_response_id: str | None = None,
     ) -> None:
         super().__init__(serde=saver.serde)
         self._saver = saver
@@ -441,11 +351,7 @@ class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
             "task_path" in signature(saver.aput_writes).parameters
         )
         self._execution = (
-            json.dumps(
-                [response_key, origin.thread_id, origin.checkpoint_id]
-                if origin is not None
-                else [response_key, None, None]
-            )
+            json.dumps([response_key, parent_response_id])
             if branching and response_key is not None
             else None
         )

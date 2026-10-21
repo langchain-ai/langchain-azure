@@ -6,18 +6,22 @@ import asyncio
 import json
 import operator
 import threading
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 pytest.importorskip("azure.ai.agentserver.responses")
 
-from azure.ai.agentserver.responses import ResponseContext, ResponsesServerOptions
+from azure.ai.agentserver.responses import (
+    ResponseContext,
+    ResponseEventStream,
+    ResponsesServerOptions,
+)
 from azure.ai.agentserver.responses.models import CreateResponse
 from azure.ai.agentserver.responses.store._memory import InMemoryResponseProvider
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
@@ -51,10 +55,11 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BRANCH_MODE,
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
-    BRANCH_ORIGIN_KEY,
     BranchingError,
-    ResponseBranchStore,
     ResponseCheckpointSaver,
+)
+from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (
+    TaskStorageManager,
 )
 
 from .conftest import make_echo_graph
@@ -106,12 +111,18 @@ def _boundary(
     client: TestClient, server: ResponsesHostServer, response_id: str
 ) -> CheckpointRef:
     assert client.portal is not None
-    record = client.portal.call(
-        server._conversation_chain_store.get, response_id, BRANCH_BOUNDARY_KEY
-    )
-    ref = CheckpointRef.from_dict(record)
+    assert server._response_provider is not None
+    response = client.portal.call(server._response_provider.get_response, response_id)
+    metadata = _metadata(response)
+    assert BRANCH_BOUNDARY_KEY in metadata
+    ref = TaskStorageManager(metadata).checkpoint_ref
     assert ref is not None
     return ref
+
+
+def _metadata(response: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (response.get("metadata") or {}).get("_internal_metadata") or {}
+    return json.loads(metadata) if isinstance(metadata, str) else dict(metadata)
 
 
 def _config(ref: CheckpointRef) -> RunnableConfig:
@@ -219,6 +230,84 @@ def test_completed_branches_preserve_exact_parent_state(stream: bool) -> None:
 
 
 @pytest.mark.parametrize("stream", [False, True])
+def test_branching_does_not_use_conversation_chain_storage(stream: bool) -> None:
+    graph, executions = _branch_graph()
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with (
+        patch.object(
+            server._conversation_chain_store,
+            "get",
+            side_effect=AssertionError("Branching must use response metadata."),
+        ) as reads,
+        patch.object(
+            server._conversation_chain_store,
+            "set",
+            side_effect=AssertionError("Branching must not persist a separate index."),
+        ) as writes,
+        TestClient(server.app) as client,
+    ):
+        a = _post(client, "A", stream=stream)
+        b = _post(client, "B", previous_response_id=a["id"], stream=stream)
+        c = _post(client, "C", previous_response_id=a["id"], stream=stream)
+    assert [response["status"] for response in (a, b, c)] == ["completed"] * 3
+    assert [_text(response) for response in (a, b, c)] == ["A", "A,B", "A,C"]
+    assert executions == ["A", "B", "C"]
+    reads.assert_not_awaited()
+    writes.assert_not_awaited()
+
+
+@pytest.mark.parametrize("boundary_saved", [False, True])
+async def test_completed_branch_recovery_does_not_require_parent_or_branch_records(
+    boundary_saved: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        parent = _post(client, "A")
+        child = _post(client, "C", previous_response_id=parent["id"])
+        assert child["status"] == "completed", child
+        persisted = await provider.get_response(child["id"])
+        await provider.delete_response(parent["id"])
+        persisted["status"] = "in_progress"
+        persisted_stream = ResponseEventStream(
+            response_id=child["id"], response=persisted
+        )
+        if not boundary_saved:
+            persisted_stream.internal_metadata.pop(BRANCH_BOUNDARY_KEY)
+        foundry_state_stores.clear()
+        executions.clear()
+        context = _context(
+            response_id=child["id"], conversation_id=None, current_text="do not replay"
+        )
+        context.is_recovery = True
+        context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+        context.persisted_response = persisted_stream.checkpoint().response
+        with patch.object(
+            provider,
+            "get_response",
+            side_effect=AssertionError("Owned progress must not require its parent."),
+        ) as lookup:
+            events = [
+                event
+                async for event in server.handle_create(
+                    _request(previous_response_id=parent["id"]),
+                    context,
+                    asyncio.Event(),
+                )
+            ]
+    terminal = events[-1]["response"]
+    assert terminal["status"] == "completed", terminal
+    assert _text(terminal) == "A,C"
+    assert executions == []
+    lookup.assert_not_awaited()
+    context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     "reply",
     ["text", "partial_approval", "all_approvals", "partial_output", "all_outputs"],
@@ -270,12 +359,9 @@ def test_paused_parent_is_rejected_without_resuming(stream: bool, reply: str) ->
         assert retained is not None
         assert (retained.checkpoint, retained.pending_writes) == original
         assert client.portal is not None
-        assert (
-            client.portal.call(
-                server._conversation_chain_store.get, child["id"], BRANCH_BOUNDARY_KEY
-            )
-            is None
-        )
+        assert server._response_provider is not None
+        stored = client.portal.call(server._response_provider.get_response, child["id"])
+        assert BRANCH_BOUNDARY_KEY not in _metadata(stored)
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -490,26 +576,30 @@ def test_legacy_parent_is_not_silently_reinterpreted(stream: bool) -> None:
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("failure", ["missing", "wrong_id", "backend", "index"])
+@pytest.mark.parametrize(
+    "failure", ["missing", "wrong_id", "backend", "metadata", "conflicting_ref"]
+)
 def test_invalid_parent_checkpoint_fails_without_running_graph(
     stream: bool, failure: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graph, executions = _branch_graph()
     saver = graph.checkpointer
     assert isinstance(saver, BaseCheckpointSaver)
-    server = ResponsesHostServer(
-        graph, store=InMemoryResponseProvider(), enable_response_branching=True
-    )
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
     with TestClient(server.app) as client:
         parent = _post(client, "A")
-        if failure == "index":
+        if failure in {"metadata", "conflicting_ref"}:
             assert client.portal is not None
-            client.portal.call(
-                server._conversation_chain_store.set,
-                parent["id"],
-                BRANCH_BOUNDARY_KEY,
-                {"version": "invalid"},
-            )
+            stored = client.portal.call(provider.get_response, parent["id"])
+            metadata = _metadata(stored)
+            boundary = metadata[BRANCH_BOUNDARY_KEY]
+            if failure == "metadata":
+                boundary["version"] = "invalid"
+            else:
+                boundary.update(thread_id="other-thread", checkpoint_id="other-state")
+            stored["metadata"]["_internal_metadata"] = json.dumps(metadata)
+            client.portal.call(provider.update_response, stored)
         else:
             original_read = saver.aget_tuple
 
@@ -529,12 +619,8 @@ def test_invalid_parent_checkpoint_fails_without_running_graph(
             monkeypatch.setattr(saver, "aget_tuple", read)
         child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
         assert client.portal is not None
-        assert (
-            client.portal.call(
-                server._conversation_chain_store.get, child["id"], BRANCH_ORIGIN_KEY
-            )
-            is None
-        )
+        stored_child = client.portal.call(provider.get_response, child["id"])
+        assert BRANCH_BOUNDARY_KEY not in _metadata(stored_child)
     assert child["status"] == "failed", child
     assert "private checkpoint" not in child["error"]["message"]
     assert executions == ["A"]
@@ -605,7 +691,7 @@ class _ReplacementConfiguredHost(ResponsesHostServer):
 @pytest.mark.parametrize(
     "host_class", [ResponsesHostServer, _ConfiguredHost, _ReplacementConfiguredHost]
 )
-def test_child_branch_reads_records_once_per_request(
+def test_child_branch_reads_parent_once_per_request(
     stream: bool, host_class: type[ResponsesHostServer]
 ) -> None:
     graph, _ = _branch_graph()
@@ -631,9 +717,7 @@ def test_child_branch_reads_records_once_per_request(
                 )
                 assert child["status"] == "completed", child
                 assert _text(child) == f"A,{value}"
-                reads = [record.args for record in records.await_args_list]
-                assert reads.count((child["id"], BRANCH_ORIGIN_KEY)) == 1
-                assert reads.count((parent["id"], BRANCH_BOUNDARY_KEY)) == 1
+                records.assert_not_awaited()
                 assert (
                     sum(
                         lookup.args[0] == parent["id"]
@@ -809,16 +893,28 @@ async def test_checkpoint_write_failure_never_publishes_missing_progress(
     terminal = events[-1]["response"]
     assert terminal["status"] == "failed", terminal
     assert "private checkpoint" not in terminal["error"]["message"]
-    assert (
-        await server._conversation_chain_store.get("root", BRANCH_BOUNDARY_KEY) is None
+    assert all(
+        BRANCH_BOUNDARY_KEY not in _metadata(event.response)
+        for event in events
+        if not isinstance(event, dict)
     )
 
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize(
-    "progress", ["none", "own", "sibling", "missing", "published", "malformed"]
+    "progress",
+    [
+        "none",
+        "own",
+        "sibling",
+        "missing",
+        "published",
+        "malformed",
+        "wrong_parent",
+        "wrong_thread",
+    ],
 )
-async def test_recovery_uses_only_confirmed_origin_and_owned_progress(
+async def test_recovery_uses_exact_parent_or_owned_progress(
     enabled: bool, progress: str
 ) -> None:
     graph, executions = _branch_graph()
@@ -828,7 +924,7 @@ async def test_recovery_uses_only_confirmed_origin_and_owned_progress(
     ref = HostingRunnableConfig(parent_config).checkpoint_ref
     assert ref is not None
     metadata: dict[str, Any] = {BRANCH_MODE_METADATA: BRANCH_MODE}
-    if progress in {"own", "sibling"}:
+    if progress in {"own", "sibling", "published", "wrong_parent", "wrong_thread"}:
         saver = graph.checkpointer
         assert isinstance(saver, BaseCheckpointSaver)
         execution = graph.copy(
@@ -836,8 +932,10 @@ async def test_recovery_uses_only_confirmed_origin_and_owned_progress(
                 "checkpointer": ResponseCheckpointSaver(
                     saver,
                     branching=True,
-                    response_key="child" if progress == "own" else "sibling",
-                    origin=ref,
+                    response_key="sibling" if progress == "sibling" else "child",
+                    parent_response_id=(
+                        "other-parent" if progress == "wrong_parent" else "parent"
+                    ),
                 )
             }
         )
@@ -850,6 +948,14 @@ async def test_recovery_uses_only_confirmed_origin_and_owned_progress(
         assert saved_ref is not None
         metadata[METADATA_LANGGRAPH_THREAD_ID] = saved_ref.thread_id
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = saved_ref.checkpoint_id
+        if progress == "published":
+            metadata[BRANCH_BOUNDARY_KEY] = {
+                "version": "1",
+                "checkpoint_ns": "",
+                "paused": "false",
+            }
+        elif progress == "wrong_thread":
+            metadata[METADATA_LANGGRAPH_THREAD_ID] = "other-thread"
     elif progress == "missing":
         metadata[METADATA_LANGGRAPH_THREAD_ID] = ref.thread_id
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = "deleted-checkpoint"
@@ -859,44 +965,57 @@ async def test_recovery_uses_only_confirmed_origin_and_owned_progress(
     executions.clear()
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(
-        graph, store=provider, enable_response_branching=enabled
+        graph, store=provider if enabled else None, enable_response_branching=enabled
     )
-    await server._conversation_chain_store.set(
-        "child",
-        BRANCH_ORIGIN_KEY,
-        {
-            **ResponseBranchStore._record(ref, paused=False),
-            "mode": BRANCH_MODE,
-            "parent_response_id": "parent",
-        },
-    )
-    if progress == "published":
-        await server._conversation_chain_store.set(
-            "child", BRANCH_BOUNDARY_KEY, ResponseBranchStore._record(ref, paused=False)
+    if progress == "none":
+        parent = _response_object(
+            "parent",
+            internal_metadata={
+                METADATA_LANGGRAPH_THREAD_ID: ref.thread_id,
+                METADATA_LANGGRAPH_CHECKPOINT_ID: ref.checkpoint_id,
+                BRANCH_BOUNDARY_KEY: {
+                    "version": "1",
+                    "checkpoint_ns": "",
+                    "paused": "false",
+                },
+            },
         )
-    context = _context(response_id="child", conversation_id=None, current_text="B")
+        parent["status"] = "completed"
+        await provider.create_response(parent, None, None)
+    context = _context(
+        response_id="child", conversation_id=None, current_text="B", provider=provider
+    )
     context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
     context.is_recovery = True
     context.persisted_response = _response_object(
         "child", previous_response_id="parent", internal_metadata=metadata
     )
-    with patch.object(provider, "get_response", new_callable=AsyncMock) as lookup:
+    with patch.object(provider, "get_response", wraps=provider.get_response) as lookup:
         events = [
             event
             async for event in server.handle_create(
                 _request(previous_response_id="parent"), context, asyncio.Event()
             )
         ]
-        lookup.assert_not_awaited()
+        if progress == "none":
+            lookup.assert_awaited_once_with("parent", context=context.platform_context)
+        else:
+            lookup.assert_not_awaited()
     terminal = events[-1]["response"]
     assert terminal["status"] == (
-        "completed" if progress in {"none", "own"} else "failed"
+        "completed" if progress in {"none", "own", "published"} else "failed"
     ), terminal
     assert executions == (["B"] if progress == "none" else [])
     if terminal["status"] == "completed":
-        completed_ref = CheckpointRef.from_dict(
-            await server._conversation_chain_store.get("child", BRANCH_BOUNDARY_KEY)
-        )
+        completed_ref = TaskStorageManager(
+            _metadata(
+                next(
+                    event.response
+                    for event in reversed(events)
+                    if not isinstance(event, dict)
+                )
+            )
+        ).checkpoint_ref
         assert completed_ref is not None
         snapshot = await graph.aget_state(_config(completed_ref))
         assert snapshot.values["ledger"] == ["A", "B"]
@@ -1041,12 +1160,9 @@ def test_failed_terminal_persistence_does_not_publish_a_usable_parent(
         async def persist(response: Any, *args: Any, **kwargs: Any) -> None:
             if response.get("status") == "completed" and not terminal_writes:
                 response_id = str(response["id"])
-                assert (
-                    await server._conversation_chain_store.get(
-                        response_id, BRANCH_BOUNDARY_KEY
-                    )
-                    is not None
-                )
+                metadata = _metadata(response)
+                assert BRANCH_BOUNDARY_KEY in metadata
+                assert TaskStorageManager(metadata).checkpoint_ref is not None
                 terminal_writes.append(response_id)
                 raise OSError("private storage details")
             await write(response, *args, **kwargs)
