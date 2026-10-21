@@ -308,9 +308,13 @@ class ResponsesHostServer:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
             to (e.g. a multi-protocol mixin). In this mode the host-level
             kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself.
+            configured them on ``app`` itself. Must be ``None`` when
+            ``enable_response_branching=True`` so this adapter creates its
+            own host.
         options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            :class:`ResponsesAgentServerHost`. With
+            ``enable_response_branching=True``, ``steerable_conversations``
+            must be ``False``.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -322,22 +326,53 @@ class ResponsesHostServer:
             atomic replacement, and explicit failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
-        enable_response_branching: Select the exact completed parent response's
-            root checkpoint for ``previous_response_id`` chains. Defaults to
-            ``False``, preserving existing checkpoint selection and approval
-            behavior. Requires a history-preserving saver with implemented async
-            reads and writes, and a stored parent created with branching enabled.
-            The parent graph must be finished, without pending interrupts,
-            approvals, or tool results. Paused-parent branching and requests with
-            ``mcp_approval_response`` or ``function_call_output`` inputs are not
-            supported. This does not change partial approval or tool-result
-            collection on the default or explicit ``conversation`` path.
-            Explicit conversations retain their existing selection behavior.
-            Steering and an injected ``app`` are unsupported. Only root state
-            is selected; private subgraph histories remain application-owned.
-            Existing message-based instruction persistence is unchanged.
+        enable_response_branching: Opt in to checkpoint-based response branching.
+            Defaults to ``False``.
 
-            For local branching, compile the graph with a checkpointer::
+            1. Applies only with ``enable_response_branching=True`` and no
+               explicit ``conversation``. Requires a history-preserving
+               checkpointer with implemented async reads and writes. Child
+               requests require a stored, eligible parent created with branching
+               enabled; use ``store=True`` for responses that will serve as
+               parents. The parent graph must be finished, without pending
+               tasks, interrupts, approvals, or tool results. Paused-parent
+               branching and ``mcp_approval_response`` or
+               ``function_call_output`` inputs are unsupported.
+
+               If the request specifies ``conversation``, the host follows
+               existing conversation behavior and does not apply response
+               branching, even when ``enable_response_branching=True``.
+               In contrast, enabling ``options.steerable_conversations`` or
+               passing an existing host through ``app`` raises ``ValueError``
+               during initialization, rather than bypassing branching.
+               Keep ``options.steerable_conversations=False`` and ``app=None``.
+               Steering queues a new turn while an in-flight turn in the same
+               conversation cooperatively winds down; this active-turn handoff
+               is not supported by completed-parent branching. The adapter
+               must create its own host to configure branching admission and
+               parent-response storage.
+
+            2. A request without a parent starts a new root.
+               ``previous_response_id`` selects the exact parent root checkpoint
+               for continuation, sibling branches, or regeneration. Reuse the
+               same stored parent ID for siblings; regenerate by submitting the
+               original input with its original parent ID. Each call creates a
+               new response without changing the parent.
+
+            3. Default-disabled and explicit-conversation behavior, including
+               existing partial approval and tool-result collection, is
+               unchanged. Existing message-based instruction persistence is
+               also unchanged.
+
+            4. The application configures and retains the checkpointer and
+               parent response records. Prefer a durable, history-preserving
+               saver. Only root state is selected; the application must isolate
+               private subgraph histories and handle external tool effects.
+               Undo/rewind is client-side selection of an earlier parent, not
+               deletion of history or rollback of those effects.
+
+            For a local, single-worker demo only, use ``InMemorySaver``.
+            Its checkpoints disappear on restart::
 
                 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -346,13 +381,6 @@ class ResponsesHostServer:
                     graph, enable_response_branching=True
                 ).run(port=8088)
 
-            Create sibling branches by using the same stored parent ID in
-            separate ``client.responses.create`` calls. Regenerate a response
-            by submitting its original input with its original parent ID.
-            Each call creates a new response without changing the parent.
-            ``InMemorySaver`` is for single-worker local use only; checkpoints
-            are lost at shutdown. Undo/rewind is client-side parent selection,
-            not deletion of history or rollback of external tool effects.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -361,10 +389,11 @@ class ResponsesHostServer:
     Raises:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer, or if branching is
-            enabled without implemented async checkpoint reads/writes, with
-            steering, or with an injected ``app``. Override this class to host
-            custom-state graphs.
+            configured without a LangGraph checkpointer, or if
+            ``enable_response_branching=True`` without a checkpoint saver
+            implementing async reads/writes, with
+            ``options.steerable_conversations=True``, or with an injected
+            ``app``. Override this class to host custom-state graphs.
     """
 
     def __init__(

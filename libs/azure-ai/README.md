@@ -213,7 +213,7 @@ if __name__ == "__main__":
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
 For opt-in continuation, sibling forks, and regeneration from a finished parent
-checkpoint, see [completed-parent response branching](docs/hosting/response_branching.md).
+checkpoint, see [response branching](docs/hosting/response_branching.md).
 Paused-parent branching and approval/tool-result resume inputs are outside this
 feature's initial scope; default and explicit-conversation behavior is unchanged.
 
