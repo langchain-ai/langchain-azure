@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-ai"
-version = "1.2.10"
+version = "1.2.11"
 description = "An integration package to support Microsoft Foundry (formerly Azure AI) capabilities in LangChain/LangGraph ecosystem."
 license = "MIT"
 license-files = ["LICENSE"]
@@ -79,7 +79,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["uv_build>=0.8,<0.13"]
+requires = ["uv_build>=0.8,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -174,7 +174,7 @@ dev = ["ipykernel>=6.29,<8.0", "langchain-core", "codespell~=2.2"]
 lint = [
   "pydocstyle~=6.3",
   "pymongo~=4.5",
-  "ruff>=0.5,<0.17",
+  "ruff>=0.5,<0.18",
   "simsimd~=6.0",
   "mypy>=1.10,<3.0",
   "types-requests~=2.28",

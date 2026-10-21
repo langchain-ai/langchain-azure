@@ -44,7 +44,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["uv_build>=0.8,<0.13"]
+requires = ["uv_build>=0.8,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -90,7 +90,7 @@ default-groups = ["typing"]
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
-lint = ["ruff>=0.5,<0.17", "pytest>=9.0.3,<10"]
+lint = ["ruff>=0.5,<0.18", "pytest>=9.0.3,<10"]
 test = ["pytest>=9.0.3,<10", "pytest-asyncio>=1.0,<2"]
 test_integration = ["pytest>=9.0.3,<10"]
 typing = ["mypy>=1.10,<3.0"]

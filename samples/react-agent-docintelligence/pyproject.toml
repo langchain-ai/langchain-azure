@@ -11,7 +11,7 @@ dependencies = [
     "azure-core>=1.41.0",
     "python-dotenv>=1.0.1",
     "langchain-core>=1.4.8",
-    "langchain==1.4.3",
+    "langchain==1.4.6",
     "langchain-azure-ai[opentelemetry,tools]>=1.2.7,<2",
     "langgraph-cli[inmem]>=0.4.30",
     "urllib3>=2.7.0",
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.8,<0.13"]
+requires = ["uv_build>=0.8,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv]
