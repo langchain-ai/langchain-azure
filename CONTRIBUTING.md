@@ -224,6 +224,36 @@ To run a specific test:
 TEST_FILE=tests/unit_tests/test_imports.py make test
 ```
 
+### Docs and Samples Tests
+
+Docs and samples have a separate CI workflow and uv environment, independent of
+SDK unit tests and release checks. Changes under `libs/<sdk>/docs/`, top-level
+`docs/`, or `samples/` trigger the corresponding checks. SDK changes also check
+that SDK's docs and all samples; changes to shared CI infrastructure check all
+docs and samples. Deleted directories are omitted from the test matrix. The
+workflow tests Python 3.11 and 3.14, like SDK CI.
+
+These checks compile Python sources, validate notebook structure, compile Python
+notebook cells after transforming IPython syntax, and run registered offline
+smoke tests. They do not execute whole notebooks, install sample dependencies,
+or call Azure services. Keep shared checks under
+[.github/tests/docs_samples](.github/tests/docs_samples) and mock external
+dependencies. Do not put tests that read repository docs or samples in an SDK's
+unit-test suite: release checks run against the built package outside the source
+tree.
+
+From the repository root, run the docs and samples checks:
+
+```bash
+uv run --project .github/tests --frozen pytest .github/tests
+```
+
+To check one existing directory:
+
+```bash
+uv run --project .github/tests --frozen pytest .github/tests --docs-samples-dir libs/azure-ai/docs
+```
+
 ### Integration Tests
 
 Integration tests cover logic that requires making calls to outside APIs (often integration with other services).
