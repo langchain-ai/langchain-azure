@@ -1207,8 +1207,12 @@ def check_07_toolbox_streaming() -> None:
 
 # ---------------------------------------------------------------------------
 def _deep_agents_response(
-    client: Any, *, stream: bool, **request: Any
+    client: Any, *, stream: bool, session_ids: set[str] | None = None, **request: Any
 ) -> dict[str, Any]:
+    def remember_session(value: Any) -> None:
+        if session_ids is not None and isinstance(value, str) and value:
+            session_ids.add(value)
+
     request.setdefault("max_output_tokens", 12000)
     exchange = _start_raw_api_exchange(
         method="POST",
@@ -1218,12 +1222,19 @@ def _deep_agents_response(
         timeout=600,
         request_json={**request, "stream": stream},
     )
+
+    def record_response(value: Any) -> None:
+        exchange.url = str(value.request.url)
+        exchange.request_json = json.loads(value.request.content)
+        exchange.response_status = value.status_code
+        exchange.response_headers = dict(value.headers)
+        remember_session(value.headers.get("x-agent-session-id"))
+
     response = None
     try:
         if not stream:
             raw = client.responses.with_raw_response.create(stream=False, **request)
-            exchange.response_status = raw.status_code
-            exchange.response_headers = dict(raw.headers)
+            record_response(raw.http_response)
             exchange.response_body = raw.http_response.text
             response = raw.parse().model_dump()
         else:
@@ -1231,21 +1242,55 @@ def _deep_agents_response(
                 stream=True,
                 **request,
             ) as raw:
-                exchange.response_status = raw.status_code
-                exchange.response_headers = dict(raw.headers)
-                exchange.response_body = "\n".join(raw.iter_lines())
-            for event_type, event in _parse_sse(exchange.response_body):
+                record_response(raw.http_response)
+                lines = []
+                try:
+                    for line in raw.iter_lines():
+                        lines.append(line)
+                finally:
+                    exchange.response_body = "\n".join(lines)
+            event_types = []
+            stream_errors = []
+            for event_name, data in _iter_sse_events(exchange.response_body):
+                if data == "[DONE]":
+                    continue
+                event = json.loads(data)
+                event_type = event.get("type", event_name)
+                _assert(
+                    event_name in {"message", event_type},
+                    "SSE event name matches its payload type",
+                )
+                event_types.append(event_type)
+                snapshot = event.get("response")
+                if isinstance(snapshot, dict):
+                    remember_session(snapshot.get("agent_session_id"))
+                if event_type in {"error", "response.failed", "response.incomplete"}:
+                    stream_errors.append(event)
                 if event_type in {
                     "response.completed",
                     "response.failed",
                     "response.incomplete",
                 }:
-                    response = event.get("response")
+                    response = snapshot
+            _assert(not stream_errors, f"SSE has no error events: {stream_errors}")
+            _assert(
+                event_types.count("response.created") == 1
+                and event_types.count("response.completed") == 1
+                and event_types[0] == "response.created"
+                and event_types[-1] == "response.completed",
+                "SSE has one ordered created/completed lifecycle",
+            )
     except Exception as exc:
+        failed_response = getattr(exc, "response", None)
+        if failed_response is not None:
+            record_response(failed_response)
+            if not stream:
+                exchange.response_body = failed_response.text
         exchange.error = f"{exc.__class__.__name__}: {exc}"
         raise
     if not isinstance(response, dict):
         raise AssertionError("Response is missing a terminal snapshot")
+    remember_session(response.get("agent_session_id"))
     _dump_json("Deep Research response", response)
     _assert(
         response.get("status") == "completed",
@@ -1272,6 +1317,44 @@ def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
     ]
 
 
+def _deep_agents_report_matches(response: dict[str, Any], report: str) -> bool:
+    expected = report.replace("\r\n", "\n").removesuffix("\n").split("\n")
+    covered: set[int] = set()
+    for output in _deep_agents_file_outputs(response):
+        match = re.fullmatch(
+            r"@@ lines (\d+)-(\d+)(?: of (\d+))?(?: \| [^\n]*?)? @@\n(.*)",
+            output.replace("\r\n", "\n"),
+            re.DOTALL,
+        )
+        if match is None:
+            continue
+        start, end = int(match[1]), int(match[2])
+        if not 1 <= start <= end <= len(expected):
+            return False
+        if match[3] is not None and int(match[3]) != len(expected):
+            return False
+        lines = match[4].split("\n")
+        if len(lines) == end - start + 2 and lines[-1] == "":
+            lines.pop()
+        if lines != expected[start - 1 : end]:
+            return False
+        covered.update(range(start - 1, end))
+    return len(covered) == len(expected)
+
+
+def _deep_agents_stop_sessions(
+    project: Any, agent_name: str, session_ids: set[str]
+) -> None:
+    errors = []
+    for session_id in sorted(session_ids):
+        try:
+            project.agents.stop_session(agent_name, session_id)
+        except Exception as exc:
+            errors.append(f"{session_id}: {exc}")
+    if errors:
+        raise RuntimeError(f"Could not stop Deep Agents test sessions: {errors}")
+
+
 def _check_deep_agents(*, stream: bool) -> None:
     requires_foundry_endpoint()
     from azure.ai.projects import AIProjectClient
@@ -1280,6 +1363,7 @@ def _check_deep_agents(*, stream: bool) -> None:
 
     with ExitStack() as resources:
         agent_name = os.environ.get("DEEP_AGENTS_NAME")
+        session_ids: set[str] = set()
         if agent_name:
             credential = resources.enter_context(DefaultAzureCredential())
             project = resources.enter_context(
@@ -1287,6 +1371,9 @@ def _check_deep_agents(*, stream: bool) -> None:
                     endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
                     credential=credential,
                 )
+            )
+            resources.callback(
+                _deep_agents_stop_sessions, project, agent_name, session_ids
             )
             client = resources.enter_context(
                 project.get_openai_client(
@@ -1297,6 +1384,18 @@ def _check_deep_agents(*, stream: bool) -> None:
             )
         else:
             requires_foundry_toolbox()
+            from importlib.util import find_spec
+
+            missing = [
+                name
+                for name in ("deepagents", "langchain_mcp_adapters")
+                if find_spec(name) is None
+            ]
+            if missing:
+                raise SkipCheck(
+                    f"Missing Deep Agents dependencies: {', '.join(missing)}. "
+                    "Install responses/12_deep_agents/requirements.txt first."
+                )
             state_root = resources.enter_context(
                 tempfile.TemporaryDirectory(prefix="deep-agents-checkpoints-")
             )
@@ -1318,6 +1417,7 @@ def _check_deep_agents(*, stream: bool) -> None:
         response = _deep_agents_response(
             client,
             stream=stream,
+            session_ids=session_ids,
             input=(
                 "Research how LangGraph checkpoints support multi-turn agents. "
                 "Plan with write_todos, save /research_request.md, delegate to one "
@@ -1325,7 +1425,8 @@ def _check_deep_agents(*, stream: bool) -> None:
                 "findings with source URLs, without writing the final report. "
                 "The coordinator must write /final_report.md itself, with a "
                 "short cited report based on those findings. Read back the "
-                "report before returning it. Limit this to one search. "
+                "entire report, reading all remaining pages if needed, before "
+                "returning it. Limit this to one search. "
                 f"Include this exact label in the report: {marker}"
             ),
         )
@@ -1348,14 +1449,15 @@ def _check_deep_agents(*, stream: bool) -> None:
             ),
             "coordinator used the configured research-agent",
         )
-        _assert(
-            any(
-                item.get("name") == "write_file"
-                and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
-                for item in calls
-            ),
-            "coordinator wrote /final_report.md",
-        )
+        reports = [
+            arguments["content"]
+            for item in calls
+            if item.get("name") == "write_file"
+            for arguments in [json.loads(item["arguments"])]
+            if arguments.get("file_path") == "/final_report.md"
+        ]
+        _assert(bool(reports), "coordinator wrote /final_report.md")
+        report = reports[-1]
         task_outputs = [
             item.get("output", "")
             for item in response.get("output", [])
@@ -1375,9 +1477,22 @@ def _check_deep_agents(*, stream: bool) -> None:
         )
         _assert("https://" in _response_text(response), "report contains source URLs")
         _assert(
-            any(marker in output for output in _deep_agents_file_outputs(response)),
-            "read_file returned the report written during research",
+            marker in report and "https://" in report,
+            "saved report contains its label and source URLs",
         )
+        _assert(
+            _deep_agents_report_matches(response, report),
+            "read_file returned the complete report written during research",
+        )
+
+        session_options: dict[str, Any] = {}
+        if agent_name:
+            session_id = response.get("agent_session_id")
+            _assert(
+                isinstance(session_id, str) and bool(session_id),
+                "deployed response identifies its test session",
+            )
+            session_options["extra_body"] = {"agent_session_id": session_id}
 
         if not agent_name:
             _step("Restart the local host with the same checkpoint storage")
@@ -1404,9 +1519,19 @@ def _check_deep_agents(*, stream: bool) -> None:
         continued = _deep_agents_response(
             client,
             stream=stream,
+            session_ids=session_ids,
             previous_response_id=response["id"],
-            input="Use read_file to return /final_report.md without researching again.",
+            input=(
+                "Use read_file to return the entire existing /final_report.md. "
+                "Read all remaining pages if needed. Do not research, edit or write."
+            ),
+            **session_options,
         )
+        if agent_name:
+            _assert(
+                continued.get("agent_session_id") == session_id,
+                "continuation stayed in the original test session",
+            )
         _assert(
             "read_file" in _tool_call_names(continued), "continuation read saved state"
         )
@@ -1416,8 +1541,8 @@ def _check_deep_agents(*, stream: bool) -> None:
             "continuation did not research or rewrite the report",
         )
         _assert(
-            any(marker in output for output in _deep_agents_file_outputs(continued)),
-            "continued read_file returned saved content, not just model recall",
+            _deep_agents_report_matches(continued, report),
+            "continued read_file returned the complete saved report",
         )
         _assert(
             marker in _response_text(continued), "report survived the response boundary"
@@ -1427,11 +1552,18 @@ def _check_deep_agents(*, stream: bool) -> None:
         isolated = _deep_agents_response(
             client,
             stream=stream,
+            session_ids=session_ids,
             input=(
                 "Use read_file on /final_report.md. If it is missing, report that; "
                 "do not create or research anything."
             ),
+            **session_options,
         )
+        if agent_name:
+            _assert(
+                isolated.get("agent_session_id") == session_id,
+                "new conversation used the same test session",
+            )
         _assert(
             "read_file" in _tool_call_names(isolated),
             "new conversation checked the file",
@@ -1445,6 +1577,11 @@ def _check_deep_agents(*, stream: bool) -> None:
         )
         _assert(
             marker not in json.dumps(isolated), "new conversation has no prior report"
+        )
+        _assert(
+            not {"task", "web_search", "write_file", "edit_file", "delete"}
+            & set(_tool_call_names(isolated)),
+            "isolated conversation did not research or modify files",
         )
 
 

@@ -114,6 +114,10 @@ For local checks, unset `DEEP_AGENTS_NAME` and set `FOUNDRY_PROJECT_ENDPOINT` an
 `TOOLBOX_NAME` in the shell. The runner launches the local host. Both modes make
 real model and search calls and can incur charges. Local checks restart the host
 with the same temporary checkpoint storage before reading the report back.
+Install this sample's requirements first; the runner skips these local checks
+when Deep Agents dependencies are missing. Deployed checks keep continuation
+and new-conversation isolation in the same compute session, then stop only the
+test sessions returned by those requests, including when a check fails.
 
 After testing, list compute sessions with `azd ai agent sessions list` and stop
 each test session with `azd ai agent sessions stop <session-id>`. Stopping compute
