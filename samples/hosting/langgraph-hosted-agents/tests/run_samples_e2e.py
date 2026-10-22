@@ -1297,7 +1297,13 @@ def _check_deep_agents(*, stream: bool) -> None:
             )
         else:
             requires_foundry_toolbox()
-            server = start_sample("responses/12_deep_agents/main.py")
+            state_root = resources.enter_context(
+                tempfile.TemporaryDirectory(prefix="deep-agents-checkpoints-")
+            )
+            server = start_sample(
+                "responses/12_deep_agents/main.py",
+                extra_env={"AGENTSERVER_STATE_ROOT": state_root},
+            )
             resources.callback(server.terminate)
             client = resources.enter_context(
                 OpenAI(
@@ -1315,8 +1321,10 @@ def _check_deep_agents(*, stream: bool) -> None:
             input=(
                 "Research how LangGraph checkpoints support multi-turn agents. "
                 "Plan with write_todos, save /research_request.md, delegate to one "
-                "research-agent which must use web_search and think_tool, and "
-                "write a short cited report to /final_report.md. Read back the "
+                "research-agent to use web_search and think_tool and return "
+                "findings with source URLs, without writing the final report. "
+                "The coordinator must write /final_report.md itself, with a "
+                "short cited report based on those findings. Read back the "
                 "report before returning it. Limit this to one search. "
                 f"Include this exact label in the report: {marker}"
             ),
@@ -1370,6 +1378,27 @@ def _check_deep_agents(*, stream: bool) -> None:
             any(marker in output for output in _deep_agents_file_outputs(response)),
             "read_file returned the report written during research",
         )
+
+        if not agent_name:
+            _step("Restart the local host with the same checkpoint storage")
+            server.terminate()
+            _assert(
+                any((Path(state_root) / "state_stores").glob("*.json")),
+                "local checkpoint files exist before restart",
+            )
+            server = start_sample(
+                "responses/12_deep_agents/main.py",
+                extra_env={"AGENTSERVER_STATE_ROOT": state_root},
+            )
+            resources.callback(server.terminate)
+            client = resources.enter_context(
+                OpenAI(
+                    base_url=server.base_url,
+                    api_key="local",
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
 
         _step("Read the report in the same conversation")
         continued = _deep_agents_response(

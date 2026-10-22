@@ -8,8 +8,7 @@ package. The hosting layer adapts any compiled LangGraph runnable into a
 REST endpoint that speaks either the **Responses** protocol or the
 **Invocations** protocol (or both, on the same port).
 
-Unless noted in the [Deep Agents sample](responses/12_deep_agents/#model-integration),
-samples use the Responses API for model calls, with
+All samples use the Responses API for model calls, with
 `use_responses_api=True` and `output_version="responses/v1"`. We recommend
 Responses when your model and endpoint support it. If you prefer Chat
 Completions and your model and endpoint support it, set

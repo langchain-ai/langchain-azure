@@ -26,22 +26,27 @@ key, local shell, sandbox, or custom hosting middleware is required.
 
 [main.py](main.py) connects `ChatOpenAI` to the Foundry project with
 `DefaultAzureCredential`. It uses `use_responses_api=True` and
-`output_version="v1"` for LangChain message history; this setting is independent
-of the hosted Responses protocol version.
+`output_version="responses/v1"` for LangChain message history; this setting is
+independent of the hosted Responses protocol version.
 
 ### Agent Hosting and State
 
 `ResponsesHostServer` hosts the ordinary compiled graph. `StateBackend` keeps
-working files in LangGraph state, not on the host filesystem. `InMemorySaver`
-retains them locally until the process exits; `FoundryCheckpointSaver` stores
-them with the hosted conversation. Continue with `previous_response_id` to read
-the saved report. A new conversation does not share these files. This is not
-long-term memory, a public file-download API, or in-flight crash recovery.
+working files in LangGraph state rather than as ordinary workspace files.
+`FoundryCheckpointSaver` persists that state in local files outside Foundry and
+in remote State Store when hosted. It remains open until host shutdown through
+`AsyncExitStack`. Local state survives a process restart when the same
+`AGENTSERVER_STATE_ROOT` is retained (default: `~/.agentserver`). Continue with
+`previous_response_id` to read the saved report. A new conversation does not
+share these files. This is not long-term memory, a public file-download API,
+or in-flight crash recovery.
 
 ## Running the Agent Host
 
 Use Python 3.11 or later and follow the parent's
 [local setup instructions](../../README.md#running-the-agent-host-locally).
+The sample pins `langchain-azure-ai==1.2.12`, which includes the checkpoint
+selection/history-ordering fix needed for reliable local continuation.
 Copy [.env.example](.env.example) to `.env` and configure a Foundry project,
 model deployment, and an existing Toolbox exposing `web_search`. The local
 developer needs access to the model and Toolbox. Then run from this directory:
@@ -107,7 +112,8 @@ python ../../tests/run_samples_e2e.py responses/12_deep_agents
 
 For local checks, unset `DEEP_AGENTS_NAME` and set `FOUNDRY_PROJECT_ENDPOINT` and
 `TOOLBOX_NAME` in the shell. The runner launches the local host. Both modes make
-real model and search calls and can incur charges.
+real model and search calls and can incur charges. Local checks restart the host
+with the same temporary checkpoint storage before reading the report back.
 
 After testing, list compute sessions with `azd ai agent sessions list` and stop
 each test session with `azd ai agent sessions stop <session-id>`. Stopping compute

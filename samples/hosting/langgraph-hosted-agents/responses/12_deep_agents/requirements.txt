@@ -1,4 +1,4 @@
-langchain-azure-ai[hosting,opentelemetry]==1.2.11
+langchain-azure-ai[hosting,opentelemetry]==1.2.12
 deepagents==0.7.28
 langchain==1.4.6
 langgraph==1.2.16

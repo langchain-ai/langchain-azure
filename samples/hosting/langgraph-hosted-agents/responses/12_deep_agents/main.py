@@ -9,7 +9,6 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 
 from agent import build_agent
-from azure.ai.agentserver.core import AgentConfig
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
@@ -20,8 +19,6 @@ from langchain_azure_ai.agents.hosting import (
 )
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -74,14 +71,10 @@ async def main() -> None:
             http_client=sync_http,
             http_async_client=async_http,
             use_responses_api=True,
-            output_version="v1",
+            output_version="responses/v1",
         )
         tools = await load_tools(credential)
-        checkpointer: BaseCheckpointSaver = (
-            await resources.enter_async_context(FoundryCheckpointSaver())
-            if AgentConfig.from_env().is_hosted
-            else InMemorySaver()
-        )
+        checkpointer = await resources.enter_async_context(FoundryCheckpointSaver())
         graph = build_agent(model, checkpointer, tools)
         await ResponsesHostServer(graph).run_async(
             port=int(os.environ.get("PORT", "8088"))
