@@ -341,6 +341,12 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.2.12**:
+
+  - We fixed `FoundryCheckpointSaver` to select the latest checkpoint and order checkpoint history by LangGraph checkpoint ID rather than storage insertion order, including `before` filtering and namespace isolation. [#1070](https://github.com/langchain-ai/langchain-azure/pull/1070) Thanks to [@tanvir-ux](https://github.com/tanvir-ux).
+  - We fixed the File Search example in the models notebook by importing `FileSearchTool` before binding it to the model. [#1208](https://github.com/langchain-ai/langchain-azure/pull/1208) Thanks to [@Jiahui-Gu](https://github.com/Jiahui-Gu).
+  - We updated the locked `certifi` dependency to `2026.10.19`. [#1218](https://github.com/langchain-ai/langchain-azure/pull/1218)
+
 - **1.2.11**:
 
   - **[NEW, Preview]** We introduced `AzureContentSafetyPolicyMiddleware` to apply a Content Safety guardrail policy to agent and model messages, tool arguments, and tool results, with support for service-provided transforms and annotations. This requires `azure-ai-contentsafety>=1.1.0b1`. [#1141](https://github.com/langchain-ai/langchain-azure/pull/1141)
