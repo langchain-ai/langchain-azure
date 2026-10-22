@@ -196,11 +196,11 @@ jobs:
 
       - name: Run tests with minimum direct dependency versions
         run: bash "$GITHUB_WORKSPACE/.github/scripts/test_direct_dependency_versions.sh" lowest-direct
-        working-directory: ${{ inputs.working-directory }}
+        working-directory: ${{ runner.temp }}/release-tests
 
       - name: Run tests with maximum direct dependency versions
         run: bash "$GITHUB_WORKSPACE/.github/scripts/test_direct_dependency_versions.sh" highest
-        working-directory: ${{ inputs.working-directory }}
+        working-directory: ${{ runner.temp }}/release-tests
 
   publish:
     needs:
