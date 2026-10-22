@@ -41,6 +41,8 @@ if __name__ == "__main__":
             for dir_ in LIB_DIRS:
                 if file.startswith(dir_):
                     dirs_to_run["test"].add(dir_)
+        elif file.startswith("samples/react-agent-docintelligence/"):
+            dirs_to_run["test"].add("libs/azure-ai")
         elif file.startswith("libs/"):
             raise ValueError(
                 f"Unknown lib: {file}. check_diff.py likely needs an update for this new library!"
