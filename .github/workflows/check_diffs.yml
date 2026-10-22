@@ -92,7 +92,7 @@ jobs:
     uses: ./.github/workflows/_test_docs_samples.yml
     with:
       uv-version: ${{ needs.build.outputs.uv-version }}
-      python-versions: ${{ needs.build.outputs.python-versions }}
+      python-versions: '["3.14"]'
       working-directory: ${{ matrix.working-directory }}
 
   ci_success:

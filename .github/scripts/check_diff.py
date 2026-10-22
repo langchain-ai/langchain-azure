@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,14 +13,18 @@ LIB_DIRS = [
     "libs/azure-compute",
 ]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(
+    subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path(__file__).resolve().parent,
+        encoding="utf-8",
+    ).strip()
+)
 DOCS_DIRS = [
-    f"{directory}/docs"
-    for directory in LIB_DIRS
-    if (REPO_ROOT / directory / "docs").is_dir()
+    directory
+    for directory in [f"{lib}/docs" for lib in LIB_DIRS] + ["docs"]
+    if (REPO_ROOT / directory).is_dir()
 ]
-if (REPO_ROOT / "docs").is_dir():
-    DOCS_DIRS.append("docs")
 
 if __name__ == "__main__":
     files = sys.argv[1:]

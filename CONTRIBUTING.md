@@ -230,8 +230,8 @@ Docs and samples have a separate CI workflow and uv environment, independent of
 SDK unit tests and release checks. Changes under `libs/<sdk>/docs/`, top-level
 `docs/`, or `samples/` trigger the corresponding checks. SDK changes also check
 that SDK's docs and all samples; changes to shared CI infrastructure check all
-docs and samples. Deleted directories are omitted from the test matrix. The
-workflow tests Python 3.11 and 3.14, like SDK CI.
+docs and samples. Deleted directories are omitted from the test matrix. These
+checks run on Python 3.14 only; SDK CI still tests Python 3.11 and 3.14.
 
 These checks compile Python sources, validate notebook structure, compile Python
 notebook cells after transforming IPython syntax, and run registered offline
