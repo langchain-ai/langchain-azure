@@ -30,12 +30,12 @@ classifiers = [
 
 dependencies = [
   "aiohttp>=3.14",
-  "azure-ai-contentunderstanding>=1.2.0b2",
-  "azure-ai-projects>=2.2.0",
-  "azure-ai-contentsafety>=1.1.0b1",
-  "azure-core>=1.41",
-  "azure-identity>=1.15",
-  "azure-search-documents>=11.4",
+  "azure-ai-contentunderstanding>=1.2.0b2,<2.0.0",
+  "azure-ai-projects>=2.2.0,<3.0",
+  "azure-ai-contentsafety>=1.1.0b1,<2.0.0",
+  "azure-core~=1.41",
+  "azure-identity~=1.15",
+  "azure-search-documents>=11.4,<13.0",
   "langchain>=1.2.12,<2.0.0",
   "langchain-openai>=1.0.0,<2.0.0",
   "anthropic>=0.111.0",
@@ -48,7 +48,7 @@ dependencies = [
 
 [project.optional-dependencies]
 opentelemetry = [
-  "azure-monitor-opentelemetry>=1.8",
+  "azure-monitor-opentelemetry~=1.8",
   "opentelemetry-api>=1.37",
   "opentelemetry-instrumentation>=0.58b0",
   "opentelemetry-instrumentation-threading>=0.58b0",
@@ -57,19 +57,19 @@ opentelemetry = [
   "wrapt>=1.14.0",
 ]
 tools = [
-  "azure-ai-documentintelligence (>=1.0.2)",
-  "azure-ai-textanalytics (>=5.3.0)",
-  "azure-ai-vision-imageanalysis (>=1.0.0)",
-  "azure-cognitiveservices-speech (>=1.50.0)",
-  "azure-mgmt-logic (>=10.0.0)",
+  "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
+  "azure-ai-textanalytics (>=5.3.0,<6.0.0)",
+  "azure-ai-vision-imageanalysis (>=1.0.0,<2.0.0)",
+  "azure-cognitiveservices-speech (>=1.50.0,<2.0.0)",
+  "azure-mgmt-logic (>=10.0.0,<11.0.0)",
   "filetype>=1.2",
 ]
-v1 = ["azure-ai-agents==1.2.0b6", "azure-ai-inference>=1.0.0b9"]
+v1 = ["azure-ai-agents==1.2.0b6", "azure-ai-inference>=1.0.0b9,<2.0"]
 hosting = [
   "wrapt>=1.14.0",
-  "azure-ai-agentserver-core>=2.1.0b2",
-  "azure-ai-agentserver-invocations>=1.1.0b1",
-  "azure-ai-agentserver-responses>=2.1.0b2",
+  "azure-ai-agentserver-core>=2.1.0b2,<3.0",
+  "azure-ai-agentserver-invocations>=1.1.0b1,<2.0",
+  "azure-ai-agentserver-responses>=2.1.0b2,<3.0",
   "starlette>=1.3.1",
 ]
 
