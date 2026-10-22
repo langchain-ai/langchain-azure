@@ -12,6 +12,12 @@ This repository contains the following packages with Azure integrations with Lan
 
 **Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
 
+## LangGraph on Azure
+
+Build with Azure models using the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain), or bring an existing compiled graph to Microsoft Foundry with the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents).
+The [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) cover local runs and deployment, including [hosting an existing graph without changing its implementation](./samples/hosting/langgraph-hosted-agents/responses/09_run/README.md).
+For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
+
 # Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
@@ -130,4 +136,3 @@ You're not a genius and you don't love programming!
 # Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
-

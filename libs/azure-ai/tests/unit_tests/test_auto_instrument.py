@@ -581,3 +581,35 @@ def test_disable_auto_tracing_uses_matching_unwrap_target(
         "name": "__init__",
     }
     assert auto_instrument.is_auto_tracing_enabled() is False
+
+
+def test_auto_tracing_handles_graph_interrupt_and_resume(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command, interrupt
+
+    class State(TypedDict):
+        answer: str
+
+    def ask(state: State) -> State:
+        return {"answer": interrupt("approve?")}
+
+    builder = StateGraph(State)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config: Any = {"configurable": {"thread_id": "hitl"}}
+
+    auto_instrument.enable_auto_tracing()
+    with caplog.at_level("WARNING"):
+        graph.invoke({"answer": ""}, config)
+        result = graph.invoke(Command(resume="yes"), config)
+
+    assert result == {"answer": "yes"}
+    assert "AzureAIOpenTelemetryTracer.on_interrupt" not in caplog.text
+    assert "AzureAIOpenTelemetryTracer.on_resume" not in caplog.text

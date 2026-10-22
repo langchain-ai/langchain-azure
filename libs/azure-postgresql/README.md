@@ -125,3 +125,4 @@ check the output of `pytest --help`.
 - **1.0.2**:
 
   - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We added Python 3.14 to the supported runtime and test matrix. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

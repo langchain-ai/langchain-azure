@@ -436,3 +436,43 @@ def test_ids_used_correctly() -> None:
         ids_used_at_upload = vector_store.add_documents(documents, ids=ids_provided)
         assert len(ids_provided) == len(ids_used_at_upload)
         assert ids_provided == ids_used_at_upload
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("search_type", ["similarity", "hybrid"])
+async def test_asimilarity_search_with_score_consumes_search_type(
+    search_type: str,
+) -> None:
+    """`search_type` selects the mode and must not reach the client.
+
+    The async method read it with `kwargs.get`, so it stayed in `kwargs` and
+    the async search helpers forwarded it to `async_client.search()`, which
+    handed the unknown key to aiohttp:
+
+        TypeError: ClientSession._request() got an unexpected keyword argument
+        'search_type'
+
+    The sync twin pops it, which is why only the async path failed.
+    """
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    captured_kwargs: List[Dict[str, Any]] = []
+
+    async def mock_search(
+        self: AsyncSearchClient, *args: Any, **kwargs: Any
+    ) -> EmptyAsyncSearchResults:
+        captured_kwargs.append(kwargs)
+        return EmptyAsyncSearchResults()
+
+    with (
+        patch.object(AsyncSearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        await vector_store.asimilarity_search_with_score(
+            "hello world", k=1, search_type=search_type
+        )
+
+    assert len(captured_kwargs) == 1
+    assert "search_type" not in captured_kwargs[0]

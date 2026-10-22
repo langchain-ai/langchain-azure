@@ -11,8 +11,8 @@ import pytest
 from azure.ai.agentserver.responses import (
     ResponseContext,
     ResponseEventStream,
-    ResponseObject,
 )
+from azure.ai.agentserver.responses.models import ResponseObject
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai.agents.hosting._responses import (
