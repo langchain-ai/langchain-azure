@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -40,6 +42,7 @@ class _FakeStateStore:
         self.tags: dict[str, dict[str, str]] = {}
         self.order: list[str] = []
         self.list_keys_calls: list[dict[str, Any]] = []
+        self.get_item_calls: list[str] = []
         self.closed = False
         self.deleted = False
 
@@ -75,6 +78,7 @@ class _FakeStateStore:
         await self.set_item(key, value, tags=tags)
 
     async def get_item(self, key: str) -> Any | None:
+        self.get_item_calls.append(key)
         return self.items.get(key)
 
     async def list_keys(
@@ -160,6 +164,17 @@ def _checkpoint(checkpoint_id: str, value: str) -> Checkpoint:
             "updated_channels": ["messages"],
         },
     )
+
+
+@pytest.fixture
+def saver_and_store() -> Iterator[tuple[FoundryCheckpointSaver, _FakeStateStore]]:
+    store = _FakeStateStore()
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        yield FoundryCheckpointSaver(_credential()), store
 
 
 def test_constructor_registers_foundry_checkpoint_feature() -> None:
@@ -300,7 +315,7 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None:
+async def test_list_before_filters_by_checkpoint_id_not_storage_order() -> None:
     store = _FakeStateStore()
 
     with patch(
@@ -309,6 +324,9 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
         new=AsyncMock(return_value=store),
     ):
         saver = FoundryCheckpointSaver(_credential())
+        # Lexicographic order of these ids is a-before < m-newer < z-older, which
+        # intentionally disagrees with write/storage order so before-filtering must
+        # use checkpoint ids rather than Foundry creation cursors.
         older_config = await saver.aput(
             _config(),
             _checkpoint("z-older", "older"),
@@ -332,17 +350,442 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
             item
             async for item in saver.alist(
                 _config(),
-                before=before_config,
-                filter={"source": "input"},
+                before=_config("m-newer"),
             )
         ]
 
-    assert [item.config for item in checkpoints] == [older_config]
-    assert any(
-        call["tags"]["kind"] == "checkpoint"
-        and call["after"] == store.items["/a-before"].id
-        for call in store.list_keys_calls
+    # Only ids strictly less than m-newer (a-before) belong before that point.
+    assert [item.config["configurable"]["checkpoint_id"] for item in checkpoints] == [
+        "a-before"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
+    """Regression for #1057: same-second storage order must not hide the true latest."""
+    store = _FakeStateStore()
+    # UUID6-shaped ids: lexicographically older < newer, like LangGraph's uuid6.
+    older_id = "1f1b63e7-4a17-644a-bffe-764ddea781a4"
+    newer_id = "1f1b63e7-4a17-67b7-8002-6c64d1d576fe"
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        older_config = await saver.aput(
+            _config(),
+            _checkpoint(older_id, "older"),
+            cast(CheckpointMetadata, {"source": "input", "step": -1}),
+            {},
+        )
+        newer_config = await saver.aput(
+            older_config,
+            _checkpoint(newer_id, "newer"),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+        # Reverse Foundry insertion order to simulate same-second (created_at, id)
+        # reordering that would make list_keys(order="desc", limit=1) return older.
+        store.order.reverse()
+
+        latest = await saver.aget_tuple(_config())
+        exact = await saver.aget_tuple(newer_config)
+        history = [item async for item in saver.alist(_config())]
+
+    assert latest is not None
+    assert latest.config == newer_config
+    assert latest.checkpoint["channel_values"] == {"messages": ["newer"]}
+    assert exact is not None
+    assert exact.config == newer_config
+    assert [item.config for item in history] == [newer_config, older_config]
+
+
+@pytest.mark.asyncio
+async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
+    """Regression for review on #1070: sort keys before reading bodies."""
+    store = _FakeStateStore()
+    ids = [f"ckpt-{i:02d}" for i in range(5)]
+
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        saver = FoundryCheckpointSaver(_credential())
+        for index, checkpoint_id in enumerate(ids):
+            await saver.aput(
+                _config(),
+                _checkpoint(checkpoint_id, f"v{index}"),
+                cast(CheckpointMetadata, {"source": "loop", "step": index}),
+                {},
+            )
+        store.get_item_calls.clear()
+
+        history = [item async for item in saver.alist(_config(), limit=2)]
+
+    assert [item.config["configurable"]["checkpoint_id"] for item in history] == [
+        "ckpt-04",
+        "ckpt-03",
+    ]
+    # Keys are listed for all five checkpoints, but bodies are fetched only for
+    # the two that survive the limit (pending-write lookups use write keys).
+    checkpoint_gets = [key for key in store.get_item_calls if "/writes/" not in key]
+    assert checkpoint_gets == ["/ckpt-04", "/ckpt-03"]
+
+
+@pytest.mark.asyncio
+async def test_alist_filters_before_loading_checkpoint_state_and_writes(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    matching = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-1", "keep"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 1, "owner": "match"}),
+        {},
     )
+    await saver.aput_writes(matching, [("messages", "kept write")], "task-keep")
+    await saver.aput(
+        matching,
+        _checkpoint("checkpoint-2", "skip"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 2, "owner": "other"}),
+        {},
+    )
+    store.items["/checkpoint-2"].value["checkpoint"] = {
+        "type": "msgpack",
+        "data": "!!!",
+    }
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+
+    history = [item async for item in saver.alist(_config(), filter={"owner": "match"})]
+
+    assert [item.config for item in history] == [matching]
+    assert history[0].metadata.get("owner") == "match"
+    assert history[0].pending_writes == [("task-keep", "messages", "kept write")]
+    write_queries = [
+        call["tags"]["ckpt"]
+        for call in store.list_keys_calls
+        if call["tags"].get("kind") == "write"
+    ]
+    assert write_queries == ["checkpoint-1"]
+    assert store.get_item_calls == [
+        "/checkpoint-2",
+        "/checkpoint-1",
+        "/writes/checkpoint-1/task-keep/0",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_alist_custom_metadata_filter_applies_before_limit(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    for number in range(1, 7):
+        checkpoint_id = f"checkpoint-{number}"
+        selected = await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(
+                CheckpointMetadata,
+                {
+                    "source": "loop",
+                    "step": number,
+                    "owner": "match" if number in (1, 2, 4) else "other",
+                },
+            ),
+            {},
+        )
+        await saver.aput_writes(
+            selected, [("messages", checkpoint_id)], f"task-{number}"
+        )
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+    store.closed = False
+
+    history = [
+        item
+        async for item in saver.alist(_config(), filter={"owner": "match"}, limit=2)
+    ]
+
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-4",
+        "checkpoint-2",
+    ]
+    assert [item.pending_writes for item in history] == [
+        [("task-4", "messages", "checkpoint-4")],
+        [("task-2", "messages", "checkpoint-2")],
+    ]
+    assert [
+        call["tags"]["ckpt"]
+        for call in store.list_keys_calls
+        if call["tags"].get("kind") == "write"
+    ] == ["checkpoint-4", "checkpoint-2"]
+    assert [key for key in store.get_item_calls if "/writes/" not in key] == [
+        "/checkpoint-6",
+        "/checkpoint-5",
+        "/checkpoint-4",
+        "/checkpoint-3",
+        "/checkpoint-2",
+    ]
+    assert store.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint_ns", ["", "child/inner"])
+@pytest.mark.parametrize(
+    ("metadata_filter", "before_id", "expected"),
+    [
+        (None, None, True),
+        ({"source": "loop", "step": 2}, "checkpoint-3", True),
+        ({"source": "input"}, None, False),
+        ({"owner": "other"}, None, False),
+        (None, "checkpoint-2", False),
+        (None, "checkpoint-1", False),
+    ],
+)
+async def test_alist_exact_namespace_and_id_do_not_scan(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    checkpoint_ns: str,
+    metadata_filter: dict[str, Any] | None,
+    before_id: str | None,
+    expected: bool,
+) -> None:
+    saver, store = saver_and_store
+    selected = await saver.aput(
+        _config(checkpoint_ns=checkpoint_ns),
+        _checkpoint("checkpoint-2", "selected"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 2, "owner": "match"}),
+        {},
+    )
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+
+    history = [
+        item
+        async for item in saver.alist(
+            selected,
+            filter=metadata_filter,
+            before=_config(before_id) if before_id else None,
+        )
+    ]
+
+    assert [item.config for item in history] == ([selected] if expected else [])
+    assert not any(
+        call["tags"].get("kind") == "checkpoint" for call in store.list_keys_calls
+    )
+    if expected:
+        assert history[0].metadata.get("owner") == "match"
+        assert store.get_item_calls == [f"{checkpoint_ns}/checkpoint-2"]
+    if metadata_filter and not expected:
+        assert store.list_keys_calls == []
+    if before_id and before_id <= "checkpoint-2":
+        assert store.get_item_calls == []
+        assert store.list_keys_calls == []
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_alist_exact_missing_checkpoint_does_not_scan(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+
+    history = [item async for item in saver.alist(_config("missing"))]
+
+    assert history == []
+    assert store.get_item_calls == ["/missing"]
+    assert store.list_keys_calls == []
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_alist_id_without_namespace_still_searches_all_namespaces(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    root = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-2", "root"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 2}),
+        {},
+    )
+    child = await saver.aput(
+        _config(checkpoint_ns="child/inner"),
+        _checkpoint("checkpoint-2", "child"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 2}),
+        {},
+    )
+    await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-3", "other"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 3}),
+        {},
+    )
+    query = cast(
+        RunnableConfig,
+        {"configurable": {"thread_id": "thread-1", "checkpoint_id": "checkpoint-2"}},
+    )
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+
+    history = [item async for item in saver.alist(query)]
+
+    assert {item.config["configurable"]["checkpoint_ns"] for item in history} == {
+        root["configurable"]["checkpoint_ns"],
+        child["configurable"]["checkpoint_ns"],
+    }
+    assert set(store.get_item_calls) == {"/checkpoint-2", "child/inner/checkpoint-2"}
+    checkpoint_queries = [
+        call
+        for call in store.list_keys_calls
+        if call["tags"].get("kind") == "checkpoint"
+    ]
+    assert checkpoint_queries and all(
+        "ns" not in call["tags"] for call in checkpoint_queries
+    )
+
+
+@pytest.mark.asyncio
+async def test_latest_history_and_limit_order_keys_across_pages(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    for number in (7, 3, 6, 2, 5, 1, 4):
+        checkpoint_id = f"checkpoint-{number:03d}"
+        await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(CheckpointMetadata, {"source": "loop", "step": number}),
+            {},
+        )
+    store.list_keys_calls.clear()
+    store.get_item_calls.clear()
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver._PAGE_SIZE", 2
+    ):
+        latest = await saver.aget_tuple(_config())
+        assert store.get_item_calls == ["/checkpoint-007"]
+        assert (
+            len(
+                [
+                    call
+                    for call in store.list_keys_calls
+                    if call["tags"].get("kind") == "checkpoint"
+                ]
+            )
+            == 4
+        )
+        store.get_item_calls.clear()
+        history = [
+            item
+            async for item in saver.alist(
+                _config(), before=_config("checkpoint-006a"), limit=2
+            )
+        ]
+
+    assert latest is not None and latest.checkpoint["id"] == "checkpoint-007"
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-006",
+        "checkpoint-005",
+    ]
+    assert store.get_item_calls == ["/checkpoint-006", "/checkpoint-005"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary_exists", [False, True])
+async def test_before_bound_need_not_exist_or_match_metadata(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    boundary_exists: bool,
+) -> None:
+    saver, store = saver_and_store
+    for checkpoint_id in ("checkpoint-1", "checkpoint-4", "checkpoint-2"):
+        await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+    if boundary_exists:
+        await saver.aput(
+            _config(),
+            _checkpoint("checkpoint-3", "boundary"),
+            cast(CheckpointMetadata, {"source": "input", "step": 1}),
+            {},
+        )
+    store.get_item_calls.clear()
+
+    history = [
+        item
+        async for item in saver.alist(
+            _config(), before=_config("checkpoint-3"), filter={"source": "loop"}
+        )
+    ]
+
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-2",
+        "checkpoint-1",
+    ]
+    assert store.get_item_calls == ["/checkpoint-2", "/checkpoint-1"]
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_latest_history_survive_local_saver_reopen_with_tied_timestamps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "azure.ai.agentserver.core.storage._local_state._now", lambda: 100
+    )
+    expected = [f"checkpoint-{number:03d}" for number in range(12)]
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        for checkpoint_id in expected:
+            await saver.aput(
+                _config(),
+                _checkpoint(checkpoint_id, checkpoint_id),
+                cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+                {},
+            )
+    async with FoundryCheckpointSaver(_credential()) as reopened:
+        latest = await reopened.aget_tuple(_config())
+        history = [item async for item in reopened.alist(_config(), limit=3)]
+
+    assert latest is not None and latest.checkpoint["id"] == expected[-1]
+    assert [item.checkpoint["id"] for item in history] == list(reversed(expected[-3:]))
+
+
+@pytest.mark.asyncio
+async def test_alist_keeps_storage_and_matching_checkpoint_errors_visible(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, store = saver_and_store
+    selected = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-1", "selected"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 1}),
+        {},
+    )
+    store.items["/checkpoint-1"].value["checkpoint"] = {
+        "type": "msgpack",
+        "data": "!!!",
+    }
+    store.closed = False
+
+    with pytest.raises(ValueError):
+        _ = [item async for item in saver.alist(selected)]
+
+    assert store.closed
+    store.closed = False
+    with patch.object(store, "get_item", side_effect=RuntimeError("storage failed")):
+        with pytest.raises(RuntimeError, match="storage failed"):
+            _ = [item async for item in saver.alist(selected)]
+
+    assert store.closed
 
 
 @pytest.mark.asyncio

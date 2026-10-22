@@ -4,6 +4,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from langchain_azure_ai.retrievers.azure_ai_search import AzureAISearchRetriever
 
 
@@ -70,11 +72,10 @@ def test_get_relevant_documents_sends_full_query() -> None:
     assert docs[0].metadata == {"id": "1", "score": 0.9}
 
 
-async def test_aget_relevant_documents_sends_full_query() -> None:
+def make_async_session(status: int, body: dict) -> tuple[MagicMock, MagicMock]:
     response = AsyncMock()
-    response.json = AsyncMock(
-        return_value={"value": [{"id": "1", "content": "hello world"}]}
-    )
+    response.status = status
+    response.json = AsyncMock(return_value=body)
     response_cm = MagicMock()
     response_cm.__aenter__ = AsyncMock(return_value=response)
     response_cm.__aexit__ = AsyncMock(return_value=False)
@@ -84,6 +85,13 @@ async def test_aget_relevant_documents_sends_full_query() -> None:
     session_cm = MagicMock()
     session_cm.__aenter__ = AsyncMock(return_value=session)
     session_cm.__aexit__ = AsyncMock(return_value=False)
+    return session_cm, session
+
+
+async def test_aget_relevant_documents_sends_full_query() -> None:
+    session_cm, session = make_async_session(
+        200, {"value": [{"id": "1", "content": "hello world"}]}
+    )
 
     retriever = make_retriever()
     with patch("aiohttp.ClientSession", return_value=session_cm):
@@ -96,3 +104,23 @@ async def test_aget_relevant_documents_sends_full_query() -> None:
     assert query_params["search"] == ["cats & dogs"]
     assert len(docs) == 1
     assert docs[0].page_content == "hello world"
+
+
+def test_get_relevant_documents_raises_on_error_status() -> None:
+    response = MagicMock(status_code=403)
+    response.text = json.dumps({"error": {"message": "Access denied"}})
+
+    with patch("requests.get", return_value=response):
+        with pytest.raises(Exception, match="Error in search request"):
+            make_retriever()._get_relevant_documents("cats", run_manager=MagicMock())
+
+
+async def test_aget_relevant_documents_raises_on_error_status() -> None:
+    """The sync path raises on a non-200 status; the async path must too."""
+    session_cm, _ = make_async_session(403, {"error": {"message": "Access denied"}})
+
+    with patch("aiohttp.ClientSession", return_value=session_cm):
+        with pytest.raises(Exception, match="Error in search request"):
+            await make_retriever()._aget_relevant_documents(
+                "cats", run_manager=MagicMock()
+            )
