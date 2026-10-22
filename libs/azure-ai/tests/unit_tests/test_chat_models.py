@@ -390,8 +390,38 @@ def test_convert_delta_keeps_tool_calls_without_index() -> None:
     chunk = _convert_delta_to_message_chunk(delta, AIMessageChunk)
 
     assert [(c["id"], c["name"], c["index"]) for c in chunk.tool_call_chunks] == [
-        ("call_a", "get_weather", 0),
-        ("call_b", "get_time", 1),
+        ("call_a", "get_weather", None),
+        ("call_b", "get_time", None),
+    ]
+
+
+def test_aggregated_deltas_keep_complete_tool_calls_without_index_apart() -> None:
+    def delta(call_id: str, name: str) -> StreamingChatResponseMessageUpdate:
+        return StreamingChatResponseMessageUpdate(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": call_id, "function": {"name": name, "arguments": "{}"}}
+                ],
+            }
+        )
+
+    first = _convert_delta_to_message_chunk(
+        delta("call_a", "get_weather"), AIMessageChunk
+    )
+    second = _convert_delta_to_message_chunk(
+        delta("call_b", "get_time"), AIMessageChunk
+    )
+
+    merged = first + second
+
+    assert [(c["id"], c["name"], c["args"]) for c in merged.tool_call_chunks] == [
+        ("call_a", "get_weather", "{}"),
+        ("call_b", "get_time", "{}"),
+    ]
+    assert [(c["id"], c["name"], c["args"]) for c in merged.tool_calls] == [
+        ("call_a", "get_weather", {}),
+        ("call_b", "get_time", {}),
     ]
 
 
