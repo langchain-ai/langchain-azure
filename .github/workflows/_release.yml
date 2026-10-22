@@ -172,26 +172,14 @@ jobs:
         shell: bash
         env:
           UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make tests
-          fi
+        run: make tests
         working-directory: ${{ runner.temp }}/release-tests
 
       - name: Run integration tests
         shell: bash
         env:
           UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make integration_tests
-          fi
+        run: make integration_tests
         working-directory: ${{ runner.temp }}/release-tests
 
       - name: Get minimum versions
