@@ -89,14 +89,17 @@ contributing changes to the package. The Makefile runs tools directly through
 `uv` in the selected Python environment:
 
 ```cmd
+$ make help    # list available commands (also the default for make)
 $ make test    # run tests and package doctests
 $ make lint    # run lint checks
+$ make format  # format Python code and sort imports
 $ make type    # run type checks
 $ make package # build and check distributions
 $ make vuln    # check dependencies for vulnerabilities
 ```
 
 As before, the Makefile lint targets report findings without failing the build.
+CI runs `make lint_package` for package sources and `make lint_tests` for tests.
 
 Tests run once in the selected environment. The shared CI matrix selects Python
 3.11 and 3.14; the package continues to support Python 3.11 through 3.14. Set the
