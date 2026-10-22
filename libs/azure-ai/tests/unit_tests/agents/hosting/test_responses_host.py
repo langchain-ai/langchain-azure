@@ -65,6 +65,153 @@ def _client(server: ResponsesHostServer) -> TestClient:
     return TestClient(server.app)
 
 
+@pytest.mark.parametrize("ending", ["success", "failure", "cancel", "close"])
+async def test_handler_owns_clients_through_generator_exit(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    settled = []
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        try:
+            async with get_state_store(server, FoundryStateStore, "chain"):
+                pass
+            yield "admitted"
+            async with get_state_store(server, FoundryStateStore, "chain"):
+                store.aclose.assert_not_awaited()
+                if ending == "failure":
+                    raise RuntimeError("failed")
+                if ending == "cancel":
+                    raise asyncio.CancelledError()
+        finally:
+            settled.append(True)
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    events = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+    assert await anext(events) == "admitted"
+    store.aclose.assert_not_awaited()
+    if ending == "close":
+        await cast(AsyncGenerator[Any, None], events).aclose()
+    else:
+        expected = {
+            "success": StopAsyncIteration,
+            "failure": RuntimeError,
+            "cancel": asyncio.CancelledError,
+        }[ending]
+        with pytest.raises(expected):
+            await anext(events)
+    assert settled == [True]
+    assert acquire.await_count == 1
+    store.aclose.assert_awaited_once()
+
+
+async def test_early_handler_close_settles_graph_before_closing_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    monkeypatch.setattr(
+        FoundryStateStore, "get_or_create", AsyncMock(return_value=store)
+    )
+    server = ResponsesHostServer(make_echo_graph())
+    settled = []
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "graph"):
+            try:
+                yield "messages", (AIMessage(content="ready"), {})
+                await asyncio.Event().wait()
+            finally:
+                store.aclose.assert_not_awaited()
+                settled.append(True)
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+    async with asyncio.timeout(5):
+        async for event in events:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+    await cast(AsyncGenerator[Any, None], events).aclose()
+    assert settled == [True]
+    store.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_requests_reuse_two_clients_and_restore_checkpoint_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, streaming: bool
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+    from langchain_azure_ai.agents.hosting._responses import conversation_chain_store
+
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        conversation_chain_store, "FoundryStateStore", FoundryStateStore
+    )
+    created: list[FoundryStateStore] = []
+    closed: list[FoundryStateStore] = []
+    get_or_create = FoundryStateStore.get_or_create
+    aclose = FoundryStateStore.aclose
+
+    async def acquire(*args: Any, **kwargs: Any) -> FoundryStateStore:
+        store = await get_or_create(*args, **kwargs)
+        created.append(store)
+        return store
+
+    async def close(store: FoundryStateStore) -> None:
+        await aclose(store)
+        closed.append(store)
+
+    async def reply(state: MessagesState) -> dict[str, Any]:
+        assert all(store not in closed for store in created[-2:])
+        return {"messages": [AIMessage(content=f"messages={len(state['messages'])}")]}
+
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    monkeypatch.setattr(FoundryStateStore, "aclose", close)
+    builder = StateGraph(MessagesState)
+    builder.add_node("reply", reply)
+    builder.add_edge(START, "reply")
+    builder.add_edge("reply", END)
+    graph = builder.compile(checkpointer=FoundryCheckpointSaver(credential=AsyncMock()))
+    server = ResponsesHostServer(graph)
+    with _client(server) as client:
+        for turn in (1, 2):
+            response = client.post(
+                "/responses",
+                json={"input": "hello", "conversation": "reuse", "stream": streaming},
+            )
+            assert response.status_code == 200, response.text
+            if streaming:
+                payload = next(
+                    event["response"]
+                    for name, event in _parse_sse(response.text)
+                    if name == "response.completed"
+                )
+            else:
+                payload = response.json()
+            assert payload["status"] == "completed", payload
+            assert f"messages={2 * turn - 1}" in str(payload["output"])
+            assert len(created) == len(closed) == 2 * turn
+            assert len({id(store) for store in created}) == 2 * turn
+            assert len({store.name for store in created}) == 2
+
+
 def test_constructor_registers_responses_features() -> None:
     with patch(
         "langchain_azure_ai.agents.hosting._responses_host."

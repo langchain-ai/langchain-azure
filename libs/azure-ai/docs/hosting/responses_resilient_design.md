@@ -73,6 +73,21 @@ checkpointer. Without the conversation checkpoint reference, the checkpointer
 may contain dangling work that advanced beyond the last committed Responses
 boundary, and a later turn would not know which checkpoint is authoritative.
 
+### State Store client lifetime
+
+Each Responses handler owns a private `StateStoreClientFactory`. The Foundry
+checkpoint saver and conversation-chain store borrow clients from it, from config
+resolution through the final chain write. Each consumer, store name and platform
+user gets a separate client; hosted clients share a handler-owned connection pool.
+Every operation still refreshes store metadata and applies the existing isolation
+and TTL checks. No checkpoint values or descriptors are cached.
+
+The handler closes the graph and waits for active storage operations before
+closing clients and the connection pool, including on cancellation. Standalone
+operations and caller-supplied transports, pipelines or sessions keep their
+existing client lifetime. Local file storage does not allocate an HTTP session.
+Recovery starts a new factory; reuse does not cross handler invocations.
+
 ### Assumptions
 
 The recovery behavior depends on these assumptions to work properly:
