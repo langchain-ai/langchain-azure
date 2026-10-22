@@ -82,9 +82,14 @@ user gets a separate client; hosted clients share a handler-owned connection poo
 Every operation still refreshes store metadata and applies the existing isolation
 and TTL checks. No checkpoint values or descriptors are cached.
 
-The handler closes the graph and waits for active storage operations before
-closing clients and the connection pool, including on cancellation. Standalone
-operations and caller-supplied transports, pipelines or sessions keep their
+The handler closes the graph and waits up to five seconds for active storage
+operations. On timeout it cancels the borrowers and allows five seconds for them
+to release their clients. It then closes clients and the connection pool in LIFO
+order, allowing five seconds per resource. Timeouts are logged; a resource close
+timeout raises `TimeoutError` unless the handler is already being cancelled.
+Cancellation retains the original exception, and cleanup failures are logged.
+These limits apply only after handler exit; they do not limit graph runtime.
+Standalone operations and caller-supplied transports, pipelines or sessions keep their
 existing client lifetime. Local file storage does not allocate an HTTP session.
 Recovery starts a new factory; reuse does not cross handler invocations.
 Borrowing from another event loop raises `RuntimeError` before accessing clients.

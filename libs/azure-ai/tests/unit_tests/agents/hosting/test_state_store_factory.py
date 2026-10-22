@@ -18,12 +18,14 @@ from azure.ai.agentserver.core.storage import (
     FoundryStateStore,
     FoundryStorageNotFoundError,
 )
+from azure.core.pipeline.transport import AioHttpTransport
 from langchain_core.runnables import RunnableConfig
 
 from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
 from langchain_azure_ai.agents.hosting._storage import (
     get_state_store,
     state_store_client_scope,
+    state_store_factory,
 )
 
 
@@ -407,3 +409,233 @@ async def test_parallel_stores_share_one_session(clients: list[Any]) -> None:
         assert len({id(session) for session in sessions}) == 1
         assert not sessions[0].closed
     assert sessions[0].closed
+
+
+async def test_transport_receives_only_connection_options(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any]
+) -> None:
+    transport_options = []
+
+    def transport(**kwargs: Any) -> AioHttpTransport:
+        transport_options.append(kwargs)
+        return AioHttpTransport(**kwargs)
+
+    monkeypatch.setattr(state_store_factory, "AioHttpTransport", transport)
+    connection_options = {
+        "connection_timeout": 12,
+        "read_timeout": 34,
+        "connection_verify": "test-ca.pem",
+        "connection_cert": "test-client.pem",
+        "connection_data_block_size": 8192,
+    }
+    async with state_store_client_scope():
+        async with get_state_store(
+            object(),
+            FoundryStateStore,
+            "store",
+            user_isolation=True,
+            item_ttl_seconds=600,
+            description="test",
+            tags={"test": "yes"},
+            user_id="user",
+            api_version="v1",
+            get_server_version=lambda: "test",
+            retry_total=3,
+            **connection_options,
+        ):
+            pass
+    options = transport_options[0]
+    assert options.pop("session_owner") is False
+    assert options.pop("session").closed
+    assert options == connection_options
+    assert clients[0].options["retry_total"] == 3
+    assert clients[0].options["user_isolation"] is True
+
+
+async def test_cleanup_cancels_stuck_borrower_before_closing(
+    monkeypatch: pytest.MonkeyPatch,
+    clients: list[Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    started, settled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def borrower() -> None:
+        try:
+            async with get_state_store(object(), FoundryStateStore, "store"):
+                started.set()
+                await release.wait()
+        finally:
+            clients[0].aclose.assert_not_awaited()
+            settled.set()
+
+    async def handler() -> None:
+        async with state_store_client_scope():
+            children.append(asyncio.create_task(borrower()))
+            await started.wait()
+
+    children: list[asyncio.Task[None]] = []
+    owner = asyncio.create_task(handler())
+    try:
+        done, _ = await asyncio.wait({owner}, timeout=1)
+        assert owner in done, "Scope cleanup must not wait forever"
+        await owner
+        assert settled.is_set()
+        assert children[0].cancelled()
+        clients[0].aclose.assert_awaited_once()
+        assert clients[0].options["transport"].session.closed
+        assert "timed out" in caplog.text
+    finally:
+        release.set()
+        await asyncio.gather(owner, *children, return_exceptions=True)
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_cleanup_preserves_original_cancellation(
+    clients: list[Any], close_fails: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    closing, release = asyncio.Event(), asyncio.Event()
+    cancellations = []
+
+    async def close() -> None:
+        closing.set()
+        await release.wait()
+        if close_fails:
+            raise RuntimeError("close failed")
+
+    async def handler() -> None:
+        async with state_store_client_scope():
+            async with get_state_store(object(), FoundryStateStore, "store"):
+                pass
+            clients[0].aclose.side_effect = close
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as exc:
+                cancellations.append(exc)
+                raise
+
+    owner = asyncio.create_task(handler())
+    while not clients:
+        await asyncio.sleep(0)
+    owner.cancel("original cancellation")
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        owner.cancel("second cancellation")
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await owner
+    assert raised.value is cancellations[0]
+    assert raised.value.args == ("original cancellation",)
+    assert owner.cancelled()
+    assert clients[0].options["transport"].session.closed
+    if close_fails:
+        assert "close failed" in caplog.text
+
+
+@pytest.mark.parametrize("ignore_cancellation", [False, True])
+async def test_cleanup_bounds_hanging_client_close(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], ignore_cancellation: bool
+) -> None:
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def close() -> None:
+        closing.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            if not ignore_cancellation:
+                raise
+            await release.wait()
+
+    async def handler() -> None:
+        async with state_store_client_scope():
+            async with get_state_store(object(), FoundryStateStore, "store"):
+                pass
+            clients[0].aclose.side_effect = close
+
+    owner = asyncio.create_task(handler())
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        done, _ = await asyncio.wait({owner}, timeout=1)
+        assert owner in done, "Closing a client must not wait forever"
+        with pytest.raises(TimeoutError):
+            await owner
+        assert clients[0].options["transport"].session.closed
+    finally:
+        release.set()
+        await asyncio.gather(owner, return_exceptions=True)
+
+
+async def test_cleanup_preserves_asyncio_timeout(clients: list[Any]) -> None:
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def close() -> None:
+        closing.set()
+        await release.wait()
+
+    async def unblock() -> None:
+        await closing.wait()
+        await asyncio.sleep(0.02)
+        release.set()
+
+    async def handler() -> None:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                async with state_store_client_scope():
+                    async with get_state_store(object(), FoundryStateStore, "store"):
+                        pass
+                    clients[0].aclose.side_effect = close
+                    await asyncio.Event().wait()
+        task = asyncio.current_task()
+        assert task is not None and task.cancelling() == 0
+
+    await asyncio.gather(handler(), unblock())
+    assert clients[0].options["transport"].session.closed
+
+
+async def test_late_acquisition_after_cleanup_closes_client_without_lending(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any]
+) -> None:
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    started, release = asyncio.Event(), asyncio.Event()
+    acquire = FoundryStateStore.get_or_create
+    sessions = []
+
+    async def slow_acquire(*args: Any, **options: Any) -> Any:
+        sessions.append(options["transport"].session)
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        return await acquire(*args, **options)
+
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", slow_acquire)
+
+    async def borrower() -> None:
+        async with get_state_store(object(), FoundryStateStore, "store"):
+            pytest.fail("Closed factory must not lend a late client")
+
+    async def handler() -> None:
+        async with state_store_client_scope():
+            children.append(asyncio.create_task(borrower()))
+            await started.wait()
+
+    children: list[asyncio.Task[None]] = []
+    owner = asyncio.create_task(handler())
+    try:
+        done, _ = await asyncio.wait({owner}, timeout=1)
+        assert owner in done
+        await owner
+        assert sessions[0].closed
+        release.set()
+        with pytest.raises(RuntimeError, match="already ended"):
+            await asyncio.wait_for(children[0], 1)
+        assert len(clients) == 1
+        clients[0].aclose.assert_awaited_once()
+    finally:
+        release.set()
+        await asyncio.gather(owner, *children, return_exceptions=True)
