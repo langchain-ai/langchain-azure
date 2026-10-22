@@ -31,7 +31,7 @@ if __name__ == "__main__":
                 ".github/workflows",
                 ".github/tools",
                 ".github/actions",
-                ".github/scripts/check_diff.py",
+                ".github/scripts",
             )
         ):
             # add all LANGCHAIN_DIRS for infra changes

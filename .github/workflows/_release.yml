@@ -194,25 +194,13 @@ jobs:
           fi
         working-directory: ${{ runner.temp }}/release-tests
 
-      - name: Get minimum versions
-        working-directory: ${{ inputs.working-directory }}
-        id: min-version
-        shell: bash
-        run: |
-          uv pip install packaging
-          min_versions="$(uv run --no-project python $GITHUB_WORKSPACE/.github/scripts/get_min_versions.py pyproject.toml)"
-          echo "min-versions=$min_versions" >> "$GITHUB_OUTPUT"
-          echo "min-versions=$min_versions"
+      - name: Run tests with minimum direct dependency versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/test_direct_dependency_versions.sh" lowest-direct
+        working-directory: ${{ runner.temp }}/release-tests
 
-      - name: Run unit tests with minimum dependency versions
-        if: ${{ steps.min-version.outputs.min-versions != '' }}
-        env:
-          MIN_VERSIONS: ${{ steps.min-version.outputs.min-versions }}
-          UV_NO_SYNC: "1"
-        run: |
-          uv pip install $MIN_VERSIONS
-          make tests
-        working-directory: ${{ inputs.working-directory }}
+      - name: Run tests with maximum direct dependency versions
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/test_direct_dependency_versions.sh" highest
+        working-directory: ${{ runner.temp }}/release-tests
 
   publish:
     needs:
