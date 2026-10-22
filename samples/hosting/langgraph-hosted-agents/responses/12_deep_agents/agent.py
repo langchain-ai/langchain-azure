@@ -18,6 +18,7 @@ def build_agent(
     model: BaseChatModel,
     checkpointer: BaseCheckpointSaver,
     tools: list[BaseTool],
+    report_export_tool: BaseTool,
 ) -> CompiledStateGraph:
     """Build a research coordinator with a focused research subagent.
 
@@ -25,6 +26,7 @@ def build_agent(
         model: A LangChain chat model supporting tool calls.
         checkpointer: Store for conversation state, todos, and virtual files.
         tools: The web search and research-progress tools shared with researchers.
+        report_export_tool: Publish the coordinator's saved report to Blob Storage.
 
     Returns:
         A native Deep Agents graph supporting invocation and streaming.
@@ -39,7 +41,7 @@ def build_agent(
     }
     return create_deep_agent(
         model=model,
-        tools=tools,
+        tools=[*tools, report_export_tool],
         system_prompt=WORKFLOW_INSTRUCTIONS,
         subagents=[researcher],
         middleware=[TodoListMiddleware()],

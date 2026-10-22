@@ -10,7 +10,6 @@ from pathlib import Path
 
 from agent import build_agent
 from azure.ai.projects import AIProjectClient
-from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain_azure_ai.agents.hosting import (
@@ -20,39 +19,22 @@ from langchain_azure_ai.agents.hosting import (
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_openai import ChatOpenAI
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from report_export import create_report_export_tool
 from research_agent.tools import load_tools
-
-
-def _configure_tracing(resources: AsyncExitStack, credential: TokenCredential) -> None:
-    os.environ.setdefault("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false")
-    os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
-    if os.environ.get("OTEL_SDK_DISABLED", "").lower() == "true":
-        return
-    if not isinstance(trace.get_tracer_provider(), trace.ProxyTracerProvider):
-        enable_auto_tracing(auto_configure_azure_monitor=False)
-    elif os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT"
-    ):
-        provider = TracerProvider()
-        resources.callback(provider.shutdown)
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-        trace.set_tracer_provider(provider)
-        enable_auto_tracing()
-    else:
-        enable_auto_tracing(credential=credential, auto_configure_azure_monitor=True)
 
 
 async def main() -> None:
     """Keep application resources alive until the Responses host shuts down."""
     load_dotenv(Path(__file__).with_name(".env"))
     logging.basicConfig(level=logging.INFO)
+    os.environ.setdefault("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false")
+    os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
     async with AsyncExitStack() as resources:
         credential = resources.enter_context(DefaultAzureCredential())
-        _configure_tracing(resources, credential)
+        if os.environ.get("OTEL_SDK_DISABLED", "").lower() != "true":
+            enable_auto_tracing(
+                credential=credential, auto_configure_azure_monitor=True
+            )
         with (
             AIProjectClient(
                 endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"], credential=credential
@@ -75,7 +57,9 @@ async def main() -> None:
         )
         tools = await load_tools(credential)
         checkpointer = await resources.enter_async_context(FoundryCheckpointSaver())
-        graph = build_agent(model, checkpointer, tools)
+        graph = build_agent(
+            model, checkpointer, tools, create_report_export_tool(credential)
+        )
         await ResponsesHostServer(graph).run_async(
             port=int(os.environ.get("PORT", "8088"))
         )

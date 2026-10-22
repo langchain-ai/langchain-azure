@@ -1207,7 +1207,12 @@ def check_07_toolbox_streaming() -> None:
 
 # ---------------------------------------------------------------------------
 def _deep_agents_response(
-    client: Any, *, stream: bool, session_ids: set[str] | None = None, **request: Any
+    client: Any,
+    *,
+    stream: bool,
+    session_ids: set[str] | None = None,
+    blob_names: set[str] | None = None,
+    **request: Any,
 ) -> dict[str, Any]:
     def remember_session(value: Any) -> None:
         if session_ids is not None and isinstance(value, str) and value:
@@ -1237,6 +1242,9 @@ def _deep_agents_response(
             record_response(raw.http_response)
             exchange.response_body = raw.http_response.text
             response = raw.parse().model_dump()
+            remember_session(response.get("agent_session_id"))
+            if blob_names is not None:
+                _deep_agents_exports(response, blob_names)
         else:
             with client.responses.with_streaming_response.create(
                 stream=True,
@@ -1249,6 +1257,20 @@ def _deep_agents_response(
                         lines.append(line)
                 finally:
                     exchange.response_body = "\n".join(lines)
+                    if blob_names is not None:
+                        partial_output = []
+                        for _, data in _iter_sse_events(exchange.response_body):
+                            try:
+                                event = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            snapshot = event.get("response")
+                            if isinstance(snapshot, dict):
+                                remember_session(snapshot.get("agent_session_id"))
+                                _deep_agents_exports(snapshot, blob_names)
+                            if event.get("type") == "response.output_item.done":
+                                partial_output.append(event["item"])
+                        _deep_agents_exports({"output": partial_output}, blob_names)
             event_types = []
             stream_errors = []
             for event_name, data in _iter_sse_events(exchange.response_body):
@@ -1264,6 +1286,8 @@ def _deep_agents_response(
                 snapshot = event.get("response")
                 if isinstance(snapshot, dict):
                     remember_session(snapshot.get("agent_session_id"))
+                    if blob_names is not None:
+                        _deep_agents_exports(snapshot, blob_names)
                 if event_type in {"error", "response.failed", "response.incomplete"}:
                     stream_errors.append(event)
                 if event_type in {
@@ -1302,9 +1326,19 @@ def _deep_agents_response(
 
 
 def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
+    last_edit = max(
+        (
+            index
+            for index, item in enumerate(response.get("output", []))
+            if item.get("type") == "function_call"
+            and item.get("name") in {"write_file", "edit_file"}
+            and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
+        ),
+        default=-1,
+    )
     read_ids = {
         item["call_id"]
-        for item in response.get("output", [])
+        for item in response.get("output", [])[last_edit + 1 :]
         if item.get("type") == "function_call"
         and item.get("name") == "read_file"
         and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
@@ -1342,6 +1376,139 @@ def _deep_agents_report_matches(response: dict[str, Any], report: str) -> bool:
     return len(covered) == len(expected)
 
 
+def _deep_agents_answer_matches(
+    response: dict[str, Any], report: str, download_url: str | None = None
+) -> bool:
+    messages = [
+        item for item in response.get("output", []) if item.get("type") == "message"
+    ]
+    if not messages:
+        return False
+    answer = "".join(part.get("text", "") for part in messages[-1].get("content", []))
+    expected = report.replace("\r\n", "\n").rstrip("\n")
+    if download_url is not None:
+        expected += f"\n\nDownload: {download_url}"
+    return answer.replace("\r\n", "\n").rstrip("\n") == expected
+
+
+def _deep_agents_exports(
+    response: dict[str, Any], blob_names: set[str]
+) -> list[dict[str, Any]]:
+    from urllib.parse import urlsplit
+
+    call_ids = {
+        item["call_id"]
+        for item in response.get("output", [])
+        if item.get("type") == "function_call" and item.get("name") == "publish_report"
+    }
+    exports = []
+    for item in response.get("output", []):
+        if (
+            item.get("type") != "function_call_output"
+            or item.get("call_id") not in call_ids
+        ):
+            continue
+        try:
+            exported = json.loads(item["output"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(exported, dict) and "download_url" in exported:
+            exports.append(exported)
+    if not exports:
+        return []
+    account = urlsplit(os.environ["REPORT_STORAGE_ACCOUNT_URL"])
+    container = os.environ["REPORT_STORAGE_CONTAINER"]
+    for exported in exports:
+        url = urlsplit(exported["download_url"])
+        blob_name = url.path.removeprefix(f"/{container}/")
+        _assert(
+            url.scheme == "https"
+            and url.netloc == account.netloc
+            and url.path.startswith(f"/{container}/")
+            and re.fullmatch(r"[0-9a-f]{32}/final_report\.md", blob_name) is not None,
+            "export targets a new blob in the configured account and container",
+        )
+        blob_names.add(blob_name)
+    return exports
+
+
+def _deep_agents_check_export(
+    response: dict[str, Any], report: str, blob_names: set[str]
+) -> str:
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+
+    exports = _deep_agents_exports(response, blob_names)
+    _assert(bool(exports), "publish_report returned a Blob export")
+    exported = exports[-1]
+    download_url = exported["download_url"]
+    permissions = parse_qs(urlsplit(download_url).query)
+    _assert(
+        exported.get("file_path") == "/final_report.md"
+        and exported.get("sha256")
+        == hashlib.sha256(report.encode("utf-8")).hexdigest(),
+        "export digest matches the complete saved report",
+    )
+    _assert(
+        permissions.get("sp") == ["r"]
+        and permissions.get("spr") == ["https"]
+        and permissions.get("sr") == ["b"],
+        "download SAS is read-only, HTTPS-only, and scoped to one blob",
+    )
+    expires_at = datetime.fromisoformat(exported["expires_at"])
+    _assert(
+        0 < (expires_at - datetime.now(timezone.utc)).total_seconds() <= 3600,
+        "download link expires within one hour",
+    )
+    _assert(
+        _deep_agents_answer_matches(response, report, download_url),
+        "final assistant answer contains the complete report and exact download URL",
+    )
+    downloaded = httpx.get(download_url, timeout=30)
+    downloaded.raise_for_status()
+    _assert(
+        downloaded.content == report.encode("utf-8"),
+        "downloaded Blob bytes exactly match the saved and delivered report",
+    )
+    return download_url
+
+
+def _deep_agents_revised_report(response: dict[str, Any], report: str) -> str:
+    outputs = {
+        item["call_id"]: str(item.get("output", ""))
+        for item in response.get("output", [])
+        if item.get("type") == "function_call_output"
+    }
+    revised = report
+    for item in response.get("output", []):
+        if item.get("type") != "function_call" or item.get("name") != "edit_file":
+            continue
+        arguments = json.loads(item["arguments"])
+        if arguments.get("file_path") != "/final_report.md":
+            continue
+        result = outputs.get(item["call_id"], "")
+        if not result or result.lower().startswith("error"):
+            continue
+        old = arguments["old_string"]
+        _assert(bool(old) and old in revised, "revision edits existing saved content")
+        revised = revised.replace(
+            old, arguments["new_string"], -1 if arguments.get("replace_all") else 1
+        )
+    _assert(revised != report, "coordinator edited the existing report")
+    return revised
+
+
+def _deep_agents_delete_exports(storage: Any, container: str, names: set[str]) -> None:
+    errors = []
+    for name in sorted(names):
+        try:
+            storage.get_blob_client(container, name).delete_blob()
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    if errors:
+        raise RuntimeError(f"Could not delete Deep Agents test exports: {errors}")
+
+
 def _deep_agents_stop_sessions(
     project: Any, agent_name: str, session_ids: set[str]
 ) -> None:
@@ -1357,15 +1524,30 @@ def _deep_agents_stop_sessions(
 
 def _check_deep_agents(*, stream: bool) -> None:
     requires_foundry_endpoint()
+    if not all(
+        os.environ.get(name)
+        for name in ("REPORT_STORAGE_ACCOUNT_URL", "REPORT_STORAGE_CONTAINER")
+    ):
+        raise SkipCheck(
+            "Configure REPORT_STORAGE_ACCOUNT_URL and REPORT_STORAGE_CONTAINER."
+        )
     from azure.ai.projects import AIProjectClient
     from azure.identity import DefaultAzureCredential
     from openai import OpenAI
 
+    try:
+        from azure.storage.blob import BlobServiceClient
+    except ImportError as exc:
+        raise SkipCheck(
+            "Install responses/12_deep_agents/requirements.txt first."
+        ) from exc
+
     with ExitStack() as resources:
         agent_name = os.environ.get("DEEP_AGENTS_NAME")
+        client: Any
         session_ids: set[str] = set()
+        credential = resources.enter_context(DefaultAzureCredential())
         if agent_name:
-            credential = resources.enter_context(DefaultAzureCredential())
             project = resources.enter_context(
                 AIProjectClient(
                     endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
@@ -1412,12 +1594,23 @@ def _check_deep_agents(*, stream: bool) -> None:
                     max_retries=0,
                 )
             )
+        storage = resources.enter_context(
+            BlobServiceClient(os.environ["REPORT_STORAGE_ACCOUNT_URL"], credential)
+        )
+        blob_names: set[str] = set()
+        resources.callback(
+            _deep_agents_delete_exports,
+            storage,
+            os.environ["REPORT_STORAGE_CONTAINER"],
+            blob_names,
+        )
         marker = f"research-{uuid.uuid4().hex}"
         _step("Research with planning, delegation, and a saved report")
         response = _deep_agents_response(
             client,
             stream=stream,
             session_ids=session_ids,
+            blob_names=blob_names,
             input=(
                 "Research how LangGraph checkpoints support multi-turn agents. "
                 "Plan with write_todos, save /research_request.md, delegate to one "
@@ -1426,7 +1619,8 @@ def _check_deep_agents(*, stream: bool) -> None:
                 "The coordinator must write /final_report.md itself, with a "
                 "short cited report based on those findings. Read back the "
                 "entire report, reading all remaining pages if needed, before "
-                "returning it. Limit this to one search. "
+                "publishing it with publish_report and returning its full contents "
+                "followed by the exact Download paragraph. Limit this to one search. "
                 f"Include this exact label in the report: {marker}"
             ),
         )
@@ -1473,10 +1667,6 @@ def _check_deep_agents(*, stream: bool) -> None:
             "delegated researcher returned findings with source URLs",
         )
         _assert(
-            marker in _response_text(response), "final response contains report label"
-        )
-        _assert("https://" in _response_text(response), "report contains source URLs")
-        _assert(
             marker in report and "https://" in report,
             "saved report contains its label and source URLs",
         )
@@ -1484,6 +1674,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             _deep_agents_report_matches(response, report),
             "read_file returned the complete report written during research",
         )
+        original_url = _deep_agents_check_export(response, report, blob_names)
 
         session_options: dict[str, Any] = {}
         if agent_name:
@@ -1520,6 +1711,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             client,
             stream=stream,
             session_ids=session_ids,
+            blob_names=blob_names,
             previous_response_id=response["id"],
             input=(
                 "Use read_file to return the entire existing /final_report.md. "
@@ -1536,7 +1728,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             "read_file" in _tool_call_names(continued), "continuation read saved state"
         )
         _assert(
-            not {"task", "web_search", "write_file", "edit_file"}
+            not {"task", "web_search", "write_file", "edit_file", "publish_report"}
             & set(_tool_call_names(continued)),
             "continuation did not research or rewrite the report",
         )
@@ -1545,7 +1737,94 @@ def _check_deep_agents(*, stream: bool) -> None:
             "continued read_file returned the complete saved report",
         )
         _assert(
-            marker in _response_text(continued), "report survived the response boundary"
+            _deep_agents_answer_matches(continued, report),
+            "continued assistant answer contains the complete saved report",
+        )
+
+        _step("Revise and re-export the saved report without repeating research")
+        revision_marker = f"revision-{uuid.uuid4().hex}"
+        revision_section = (
+            "## Recovery limitations\n\n"
+            "Checkpoints restore saved state, not arbitrary in-flight work.\n\n"
+            f"Validation label: {revision_marker}"
+        )
+        revised_response = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            previous_response_id=continued["id"],
+            input=(
+                "Add the following exact section to /final_report.md using "
+                "edit_file. Keep the entire original report, citations and URLs "
+                "unchanged; this revision needs no new research. The validation "
+                "label is only an identifier, not a research finding. "
+                "Read the entire updated file after editing, publish_report again, "
+                "then return its full contents followed by the new Download paragraph."
+                f"\n\n{revision_section}"
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                revised_response.get("agent_session_id") == session_id,
+                "revision stayed in the original test session",
+            )
+        revised = _deep_agents_revised_report(revised_response, report)
+        revised_lines = iter(revised.splitlines())
+        _assert(
+            all(
+                any(original == line for line in revised_lines)
+                for original in report.splitlines()
+            )
+            and revision_section in revised,
+            "revision preserves the original report and adds the requested section",
+        )
+        _assert(
+            not {"task", "web_search", "write_file"}
+            & set(_tool_call_names(revised_response)),
+            "revision did not repeat research or create a replacement file",
+        )
+        _assert(
+            _deep_agents_report_matches(revised_response, revised),
+            "read_file returned the complete revised saved report",
+        )
+        revised_url = _deep_agents_check_export(revised_response, revised, blob_names)
+        _assert(revised_url != original_url, "revision has a new download snapshot")
+        original_download = httpx.get(original_url, timeout=30)
+        original_download.raise_for_status()
+        _assert(
+            original_download.content == report.encode("utf-8"),
+            "the original download still contains the original report",
+        )
+
+        _step("Read the revised report using the latest response ID")
+        reread = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            previous_response_id=revised_response["id"],
+            input=(
+                "Read all of /final_report.md and return its full contents verbatim. "
+                "Do not research, edit or publish another copy."
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                reread.get("agent_session_id") == session_id,
+                "revised read stayed in the original test session",
+            )
+        _assert(
+            _deep_agents_report_matches(reread, revised)
+            and _deep_agents_answer_matches(reread, revised),
+            "read-back and assistant answer both match the entire revised report",
+        )
+        _assert(
+            not {"task", "web_search", "write_file", "edit_file", "publish_report"}
+            & set(_tool_call_names(reread)),
+            "revised read did not research, edit or export",
         )
 
         _step("Check a new conversation cannot read that report")
@@ -1553,6 +1832,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             client,
             stream=stream,
             session_ids=session_ids,
+            blob_names=blob_names,
             input=(
                 "Use read_file on /final_report.md. If it is missing, report that; "
                 "do not create or research anything."
@@ -1576,25 +1856,32 @@ def _check_deep_agents(*, stream: bool) -> None:
             "the report does not exist in the new conversation",
         )
         _assert(
-            marker not in json.dumps(isolated), "new conversation has no prior report"
+            marker not in json.dumps(isolated)
+            and revision_marker not in json.dumps(isolated),
+            "new conversation has neither version of the prior report",
         )
         _assert(
-            not {"task", "web_search", "write_file", "edit_file", "delete"}
+            not {
+                "task",
+                "web_search",
+                "write_file",
+                "edit_file",
+                "publish_report",
+                "delete",
+            }
             & set(_tool_call_names(isolated)),
             "isolated conversation did not research or modify files",
         )
 
 
 def check_12_deep_agents() -> None:
-    """responses/12_deep_agents: research, virtual files, continuation, isolation."""
+    """responses/12_deep_agents: research, revision, Blob downloads, isolation."""
     _check_deep_agents(stream=False)
 
 
 def check_12_deep_agents_streaming() -> None:
     """responses/12_deep_agents: same research workflow and state over SSE."""
     _check_deep_agents(stream=True)
-
-
 # Registry
 # ---------------------------------------------------------------------------
 
