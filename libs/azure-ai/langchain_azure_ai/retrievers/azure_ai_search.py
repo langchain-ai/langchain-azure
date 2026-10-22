@@ -202,11 +202,15 @@ class AzureAISearchRetriever(BaseRetriever):
         if not self.aiosession:
             async with aiohttp.ClientSession() as session:
                 async with session.get(search_url, headers=self._headers) as response:
+                    if response.status != 200:
+                        raise Exception(f"Error in search request: {response}")
                     response_json = await response.json()
         else:
             async with self.aiosession.get(
                 search_url, headers=self._headers
             ) as response:
+                if response.status != 200:
+                    raise Exception(f"Error in search request: {response}")
                 response_json = await response.json()
 
         return response_json["value"]
