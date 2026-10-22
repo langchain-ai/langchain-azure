@@ -9,6 +9,7 @@ import asyncio
 import errno
 import json
 import logging
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -32,6 +33,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
+from starlette.types import Message
 
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
@@ -210,6 +212,115 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
             assert len(created) == len(closed) == 2 * turn
             assert len({id(store) for store in created}) == 2 * turn
             assert len({store.name for store in created}) == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_background_handler_keeps_clients_after_http_request_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    started, closed = threading.Event(), threading.Event()
+    release = asyncio.Event()
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    resumed = []
+
+    async def close() -> None:
+        closed.set()
+
+    store.aclose.side_effect = close
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "background") as first:
+            started.set()
+        # No active borrower while the HTTP request finishes. The handler owns it.
+        await release.wait()
+        async with get_state_store(server, FoundryStateStore, "background") as reused:
+            assert reused is first
+            store.aclose.assert_not_awaited()
+            resumed.append(True)
+        yield "messages", (AIMessage(content="completed"), {})
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    with _client(server) as client:
+        try:
+            if streaming:
+
+                async def disconnect_stream() -> None:
+                    received = False
+                    sent: list[Message] = []
+
+                    async def receive() -> Message:
+                        nonlocal received
+                        if not received:
+                            received = True
+                            return {
+                                "type": "http.request",
+                                "body": json.dumps(
+                                    {
+                                        "input": "hello",
+                                        "background": True,
+                                        "stream": True,
+                                    }
+                                ).encode(),
+                                "more_body": False,
+                            }
+                        assert await asyncio.to_thread(started.wait, 5)
+                        return {"type": "http.disconnect"}
+
+                    async def send(message: Message) -> None:
+                        sent.append(message)
+
+                    await asyncio.wait_for(
+                        server.app(
+                            {
+                                "type": "http",
+                                "asgi": {"version": "3.0", "spec_version": "2.0"},
+                                "http_version": "1.1",
+                                "method": "POST",
+                                "scheme": "http",
+                                "path": "/responses",
+                                "raw_path": b"/responses",
+                                "query_string": b"",
+                                "root_path": "",
+                                "headers": [(b"content-type", b"application/json")],
+                                "client": ("127.0.0.1", 1234),
+                                "server": ("testserver", 80),
+                                "state": {},
+                            },
+                            receive,
+                            send,
+                        ),
+                        5,
+                    )
+                    assert sent[0]["status"] == 200
+
+                assert client.portal is not None
+                client.portal.call(disconnect_stream)
+            else:
+                response = client.post(
+                    "/responses",
+                    json={"input": "hello", "background": True, "stream": False},
+                )
+                assert response.status_code == 200, response.text
+                assert response.json()["status"] == "in_progress"
+            assert started.wait(5)
+            acquire.assert_awaited_once()
+            store.aclose.assert_not_awaited()
+            assert not resumed
+        finally:
+            assert client.portal is not None
+            client.portal.call(release.set)
+        assert closed.wait(5)
+    assert resumed == [True]
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
 
 
 def test_constructor_registers_responses_features() -> None:

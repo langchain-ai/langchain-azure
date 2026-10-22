@@ -188,6 +188,28 @@ async def test_scopes_never_share_clients(clients: list[Any]) -> None:
     assert all(c.options["transport"].session.closed for c in clients)
 
 
+async def test_factory_rejects_another_event_loop_before_borrowing(
+    clients: list[Any],
+) -> None:
+    owner = object()
+
+    async def borrow_from_another_loop() -> None:
+        async with get_state_store(owner, FoundryStateStore, "store"):
+            pass
+
+    async with state_store_client_scope():
+        async with get_state_store(owner, FoundryStateStore, "store") as first:
+            pass
+        with pytest.raises(RuntimeError, match="original event loop"):
+            await asyncio.to_thread(lambda: asyncio.run(borrow_from_another_loop()))
+        assert len(clients) == 1
+        clients[0].get.assert_not_awaited()
+        clients[0].aclose.assert_not_awaited()
+        async with get_state_store(owner, FoundryStateStore, "store") as reused:
+            assert reused is first
+    clients[0].aclose.assert_awaited_once()
+
+
 async def test_scoped_saver_revalidates_settings_before_item_access(
     clients: list[Any],
 ) -> None:

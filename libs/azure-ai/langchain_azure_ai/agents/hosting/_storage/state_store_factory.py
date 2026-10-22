@@ -31,9 +31,11 @@ class StateStoreClientFactory:
     A consumer instance supplies fixed credentials, endpoint and client options.
     Distinct consumers, store names and platform users never share a client.
     Only the connection pool is shared; descriptors are refreshed on every use.
+    All borrowers must run on the event loop that created the factory.
     """
 
     def __init__(self) -> None:
+        self.loop = asyncio.get_running_loop()
         self.stack = AsyncExitStack()
         self.clients: dict[tuple[object, str, str | None], FoundryStateStore] = {}
         self.locks: dict[tuple[object, str, str | None], asyncio.Lock] = {}
@@ -118,6 +120,10 @@ async def get_state_store(
 ) -> AsyncIterator[FoundryStateStore]:
     """Borrow a handler client or close an operation-owned standalone client."""
     factory = _current_factory.get()
+    if factory is not None and asyncio.get_running_loop() is not factory.loop:
+        raise RuntimeError(
+            "State Store client factory must use its original event loop"
+        )
     if factory is not None and factory.closing:
         raise RuntimeError("State Store client factory has already ended")
     # Custom pipelines/sessions retain their existing ownership and proxy settings.

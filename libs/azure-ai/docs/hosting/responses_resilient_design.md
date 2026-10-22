@@ -87,6 +87,7 @@ closing clients and the connection pool, including on cancellation. Standalone
 operations and caller-supplied transports, pipelines or sessions keep their
 existing client lifetime. Local file storage does not allocate an HTTP session.
 Recovery starts a new factory; reuse does not cross handler invocations.
+Borrowing from another event loop raises `RuntimeError` before accessing clients.
 
 ### Assumptions
 
