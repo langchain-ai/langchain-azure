@@ -26,14 +26,14 @@ dependencies = [
     "azure-core>=1.38.0",
     "azure-identity>=1.25",
     "azure-storage-blob[aio]>=12.26",
-    "langchain-core>=1.2.5",
+    "langchain-core>=1.2.5,<2.0",
 ]
 
 [project.optional-dependencies]
 # Azure Blob Storage filesystem backend for LangChain Deep Agents.
 deepagents = [
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
-    "deepagents>=0.7.1",
+    "deepagents>=0.7.1,<0.8",
     # Kept in lockstep with deepagents' own wcmatch floor.
     "wcmatch>=11.0",
 ]

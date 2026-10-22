@@ -541,7 +541,7 @@ requires-dist = [
     { name = "aioodbc", specifier = ">=0.5" },
     { name = "azure-core", specifier = ">=1.38.0" },
     { name = "azure-identity", specifier = ">=1.16" },
-    { name = "langchain-core", specifier = ">=1.0" },
+    { name = "langchain-core", specifier = ">=1.0,<2.0" },
     { name = "numpy", specifier = ">=1" },
     { name = "pyodbc", specifier = ">=5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },

@@ -27,7 +27,7 @@ classifiers = [
 dependencies = [
     "azure-core>=1.38.0",
     "azure-identity>=1.25",
-    "langchain-core>=1.2.5",
+    "langchain-core>=1.2.5,<2.0",
 ]
 
 # Extras are added alongside the code that needs them, one per integration.
@@ -38,14 +38,14 @@ dependencies = [
 dynamic-sessions = [
     "requests>=2.31",
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
-    "deepagents>=0.7.1",
+    "deepagents>=0.7.1,<0.8",
 ]
 # azure-containerapps-sandbox is a preview SDK that documents itself as subject
 # to breaking change without notice, and ACA sandboxes is an Early Access
 # service, so the ceiling is deliberately tight.
 sandboxes = [
     "azure-containerapps-sandbox>=0.1.0b4,<0.2",
-    "deepagents>=0.7.1",
+    "deepagents>=0.7.1,<0.8",
 ]
 
 [project.urls]
