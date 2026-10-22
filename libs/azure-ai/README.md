@@ -344,8 +344,8 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 - **1.2.12**:
 
   - We fixed `FoundryCheckpointSaver` to select the latest checkpoint and order checkpoint history by LangGraph checkpoint ID rather than storage insertion order, including `before` filtering and namespace isolation. [#1070](https://github.com/langchain-ai/langchain-azure/pull/1070) Thanks to [@tanvir-ux](https://github.com/tanvir-ux).
-  - We fixed `AzureAISearchRetriever` to report search request errors instead of an unrelated `KeyError` when asynchronous searches fail. [#1210](https://github.com/langchain-ai/langchain-azure/pull/1210) Thanks to [@pcbeingused333](https://github.com/pcbeingused333).
   - We fixed a `TypeError` when selecting similarity or hybrid search with `search_type` in `AzureSearch.asimilarity_search_with_score`. [#1211](https://github.com/langchain-ai/langchain-azure/pull/1211) Thanks to [@revanth-045](https://github.com/revanth-045).
+  - We fixed `AzureAISearchRetriever` to report search request errors instead of an unrelated `KeyError` when asynchronous searches fail. [#1210](https://github.com/langchain-ai/langchain-azure/pull/1210) Thanks to [@pcbeingused333](https://github.com/pcbeingused333).
   - We fixed the File Search example in the models notebook by importing `FileSearchTool` before binding it to the model. [#1208](https://github.com/langchain-ai/langchain-azure/pull/1208)
   - We updated the locked `certifi` dependency to `2026.10.19`. [#1218](https://github.com/langchain-ai/langchain-azure/pull/1218)
 
