@@ -1,0 +1,78 @@
+name: test-wheel
+
+on:
+  workflow_call:
+    inputs:
+      uv-version:
+        required: true
+        type: string
+      working-directory:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-wheel:
+    name: Wheel isolation tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python + uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ inputs.uv-version }}
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: "${{ inputs.working-directory }}/uv.lock"
+
+      - name: Build wheel
+        shell: bash
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/wheel-dist"
+          wheels=("$RUNNER_TEMP"/wheel-dist/*.whl)
+          [[ "${#wheels[@]}" -eq 1 && -f "${wheels[0]}" ]]
+          echo "RELEASE_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
+          echo "PKG_NAME=$(uv version | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+
+      - name: Install test dependencies and wheel
+        shell: bash
+        run: |
+          uv sync --frozen --all-extras --group test --group test_integration --no-install-project
+          uv pip install --no-deps --reinstall-package "$PKG_NAME" "$RELEASE_WHEEL"
+
+      - name: Prepare isolated tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-tests"
+          cp -R tests Makefile pyproject.toml uv.lock "$RUNNER_TEMP/release-tests/"
+          if [[ -d docs ]]; then
+            cp -R docs "$RUNNER_TEMP/release-tests/"
+          fi
+          echo "UV_PROJECT_ENVIRONMENT=$PWD/.venv" >> "$GITHUB_ENV"
+
+      - name: Verify installed package import
+        working-directory: ${{ runner.temp }}/release-tests
+        shell: bash
+        run: |
+          "$UV_PROJECT_ENVIRONMENT/bin/python" -I -c "import ${PKG_NAME//-/_}"
+
+      - name: Run isolated unit tests
+        working-directory: ${{ runner.temp }}/release-tests
+        shell: bash
+        env:
+          UV_NO_SYNC: "1"
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+        run: |
+          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
+            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
+              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
+          else
+            make tests
+          fi

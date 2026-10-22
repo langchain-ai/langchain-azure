@@ -81,9 +81,22 @@ jobs:
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 
+  test-wheel:
+    name: cd ${{ matrix.working-directory }}
+    needs: [build]
+    if: ${{ needs.build.outputs.dirs-to-test != '[]' }}
+    strategy:
+      matrix:
+        working-directory: ${{ fromJson(needs.build.outputs.dirs-to-test) }}
+    uses: ./.github/workflows/_test_wheel.yml
+    with:
+      uv-version: ${{ needs.build.outputs.uv-version }}
+      working-directory: ${{ matrix.working-directory }}
+    secrets: inherit
+
   ci_success:
     name: "CI Success"
-    needs: [build, lint, test, compile-integration-tests]
+    needs: [build, lint, test, test-wheel, compile-integration-tests]
     if: |
       always()
     runs-on: ubuntu-latest
