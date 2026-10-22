@@ -1,4 +1,3 @@
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -42,41 +41,3 @@ def _example_directories(config: pytest.Config) -> list[Path]:
 @pytest.fixture(scope="session")
 def docs_samples_dirs(pytestconfig: pytest.Config) -> list[Path]:
     return _example_directories(pytestconfig)
-
-
-def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    if "example_file" not in metafunc.fixturenames:
-        return
-
-    directories = _example_directories(metafunc.config)
-    result = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-            *(directory.relative_to(REPO_ROOT).as_posix() for directory in directories),
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    files = sorted(
-        {
-            REPO_ROOT / name
-            for name in result.stdout.split("\0")
-            if name
-            and Path(name).suffix in {".py", ".ipynb"}
-            and (REPO_ROOT / name).is_file()
-        }
-    )
-    metafunc.parametrize(
-        "example_file",
-        files,
-        ids=[file.relative_to(REPO_ROOT).as_posix() for file in files],
-    )
