@@ -39,9 +39,6 @@ installing this sample's [requirements.txt](requirements.txt) and configuring
 python main.py
 ```
 
-The requirements temporarily pin [LangChain Azure #1070](https://github.com/langchain-ai/langchain-azure/pull/1070)
-for checkpoint fixes; replace it with a containing published release when available.
-
 See the [shared tracing guide](../../README.md#tracing) for exporter setup. Both
 `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` and
 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` default to `false` here.
