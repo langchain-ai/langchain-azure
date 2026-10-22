@@ -36,6 +36,16 @@ uv pip install \
   --group test_integration \
   --requirements "$requirements_file"
 
+echo "Test environment ($resolution):"
+uv run --no-sync python - <<'PY'
+import sys
+from importlib.metadata import distributions
+
+print(f"Python: {sys.version}")
+for package in sorted(f"{dist.name}=={dist.version}" for dist in distributions()):
+    print(package)
+PY
+
 if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
   echo "Running unit and integration tests"
   uv run --no-sync pytest --pyargs tests langchain_azure_postgresql
