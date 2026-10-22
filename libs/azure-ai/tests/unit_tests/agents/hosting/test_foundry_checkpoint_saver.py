@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +16,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from typing_extensions import TypedDict
 
 from langchain_azure_ai._user_agent import get_user_agent
@@ -25,6 +28,17 @@ from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
 
 class _GraphState(TypedDict):
     value: int
+
+
+@pytest.fixture
+def state_store() -> Iterator[_FakeStateStore]:
+    store = _FakeStateStore()
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "FoundryStateStore.get_or_create",
+        new=AsyncMock(return_value=store),
+    ):
+        yield store
 
 
 def _credential() -> AsyncTokenCredential:
@@ -300,7 +314,7 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None:
+async def test_list_before_uses_checkpoint_id_order_not_creation_order() -> None:
     store = _FakeStateStore()
 
     with patch(
@@ -311,19 +325,19 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
         saver = FoundryCheckpointSaver(_credential())
         older_config = await saver.aput(
             _config(),
-            _checkpoint("z-older", "older"),
+            _checkpoint("checkpoint-1", "older"),
             cast(CheckpointMetadata, {"source": "input", "step": -1}),
             {},
         )
         before_config = await saver.aput(
             older_config,
-            _checkpoint("a-before", "before"),
+            _checkpoint("checkpoint-3", "before"),
             cast(CheckpointMetadata, {"source": "loop", "step": 0}),
             {},
         )
-        await saver.aput(
+        middle_config = await saver.aput(
             before_config,
-            _checkpoint("m-newer", "newer"),
+            _checkpoint("checkpoint-2", "middle"),
             cast(CheckpointMetadata, {"source": "loop", "step": 1}),
             {},
         )
@@ -333,16 +347,316 @@ async def test_list_before_uses_creation_order_not_checkpoint_id_order() -> None
             async for item in saver.alist(
                 _config(),
                 before=before_config,
-                filter={"source": "input"},
             )
         ]
 
-    assert [item.config for item in checkpoints] == [older_config]
-    assert any(
-        call["tags"]["kind"] == "checkpoint"
-        and call["after"] == store.items["/a-before"].id
-        for call in store.list_keys_calls
+    assert [item.config for item in checkpoints] == [middle_config, older_config]
+
+
+@pytest.mark.asyncio
+async def test_latest_and_history_ignore_storage_creation_order(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    configurations = {}
+    for checkpoint_id in ("checkpoint-3", "checkpoint-1", "checkpoint-2"):
+        configurations[checkpoint_id] = await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+
+    latest = await saver.aget_tuple(_config())
+    assert latest is not None
+    assert latest.config == configurations["checkpoint-3"]
+    history = [item async for item in saver.alist(_config())]
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-3",
+        "checkpoint-2",
+        "checkpoint-1",
+    ]
+    assert state_store.closed
+
+
+@pytest.mark.asyncio
+async def test_listing_orders_across_pages_before_applying_limit(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    for checkpoint_id in (
+        "checkpoint-5",
+        "checkpoint-2",
+        "checkpoint-4",
+        "checkpoint-1",
+        "checkpoint-3",
+    ):
+        await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver._PAGE_SIZE", 2
+    ):
+        latest = await saver.aget_tuple(_config())
+        history = [item async for item in saver.alist(_config(), limit=2)]
+    assert latest is not None and latest.checkpoint["id"] == "checkpoint-5"
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-5",
+        "checkpoint-4",
+    ]
+    assert any(call["after"] is not None for call in state_store.list_keys_calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary_exists", [False, True])
+async def test_before_is_an_id_bound_not_a_storage_cursor(
+    state_store: _FakeStateStore,
+    boundary_exists: bool,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    for checkpoint_id in ("checkpoint-1", "checkpoint-4", "checkpoint-2"):
+        await saver.aput(
+            _config(),
+            _checkpoint(checkpoint_id, checkpoint_id),
+            cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+            {},
+        )
+    if boundary_exists:
+        await saver.aput(
+            _config(),
+            _checkpoint("checkpoint-3", "boundary"),
+            cast(CheckpointMetadata, {"source": "input", "step": 1}),
+            {},
+        )
+    history = [
+        item
+        async for item in saver.alist(
+            _config(),
+            before=_config("checkpoint-3"),
+            filter={"source": "loop"},
+        )
+    ]
+    assert [item.checkpoint["id"] for item in history] == [
+        "checkpoint-2",
+        "checkpoint-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_listing_preserves_namespace_metadata_and_pending_writes(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    root = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-1", "root"),
+        cast(CheckpointMetadata, {"source": "input", "step": 0, "owner": "match"}),
+        {},
     )
+    child = await saver.aput(
+        _config(checkpoint_ns="child"),
+        _checkpoint("checkpoint-3", "child"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 1, "owner": "match"}),
+        {},
+    )
+    await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-2", "other"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 1, "owner": "other"}),
+        {},
+    )
+    await saver.aput_writes(child, [("value", 3)], "task-child")
+    all_namespaces = cast(RunnableConfig, {"configurable": {"thread_id": "thread-1"}})
+    history = [
+        item
+        async for item in saver.alist(
+            all_namespaces, filter={"owner": "match"}, limit=2
+        )
+    ]
+    assert [item.config for item in history] == [child, root]
+    assert history[0].pending_writes == [("task-child", "value", 3)]
+    root_latest = await saver.aget_tuple(_config())
+    assert root_latest is not None and root_latest.checkpoint["id"] == "checkpoint-2"
+    exact = [item async for item in saver.alist(root)]
+    assert [item.config for item in exact] == [root]
+
+
+@pytest.mark.asyncio
+async def test_latest_skips_a_disappearing_storage_entry(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    first = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-1", "first"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+        {},
+    )
+    await saver.aput(
+        first,
+        _checkpoint("checkpoint-2", "expired"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 1}),
+        {},
+    )
+    get_item = state_store.get_item
+
+    async def missing_latest(key: str) -> Any:
+        return None if key == "/checkpoint-2" else await get_item(key)
+
+    with patch.object(state_store, "get_item", side_effect=missing_latest):
+        latest = await saver.aget_tuple(_config())
+    assert latest is not None and latest.config == first
+
+
+@pytest.mark.asyncio
+async def test_pending_writes_follow_task_path_across_pages_and_legacy_records(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    configuration = await saver.aput(
+        _config(),
+        _checkpoint("checkpoint-1", "first"),
+        cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+        {},
+    )
+    await saver.aput_writes(configuration, [("value", "right")], "task-a", "2")
+    await saver.aput_writes(
+        configuration,
+        [("value", "left-1"), ("value", "left-2")],
+        "task-z",
+        "1",
+    )
+    await saver.aput_writes(configuration, [("value", "legacy")], "task-m")
+    state_store.items["/writes/checkpoint-1/task-m/0"].value.pop("task_path")
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver._PAGE_SIZE", 2
+    ):
+        checkpoint = await saver.aget_tuple(configuration)
+    assert checkpoint is not None
+    assert checkpoint.pending_writes == [
+        ("task-m", "value", "legacy"),
+        ("task-z", "value", "left-1"),
+        ("task-z", "value", "left-2"),
+        ("task-a", "value", "right"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delta_channel_restores_parallel_reducer_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channels = pytest.importorskip("langgraph.channels")
+    delta_channel = getattr(channels, "DeltaChannel", None)
+    if delta_channel is None:
+        pytest.skip("DeltaChannel is unavailable in this LangGraph version")
+    delta_channel_type = cast(Any, delta_channel)
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+    def concatenate(current: list[str], updates: list[list[str]]) -> list[str]:
+        return current + [value for update in updates for value in update]
+
+    class State(TypedDict):
+        values: list[str]
+
+    State.__annotations__["values"] = Annotated[
+        list[str], delta_channel_type(concatenate)
+    ]
+
+    def build(saver: FoundryCheckpointSaver) -> Any:
+        builder = StateGraph(State)
+        for label in ("a", "b", "c", "d", "e", "f", "g", "h"):
+
+            async def branch(state: State, value: str = label) -> State:
+                return {"values": [value]}
+
+            builder.add_node(label, branch)
+            builder.add_edge(START, label)
+            builder.add_edge(label, END)
+        return builder.compile(checkpointer=saver)
+
+    configuration = cast(
+        RunnableConfig, {"configurable": {"thread_id": "delta-thread"}}
+    )
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        expected = await build(saver).ainvoke({"values": []}, configuration)
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        restored = await build(saver).aget_state(configuration)
+    assert expected["values"] == list("abcdefgh")
+    assert restored.values == expected
+
+
+@pytest.mark.asyncio
+async def test_storage_listing_errors_are_not_hidden(
+    state_store: _FakeStateStore,
+) -> None:
+    saver = FoundryCheckpointSaver(_credential())
+    with patch.object(
+        state_store, "list_keys", side_effect=RuntimeError("storage failed")
+    ):
+        with pytest.raises(RuntimeError, match="storage failed"):
+            await saver.aget_tuple(_config())
+    assert state_store.closed
+
+
+@pytest.mark.asyncio
+async def test_local_checkpoint_order_and_resume_survive_saver_reopen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "azure.ai.agentserver.core.storage._local_state._now", lambda: 100
+    )
+    expected = [f"checkpoint-{index:03d}" for index in range(12)]
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        configuration = _config()
+        for checkpoint_id in expected:
+            configuration = await saver.aput(
+                configuration,
+                _checkpoint(checkpoint_id, checkpoint_id),
+                cast(CheckpointMetadata, {"source": "loop", "step": 0}),
+                {},
+            )
+    async with FoundryCheckpointSaver(_credential()) as reopened:
+        latest = await reopened.aget_tuple(_config())
+        assert latest is not None and latest.checkpoint["id"] == expected[-1]
+        history = [item async for item in reopened.alist(_config())]
+        assert [item.checkpoint["id"] for item in history] == list(reversed(expected))
+
+    executions = []
+
+    async def reviewed(state: _GraphState) -> _GraphState:
+        approved = interrupt("approve?")
+        if approved:
+            executions.append(state["value"])
+        return {"value": state["value"] + int(approved)}
+
+    def build(saver: FoundryCheckpointSaver) -> Any:
+        builder = StateGraph(_GraphState)
+        builder.add_node("reviewed", reviewed)
+        builder.add_edge(START, "reviewed")
+        builder.add_edge("reviewed", END)
+        return builder.compile(checkpointer=saver)
+
+    configuration = cast(
+        RunnableConfig, {"configurable": {"thread_id": "resume-thread"}}
+    )
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        await build(saver).ainvoke({"value": 10}, configuration)
+    assert executions == []
+    async with FoundryCheckpointSaver(_credential()) as reopened:
+        graph = build(reopened)
+        paused = await graph.aget_state(configuration)
+        assert paused.interrupts
+        result = await graph.ainvoke(Command(resume=True), configuration)
+    assert result["value"] == 11
+    assert executions == [10]
 
 
 @pytest.mark.asyncio
