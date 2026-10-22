@@ -1143,11 +1143,11 @@ typing = [
 requires-dist = [
     { name = "azure-containerapps-sandbox", marker = "extra == 'sandboxes'", specifier = ">=0.1.0b4,<0.2" },
     { name = "azure-core", specifier = ">=1.38.0" },
-    { name = "azure-identity", specifier = "~=1.25" },
-    { name = "deepagents", marker = "extra == 'dynamic-sessions'", specifier = ">=0.7.1,<0.8" },
-    { name = "deepagents", marker = "extra == 'sandboxes'", specifier = ">=0.7.1,<0.8" },
-    { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
-    { name = "requests", marker = "extra == 'dynamic-sessions'", specifier = "~=2.31" },
+    { name = "azure-identity", specifier = ">=1.25" },
+    { name = "deepagents", marker = "extra == 'dynamic-sessions'", specifier = ">=0.7.1" },
+    { name = "deepagents", marker = "extra == 'sandboxes'", specifier = ">=0.7.1" },
+    { name = "langchain-core", specifier = ">=1.2.5" },
+    { name = "requests", marker = "extra == 'dynamic-sessions'", specifier = ">=2.31" },
 ]
 provides-extras = ["dynamic-sessions", "sandboxes"]
 

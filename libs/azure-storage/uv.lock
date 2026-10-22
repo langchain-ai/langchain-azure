@@ -1076,10 +1076,10 @@ typing = [
 [package.metadata]
 requires-dist = [
     { name = "azure-core", specifier = ">=1.38.0" },
-    { name = "azure-identity", specifier = "~=1.25" },
-    { name = "azure-storage-blob", extras = ["aio"], specifier = "~=12.26" },
-    { name = "deepagents", marker = "extra == 'deepagents'", specifier = ">=0.7.1,<0.8" },
-    { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
+    { name = "azure-identity", specifier = ">=1.25" },
+    { name = "azure-storage-blob", extras = ["aio"], specifier = ">=12.26" },
+    { name = "deepagents", marker = "extra == 'deepagents'", specifier = ">=0.7.1" },
+    { name = "langchain-core", specifier = ">=1.2.5" },
     { name = "wcmatch", marker = "extra == 'deepagents'", specifier = ">=11.0" },
 ]
 provides-extras = ["deepagents"]

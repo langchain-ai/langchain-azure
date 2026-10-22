@@ -1764,16 +1764,16 @@ type = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = "~=3.0" },
+    { name = "aiohttp", specifier = ">=3.0" },
     { name = "azure-core", specifier = ">=1.38.0" },
-    { name = "azure-identity", specifier = "~=1.0" },
-    { name = "langchain-core", specifier = ">=1.6.9,<2.0.0" },
-    { name = "numpy", specifier = "~=2.0" },
-    { name = "pgvector", specifier = ">=0.4,<0.6" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = "~=3.0" },
-    { name = "pydantic", specifier = "~=2.0" },
-    { name = "simsimd", specifier = "~=6.0" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = "~=4.0" },
+    { name = "azure-identity", specifier = ">=1.0" },
+    { name = "langchain-core", specifier = ">=1.6.9" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pgvector", specifier = ">=0.4" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "simsimd", specifier = ">=6.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.0" },
 ]
 
 [package.metadata.requires-dev]
