@@ -70,6 +70,85 @@ async def test_concurrent_borrowers_refresh_and_close_once(clients: list[Any]) -
     clients[0].aclose.assert_awaited_once()
 
 
+async def test_cached_metadata_refreshes_overlap(clients: list[Any]) -> None:
+    owner = object()
+    all_started, release = asyncio.Event(), asyncio.Event()
+    started = 0
+
+    async def refresh() -> None:
+        nonlocal started
+        started += 1
+        if started == 4:
+            all_started.set()
+        await release.wait()
+
+    async def borrow() -> Any:
+        async with get_state_store(owner, FoundryStateStore, "store") as store:
+            return store
+
+    async with state_store_client_scope():
+        first = await borrow()
+        first.get.side_effect = refresh
+        borrowers = asyncio.gather(*(borrow() for _ in range(4)))
+        try:
+            await asyncio.wait_for(all_started.wait(), 2)
+            first.aclose.assert_not_awaited()
+        finally:
+            release.set()
+            borrowed = await borrowers
+        assert all(store is first for store in borrowed)
+        assert len(clients) == 1
+        assert first.get.await_count == 4
+    first.aclose.assert_awaited_once()
+
+
+async def test_concurrent_missing_refreshes_share_one_replacement(
+    clients: list[Any],
+) -> None:
+    owner = object()
+    all_started = asyncio.Event()
+    releases = [asyncio.Event() for _ in range(4)]
+    started = 0
+
+    async def missing() -> None:
+        nonlocal started
+        index = started
+        started += 1
+        if started == len(releases):
+            all_started.set()
+        await releases[index].wait()
+        raise FoundryStorageNotFoundError("deleted")
+
+    async def borrow() -> Any:
+        async with get_state_store(owner, FoundryStateStore, "store") as store:
+            return store
+
+    async with state_store_client_scope():
+        old = await borrow()
+        old.get.side_effect = missing
+        borrowers = [asyncio.create_task(borrow()) for _ in releases]
+        try:
+            await asyncio.wait_for(all_started.wait(), 2)
+            releases[0].set()
+            replacement = await asyncio.wait_for(asyncio.shield(borrowers[0]), 2)
+            assert replacement is not old
+            old.aclose.assert_not_awaited()
+            # Later failures from the old client must not evict this replacement.
+            for release in releases[1:]:
+                release.set()
+            borrowed = await asyncio.gather(*borrowers)
+            assert all(store is replacement for store in borrowed)
+            assert len(clients) == 2
+            assert old.get.await_count == 4
+            assert replacement.get.await_count == 3
+        finally:
+            for release in releases:
+                release.set()
+            await asyncio.gather(*borrowers, return_exceptions=True)
+    for client in clients:
+        client.aclose.assert_awaited_once()
+
+
 async def test_store_consumer_and_user_bindings_are_separate(
     clients: list[Any],
 ) -> None:

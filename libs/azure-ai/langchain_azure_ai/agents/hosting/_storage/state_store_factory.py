@@ -56,7 +56,7 @@ class StateStoreClientFactory:
         """Resolve a client while preserving get_or_create's metadata read."""
         # Each consumer instance fixes endpoint, credential and pipeline options.
         key = (owner, name, get_request_context().user_id)
-        async with self.locks.setdefault(key, asyncio.Lock()):
+        while True:
             store = self.clients.get(key)
             if store is not None:
                 try:
@@ -64,23 +64,29 @@ class StateStoreClientFactory:
                     await store.get()
                     return store
                 except FoundryStorageNotFoundError:
-                    # Other borrowers may still be using it; close at scope exit.
+                    pass
+            async with self.locks.setdefault(key, asyncio.Lock()):
+                # A concurrent acquisition may have replaced the missing client.
+                if self.clients.get(key) is not store:
+                    continue
+                if store is not None:
+                    # Existing borrowers retain the old client until scope exit.
                     del self.clients[key]
-            if os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
-                if self.session is None:
-                    self.session = aiohttp.ClientSession(
-                        cookie_jar=aiohttp.DummyCookieJar(),
-                        trust_env=True,
-                        auto_decompress=False,
+                if os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
+                    if self.session is None:
+                        self.session = aiohttp.ClientSession(
+                            cookie_jar=aiohttp.DummyCookieJar(),
+                            trust_env=True,
+                            auto_decompress=False,
+                        )
+                        self.stack.push_async_callback(self.session.close)
+                    options["transport"] = AioHttpTransport(
+                        session=self.session, session_owner=False, **options
                     )
-                    self.stack.push_async_callback(self.session.close)
-                options["transport"] = AioHttpTransport(
-                    session=self.session, session_owner=False, **options
-                )
-            store = await store_type.get_or_create(name, *args, **options)
-            self.stack.push_async_callback(store.aclose)
-            self.clients[key] = store
-            return store
+                store = await store_type.get_or_create(name, *args, **options)
+                self.stack.push_async_callback(store.aclose)
+                self.clients[key] = store
+                return store
 
 
 @asynccontextmanager
