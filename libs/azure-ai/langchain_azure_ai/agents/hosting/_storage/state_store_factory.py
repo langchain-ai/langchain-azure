@@ -84,17 +84,17 @@ class StateStoreClientFactory:
 @asynccontextmanager
 async def state_store_client_scope() -> AsyncIterator[None]:
     """Own reusable clients until the handler and active borrowers settle."""
-    scope = StateStoreClientFactory()
-    token = _current_factory.set(scope)
+    factory = StateStoreClientFactory()
+    token = _current_factory.set(factory)
     try:
         yield
     finally:
-        scope.closing = True
+        factory.closing = True
         _current_factory.reset(token)
 
         async def close() -> None:
-            await scope.idle.wait()
-            await scope.stack.aclose()
+            await factory.idle.wait()
+            await factory.stack.aclose()
 
         cleanup = asyncio.create_task(close())
         cancelled = False
@@ -117,11 +117,11 @@ async def get_state_store(
     **options: Any,
 ) -> AsyncIterator[FoundryStateStore]:
     """Borrow a handler client or close an operation-owned standalone client."""
-    scope = _current_factory.get()
-    if scope is not None and scope.closing:
+    factory = _current_factory.get()
+    if factory is not None and factory.closing:
         raise RuntimeError("State Store client factory has already ended")
     # Custom pipelines/sessions retain their existing ownership and proxy settings.
-    if scope is None or any(
+    if factory is None or any(
         key in options
         for key in (
             "transport",
@@ -135,12 +135,12 @@ async def get_state_store(
         async with store:
             yield store
         return
-    scope.active += 1
-    scope.idle.clear()
+    factory.active += 1
+    factory.idle.clear()
     try:
-        store = await scope.acquire(owner, store_type, name, *args, **options)
+        store = await factory.acquire(owner, store_type, name, *args, **options)
         yield store
     finally:
-        scope.active -= 1
-        if not scope.active:
-            scope.idle.set()
+        factory.active -= 1
+        if not factory.active:
+            factory.idle.set()
