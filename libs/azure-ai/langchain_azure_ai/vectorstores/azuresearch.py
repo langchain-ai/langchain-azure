@@ -825,7 +825,10 @@ class AzureSearch(VectorStore):
             List of (Document, score) tuples.
 
         """
-        search_type = kwargs.get("search_type", self.search_type)
+        # Pop, as the sync twin does: the async search helpers forward
+        # ``**kwargs`` to ``async_client.search()``, which hands an unknown key
+        # down to aiohttp and raises ``TypeError``.
+        search_type = kwargs.pop("search_type", self.search_type)
         if search_type == "similarity":
             return await self.avector_search_with_score(query, k=k, **kwargs)
         elif search_type == "hybrid":
