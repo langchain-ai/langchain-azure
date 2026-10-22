@@ -9,8 +9,11 @@ TEST_FILE ?= --pyargs tests langchain_azure_postgresql
 UV_RUN_TEST = uv run --frozen --group test
 UV_RUN_LINT = uv run --frozen --group lint
 
-test tests integration_test integration_tests:
+test tests:
 	$(UV_RUN_TEST) pytest $(TEST_FILE)
+
+integration_test integration_tests:
+	$(UV_RUN_TEST) pytest tests/integration_tests
 
 
 ######################
@@ -59,8 +62,8 @@ help:
 	@echo "test                         - run tests and package doctests"
 	@echo "tests                        - run tests and package doctests"
 	@echo "test TEST_FILE=<test_file>   - run tests in the selected file"
-	@echo "integration_test             - run tests and package doctests"
-	@echo "integration_tests            - run tests and package doctests"
+	@echo "integration_test             - run compile-marked integration tests"
+	@echo "integration_tests            - run compile-marked integration tests"
 	@echo "type                         - run type checks"
 	@echo "package                      - build and check distributions"
 	@echo "vuln                         - check dependencies for vulnerabilities"

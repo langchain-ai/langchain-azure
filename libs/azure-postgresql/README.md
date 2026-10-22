@@ -101,9 +101,13 @@ $ make vuln    # check dependencies for vulnerabilities
 As before, the Makefile lint targets report findings without failing the build.
 CI runs `make lint_package` for package sources and `make lint_tests` for tests.
 
-Tests run once in the selected environment. The shared CI matrix selects Python
-3.11 and 3.14; the package continues to support Python 3.11 through 3.14. Set the
-PostgreSQL connection environment variables to run the database-backed tests:
+`make test` and `make tests` run the full test suite and package doctests once in
+the selected environment. The `integration_test` and `integration_tests` targets
+run only compile-marked integration tests, rather than repeating the full suite.
+
+The shared CI matrix selects Python 3.11 and 3.14; the package continues to support
+Python 3.11 through 3.14. Set the PostgreSQL connection environment variables to
+run the database-backed tests:
 
 ```cmd
 $ PGHOST=<host>.postgres.database.azure.com PGPASSWORD='your_password' make test
