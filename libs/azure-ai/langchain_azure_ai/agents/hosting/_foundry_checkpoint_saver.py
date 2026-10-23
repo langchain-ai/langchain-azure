@@ -421,12 +421,24 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             await store.aclose()
 
     async def adelete_thread(self, thread_id: str) -> None:
-        """Delete a thread's store and every checkpoint item in it."""
+        """Delete thread data according to the store's actual isolation setting.
+
+        Isolated stores retain the store and other users' partitions; only the
+        current user's items are deleted. Non-isolated stores are deleted in full.
+        A missing store is ignored.
+
+        Args:
+            thread_id: Identifier of the thread to delete.
+
+        Raises:
+            ValueError: ``thread_id`` is empty.
+        """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")
         store = self._bound_store(thread_id)
         try:
-            if self._user_isolation:
+            properties = await store.get()
+            if properties.user_isolation:
                 keys: list[str] = []
                 after: str | None = None
                 while True:
