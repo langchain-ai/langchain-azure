@@ -2530,9 +2530,13 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
         Records the tool output.  If the output is a LangGraph
         ``Command``-like object, GOTO routing metadata is also captured.
+        A ``ToolMessage`` with ``status="error"`` marks the span as failed,
+        using ``error.type="_OTHER"`` because the original exception type
+        is unavailable.
 
         Args:
-            output: The tool result (string, dict, or ``Command``-like).
+            output: The tool result (string, dict, ``ToolMessage``, or
+                ``Command``-like).
             run_id: Unique identifier for this tool run.
             parent_run_id: Run ID of the parent chain/agent.
             **kwargs: Additional LangChain callback keyword arguments.
@@ -2551,7 +2555,12 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 Attrs.TOOL_CALL_RESULT,
                 _serialise_tool_result(unwrapped, self._content_recording),
             )
-        record.span.set_status(Status(StatusCode.OK))
+        status = StatusCode.OK
+        if isinstance(output, ToolMessage) and output.status == "error":
+            status = StatusCode.ERROR
+            record.span.set_attribute(Attrs.ERROR_TYPE, "_OTHER")
+            record.attributes[Attrs.ERROR_TYPE] = "_OTHER"
+        record.span.set_status(Status(status))
         self._end_span(run_id)
 
     def on_tool_error(
