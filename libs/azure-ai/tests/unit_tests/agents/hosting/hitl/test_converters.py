@@ -39,6 +39,7 @@ from langchain_azure_ai.agents.hosting._converters import (
     validate_approval_responses,
 )
 
+from ..conftest import make_checkpointed_echo_graph, make_echo_graph
 from .conftest import emitted_items, pending_interrupt
 
 
@@ -48,6 +49,39 @@ async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() 
     pending = await detect_pending_interrupts(graph, {})
 
     assert pending == ()
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+async def test_detect_pending_interrupts_accepts_new_graph_state(
+    checkpointed: bool,
+) -> None:
+    graph = make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+
+    pending = await detect_pending_interrupts(
+        graph, {"configurable": {"thread_id": "new-thread"}}
+    )
+
+    assert pending == ()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("read timed out"),
+        PermissionError("not allowed"),
+        ValueError("bad data"),
+    ],
+)
+async def test_detect_pending_interrupts_propagates_read_failure(
+    failure: Exception,
+) -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(side_effect=failure)
+
+    with pytest.raises(type(failure)) as raised:
+        await detect_pending_interrupts(graph, {})
+
+    assert raised.value is failure
 
 
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:

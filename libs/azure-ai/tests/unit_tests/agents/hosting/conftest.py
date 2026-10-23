@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from types import SimpleNamespace
@@ -14,7 +15,11 @@ from typing import Annotated, Any, cast
 
 import pytest
 from azure.ai.agentserver.core import get_request_context
-from azure.ai.agentserver.core.storage import DEFAULT_ITEM_TTL_SECONDS
+from azure.ai.agentserver.core.storage import (
+    DEFAULT_ITEM_TTL_SECONDS,
+    FoundryStorageConflictError,
+    FoundryStoragePreconditionError,
+)
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -34,6 +39,8 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
     """Replace FoundryStateStore with a process-local store keyed by name."""
     stores: dict[str, dict[str, Any]] = {}
     properties: dict[str, SimpleNamespace] = {}
+    etags: dict[tuple[str, str], str] = {}
+    lock = threading.Lock()
 
     class FakeFoundryStateStore:
         def __init__(self, name: str) -> None:
@@ -68,8 +75,15 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             return deepcopy(properties[self.name])
 
         async def get_item(self, key: str) -> SimpleNamespace | None:
-            value = stores[self.name].get(key)
-            return SimpleNamespace(value=deepcopy(value)) if value is not None else None
+            with lock:
+                value = stores[self.name].get(key)
+                return (
+                    SimpleNamespace(
+                        value=deepcopy(value), etag=etags.get((self.name, key))
+                    )
+                    if value is not None
+                    else None
+                )
 
         async def set_item(
             self,
@@ -77,8 +91,29 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             value: Any,
             **_: Any,
         ) -> SimpleNamespace:
-            stores[self.name][key] = deepcopy(value)
-            return SimpleNamespace(etag='"test"')
+            with lock:
+                stores[self.name][key] = deepcopy(value)
+                etag = etags[self.name, key] = uuid.uuid4().hex
+                return SimpleNamespace(etag=etag)
+
+        async def create_item(self, key: str, value: Any, **_: Any) -> SimpleNamespace:
+            with lock:
+                if key in stores[self.name]:
+                    raise FoundryStorageConflictError("The item already exists.")
+                stores[self.name][key] = deepcopy(value)
+                etag = etags[self.name, key] = uuid.uuid4().hex
+                return SimpleNamespace(etag=etag)
+
+        async def delete_item(
+            self, key: str, *, if_match: str | None = None
+        ) -> SimpleNamespace:
+            with lock:
+                if if_match is not None and etags.get((self.name, key)) != if_match:
+                    raise FoundryStoragePreconditionError("The item version changed.")
+                existed = key in stores[self.name]
+                stores[self.name].pop(key, None)
+                etags.pop((self.name, key), None)
+                return SimpleNamespace(deleted=existed)
 
     monkeypatch.setattr(
         "langchain_azure_ai.agents.hosting._responses."
@@ -284,9 +319,9 @@ def make_recovery_probe_graph(
         async def aget_state(self, config: dict[str, Any]) -> Any:
             captured["state_config"] = config
             if pending_interrupt is None:
-                return SimpleNamespace(tasks=())
+                return SimpleNamespace(tasks=(), values={}, metadata=None)
             task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
-            return SimpleNamespace(tasks=(task,))
+            return SimpleNamespace(tasks=(task,), values={}, metadata=None)
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 
