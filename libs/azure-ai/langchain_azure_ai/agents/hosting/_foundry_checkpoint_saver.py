@@ -127,9 +127,11 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         endpoint: Foundry project or storage endpoint. When omitted, the SDK
             resolves ``FOUNDRY_PROJECT_ENDPOINT``.
         store_name_prefix: Prefix used for per-thread store names.
-        user_isolation: Partition items by the hosted request's end user.
+        user_isolation: Partition items by the hosted request's end user when
+            creating a store. Existing stores retain their isolation settings.
         item_ttl_seconds: Sliding item TTL configured when a thread store is
-            first created. ``-1`` disables expiration.
+            first created. Existing stores retain their TTL. ``-1`` disables
+            expiration.
         api_version: Foundry storage API version.
         serde: Optional LangGraph serializer.
     """
@@ -447,7 +449,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             await store.aclose()
 
     async def _get_or_create_store(self, thread_id: str) -> FoundryStateStore:
-        store = await FoundryStateStore.get_or_create(
+        return await FoundryStateStore.get_or_create(
             self._store_name(thread_id),
             self._credential,
             self._endpoint,
@@ -460,24 +462,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             # opt-out are evaluated per request.
             get_server_version=get_user_agent,
         )
-        try:
-            properties = await store.get()
-            if properties.user_isolation != self._user_isolation:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"user_isolation={properties.user_isolation}; expected "
-                    f"{self._user_isolation}"
-                )
-            if properties.item_ttl_seconds != self._item_ttl_seconds:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"item_ttl_seconds={properties.item_ttl_seconds}; expected "
-                    f"{self._item_ttl_seconds}"
-                )
-        except BaseException:
-            await store.aclose()
-            raise
-        return store
 
     def _bound_store(self, thread_id: str) -> FoundryStateStore:
         return FoundryStateStore(

@@ -224,18 +224,35 @@ async def test_put_stamps_state_store_user_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_incompatible_existing_store() -> None:
+@pytest.mark.parametrize(
+    "setting,value", [("user_isolation", False), ("item_ttl_seconds", 600)]
+)
+async def test_uses_existing_store_without_descriptor_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    value: Any,
+) -> None:
     store = _FakeStateStore()
-    store.user_isolation = False
+    setattr(store, setting, value)
+    read_properties = AsyncMock(side_effect=AssertionError("Unexpected descriptor GET"))
+    monkeypatch.setattr(store, "get", read_properties)
     with patch(
         "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
-        saver = FoundryCheckpointSaver(_credential(), user_isolation=True)
-        with pytest.raises(ValueError, match="user_isolation=False"):
-            await saver.aget_tuple(_config())
+        saver = FoundryCheckpointSaver(_credential())
+        config = await saver.aput(
+            _config(),
+            _checkpoint("checkpoint-1", "first"),
+            cast(CheckpointMetadata, {"source": "input", "step": -1}),
+            {},
+        )
+        result = await saver.aget_tuple(config)
 
+    assert result is not None
+    assert result.checkpoint["channel_values"] == {"messages": ["first"]}
+    read_properties.assert_not_awaited()
     assert store.closed is True
 
 

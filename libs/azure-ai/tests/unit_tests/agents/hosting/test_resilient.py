@@ -199,7 +199,7 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
         ("item_ttl_seconds", -1, 600),
     ],
 )
-async def test_conversation_chain_store_mismatch_policy(
+async def test_conversation_chain_store_uses_existing_settings(
     monkeypatch: pytest.MonkeyPatch,
     foundry_state_stores: dict[str, dict[str, Any]],
     policy: str | None,
@@ -214,8 +214,9 @@ async def test_conversation_chain_store_mismatch_policy(
     state_store = await conversation_chain_store.FoundryStateStore.get_or_create(
         store_name
     )
-    original_properties = await state_store.get()
-    read_properties = AsyncMock(wraps=state_store.get)
+    get_properties = state_store.get
+    original_properties = await get_properties()
+    read_properties = AsyncMock(side_effect=AssertionError("Unexpected descriptor GET"))
     read_item = AsyncMock(wraps=state_store.get_item)
     write_item = AsyncMock(wraps=state_store.set_item)
     exit_store = AsyncMock(return_value=None)
@@ -234,25 +235,13 @@ async def test_conversation_chain_store_mismatch_policy(
         else:
             await store.set("chain-1", "key", {"value": "replacement"})
 
-    if policy == "ignore":
-        await perform_operation()
-        read_properties.assert_not_awaited()
-        assert read_item.await_count == (operation == "get")
-        assert write_item.await_count == (operation == "set")
-    else:
-        with pytest.raises(
-            ValueError, match=f"{setting}={existing}; expected {requested}"
-        ) as raised:
-            await perform_operation()
-        assert store_name in str(raised.value)
-        read_properties.assert_awaited_once()
-        read_item.assert_not_awaited()
-        write_item.assert_not_awaited()
+    await perform_operation()
+    read_properties.assert_not_awaited()
+    assert read_item.await_count == (operation == "get")
+    assert write_item.await_count == (operation == "set")
     exit_store.assert_awaited_once()
-    assert await state_store.get() == original_properties
-    expected = (
-        "replacement" if policy == "ignore" and operation == "set" else "original"
-    )
+    assert await get_properties() == original_properties
+    expected = "replacement" if operation == "set" else "original"
     assert foundry_state_stores[store_name] == {"key": {"value": expected}}
 
 
@@ -285,23 +274,25 @@ async def test_conversation_chain_store_matching_properties(
     assert await store.get("chain-1", "missing") is None
     await store.set("chain-1", "key", {"value": "stored"})
     assert await store.get("chain-1", "key") == {"value": "stored"}
-    assert read_properties.await_count == (3 if on_mismatch == "fail" else 0)
+    read_properties.assert_not_awaited()
 
 
 @pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
 @pytest.mark.parametrize("operation", ["get", "set"])
-async def test_conversation_chain_store_policy_propagates_backend_errors(
+@pytest.mark.parametrize("stage", ["acquisition", "item"])
+async def test_conversation_chain_store_propagates_backend_errors(
     monkeypatch: pytest.MonkeyPatch,
     on_mismatch: Literal["fail", "ignore"],
     operation: str,
+    stage: str,
 ) -> None:
     store_type = conversation_chain_store.FoundryStateStore
     error = RuntimeError("Storage unavailable")
-    read_item = AsyncMock(side_effect=error if on_mismatch == "ignore" else None)
-    write_item = AsyncMock(side_effect=error if on_mismatch == "ignore" else None)
-    read_properties = AsyncMock(side_effect=error)
+    read_item = AsyncMock(side_effect=error)
+    write_item = AsyncMock(side_effect=error)
     exit_store = AsyncMock(return_value=None)
-    monkeypatch.setattr(store_type, "get", read_properties)
+    if stage == "acquisition":
+        monkeypatch.setattr(store_type, "get_or_create", AsyncMock(side_effect=error))
     monkeypatch.setattr(store_type, "get_item", read_item)
     monkeypatch.setattr(store_type, "set_item", write_item)
     monkeypatch.setattr(store_type, "__aexit__", exit_store)
@@ -314,13 +305,12 @@ async def test_conversation_chain_store_policy_propagates_backend_errors(
             await store.set("chain-1", "key", {"value": "stored"})
 
     assert raised.value is error
-    exit_store.assert_awaited_once()
-    if on_mismatch == "fail":
-        read_properties.assert_awaited_once()
+    if stage == "acquisition":
+        exit_store.assert_not_awaited()
         read_item.assert_not_awaited()
         write_item.assert_not_awaited()
     else:
-        read_properties.assert_not_awaited()
+        exit_store.assert_awaited_once()
         assert read_item.await_count == (operation == "get")
         assert write_item.await_count == (operation == "set")
 
