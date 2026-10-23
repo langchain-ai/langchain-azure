@@ -5,11 +5,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 
-def test_file_search_tool_binding() -> None:
+
+def test_file_search_tool_binding(docs_samples_dirs: list[Path]) -> None:
     notebook_path = (
-        Path(__file__).resolve().parents[2] / "docs/azure_ai_models_demo.ipynb"
+        Path(__file__).resolve().parents[3]
+        / "libs"
+        / "azure-ai"
+        / "docs"
+        / "azure_ai_models_demo.ipynb"
     )
+    if not any(
+        notebook_path.is_relative_to(directory) for directory in docs_samples_dirs
+    ):
+        pytest.skip("This smoke test covers the azure-ai models notebook.")
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     cell = next(cell for cell in notebook["cells"] if cell["id"] == "79055a62")
     model = Mock()
