@@ -30,6 +30,7 @@ from azure.ai.agentserver.responses.models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
 
@@ -843,7 +844,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
 
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+    assert "checkpoint_id" not in config["configurable"]
     context.get_input_items.assert_not_awaited()
 
 
@@ -1155,7 +1156,7 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     )
 
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert config["configurable"]["checkpoint_id"] == "checkpoint-committed"
+    assert "checkpoint_id" not in config["configurable"]
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
@@ -1208,26 +1209,20 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         },
     )
-    with monkeypatch.context() as recovery_patch:
-        _, recovery_config = await _capture_graph_call(
-            server,
-            request,
-            recovery_context,
-            recovery_patch,
+    saver = server.graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    reads = AsyncMock(wraps=saver.aget_tuple)
+    monkeypatch.setattr(saver, "aget_tuple", reads)
+    events = [
+        event
+        async for event in server.handle_create(
+            request, recovery_context, asyncio.Event()
         )
-    assert recovery_config["configurable"]["checkpoint_id"] == committed_checkpoint_id
-    recovered_nodes = [
-        node
-        async for update in server.graph.astream(
-            None,
-            recovery_config,
-            stream_mode="updates",
-            durability="sync",
-        )
-        for node in update
     ]
-
-    assert recovered_nodes == ["research"]
+    assert events[-1]["response"]["status"] == "completed"
+    first_read = reads.await_args_list[0].args[0]["configurable"]
+    assert first_read["thread_id"] == "resp-root"
+    assert first_read["checkpoint_id"] == committed_checkpoint_id
 
 
 async def test_conversation_state_store_supports_linear_response_chain(
