@@ -24,12 +24,15 @@ from azure.ai.agentserver.responses.models import (
     ItemFunctionToolCall,
     MCPApprovalResponse,
 )
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langgraph._internal._constants import INTERRUPT, NO_WRITES, RESUME
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from langchain_azure_ai.agents.hosting._converters import (
     HITL_FUNCTION_NAME,
     HITL_MCP_SERVER_LABEL,
+    IncompleteResumeError,
     build_messages_input,
     detect_pending_interrupts,
     hitl_call_ids,
@@ -50,6 +53,94 @@ async def test_detect_pending_interrupts_returns_empty_for_stateless_runnable() 
     assert pending == ()
 
 
+async def test_detect_pending_interrupts_propagates_checkpoint_errors() -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(side_effect=RuntimeError("checkpoint unavailable"))
+
+    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+        await detect_pending_interrupts(graph, {})
+
+
+@pytest.mark.parametrize("checkpointer", [None, False])
+async def test_detect_pending_interrupts_skips_graph_without_checkpointer(
+    checkpointer: None | bool,
+) -> None:
+    graph = MagicMock()
+    graph.checkpointer = checkpointer
+    graph.aget_state = AsyncMock()
+
+    assert await detect_pending_interrupts(graph, {}) == ()
+    graph.aget_state.assert_not_awaited()
+
+
+@pytest.mark.parametrize("finished", [False, True])
+async def test_detect_pending_interrupts_uses_checkpoint_completion_marker(
+    finished: bool,
+) -> None:
+    outstanding = pending_interrupt(id="int-a", value="next question")
+    answered = pending_interrupt(id="int-b", value="sibling question")
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": "selected-thread",
+            "checkpoint_ns": "selected-namespace",
+            "checkpoint_id": "selected-checkpoint",
+        }
+    }
+    writes: list[tuple[str, str, Any]] = [
+        ("task-b", INTERRUPT, (answered,)),
+        ("task-b", RESUME, ["sibling answer"]),
+        ("task-a", INTERRUPT, (outstanding,)),
+        ("task-a", RESUME, ["previous answer"]),
+    ]
+    if finished:
+        writes.append(("task-b", NO_WRITES, None))
+    checkpointer = MagicMock(spec=BaseCheckpointSaver)
+    checkpointer.aget_tuple = AsyncMock(
+        return_value=SimpleNamespace(pending_writes=writes)
+    )
+    graph = MagicMock(checkpointer=checkpointer)
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            config=config,
+            tasks=(
+                SimpleNamespace(id="task-a", result=None, interrupts=(outstanding,)),
+                SimpleNamespace(id="task-b", result=None, interrupts=(answered,)),
+            ),
+        )
+    )
+
+    pending = await detect_pending_interrupts(graph, config)
+
+    assert pending == ((outstanding,) if finished else (outstanding, answered))
+    graph.aget_state.assert_awaited_once_with(config)
+    checkpointer.aget_tuple.assert_awaited_once_with(config)
+    assert config["configurable"]["checkpoint_id"] == "selected-checkpoint"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+async def test_detect_pending_interrupts_does_not_bypass_checkpoint_read_failure(
+    missing: bool,
+) -> None:
+    config: RunnableConfig = {"configurable": {"thread_id": "thread"}}
+    checkpointer = MagicMock(spec=BaseCheckpointSaver)
+    checkpointer.aget_tuple = AsyncMock(
+        return_value=None,
+        side_effect=None if missing else RuntimeError("checkpoint read unavailable"),
+    )
+    graph = MagicMock(checkpointer=checkpointer)
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            config=config,
+            tasks=(SimpleNamespace(id="task-a", interrupts=(pending_interrupt(),)),),
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError, match="no longer available" if missing else "read unavailable"
+    ):
+        await detect_pending_interrupts(graph, config)
+
+
 async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
     answered = pending_interrupt(id="int-a", value="answered")
     outstanding = pending_interrupt(id="int-b", value="outstanding")
@@ -59,6 +150,29 @@ async def test_detect_pending_interrupts_skips_completed_empty_result() -> None:
             tasks=(
                 SimpleNamespace(result={}, interrupts=(answered,)),
                 SimpleNamespace(result=None, interrupts=(outstanding,)),
+            )
+        )
+    )
+
+    pending = await detect_pending_interrupts(graph, {})
+
+    assert pending == (outstanding,)
+
+
+@pytest.mark.parametrize(
+    "completed_result", [{"messages": []}, {"messages": ["done"]}, "", 0, False, []]
+)
+async def test_detect_pending_interrupts_excludes_completed_parallel_result(
+    completed_result: Any,
+) -> None:
+    answered = pending_interrupt(id="int-a", value="answered")
+    outstanding = pending_interrupt(id="int-b", value="next question")
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            tasks=(
+                SimpleNamespace(result=completed_result, interrupts=(answered,)),
+                SimpleNamespace(result={}, interrupts=(outstanding,)),
             )
         )
     )
@@ -166,26 +280,26 @@ class TestParseResumeCommand:
         assert command is None
         assert consumed == frozenset()
 
-    def test_returns_none_when_no_matching_item(self) -> None:
+    def test_rejects_request_when_no_matching_item(self) -> None:
         items = [_tool_output("other", '{"resume": "x"}')]
         pending = (pending_interrupt(id="int-1"),)
-        command, consumed = parse_resume_command(items, pending)
-        assert command is None
-        assert consumed == frozenset()
+        with pytest.raises(IncompleteResumeError, match="function call int-1"):
+            parse_resume_command(items, pending)
 
     def test_decodes_json_envelope(self) -> None:
         items = [_tool_output("int-1", '{"resume": "Seattle"}')]
         pending = (pending_interrupt(id="int-1"),)
         command, consumed = parse_resume_command(items, pending)
         assert isinstance(command, Command)
-        assert command.resume == "Seattle"
+        assert command.resume == {"int-1": "Seattle"}
         assert consumed == frozenset({"int-1"})
 
     def test_supports_update_and_goto(self) -> None:
-        body = json.dumps({"update": {"k": 1}, "goto": "next"})
+        body = json.dumps({"resume": "A", "update": {"k": 1}, "goto": "next"})
         items = [_tool_output("int-1", body)]
         command, _ = parse_resume_command(items, (pending_interrupt(id="int-1"),))
         assert command is not None
+        assert command.resume == {"int-1": "A"}
         assert command.update == {"k": 1}
         assert command.goto == "next"
 
@@ -197,7 +311,8 @@ class TestParseResumeCommand:
         pending = (pending_interrupt(id="int-1"),)
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume is False
+        assert command.resume == {"int-1": False}
+        assert command.resume["int-1"] is False
         assert consumed == frozenset({"int-1"})
 
     def test_preserves_explicit_null_resume(self) -> None:
@@ -212,21 +327,62 @@ class TestParseResumeCommand:
         items = [_tool_output("int-1", "Seattle")]
         command, _ = parse_resume_command(items, (pending_interrupt(id="int-1"),))
         assert command is not None
-        assert command.resume == "Seattle"
+        assert command.resume == {"int-1": "Seattle"}
 
     def test_treats_unrelated_json_as_resume(self) -> None:
         items = [_tool_output("int-1", '{"x": 1}')]
         command, _ = parse_resume_command(items, (pending_interrupt(id="int-1"),))
         assert command is not None
         # No resume/update/goto keys → keep raw string as resume.
-        assert command.resume == '{"x": 1}'
+        assert command.resume == {"int-1": '{"x": 1}'}
 
-    def test_ignores_blank_output(self) -> None:
-        items = [_tool_output("int-1", "   ")]
+    @pytest.mark.parametrize("output", ["", "   ", "\t\n"])
+    def test_preserves_blank_output(self, output: str) -> None:
+        items = [_tool_output("int-1", output)]
         pending = (pending_interrupt(id="int-1"),)
         command, consumed = parse_resume_command(items, pending)
-        assert command is None
-        assert consumed == frozenset()
+        assert command is not None
+        assert command.resume == {"int-1": output}
+        assert consumed == frozenset({"int-1"})
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "answer",
+            False,
+            0,
+            [],
+            {"approved": True},
+            {"1" * 32: "payload", "metadata": "ordinary dictionary"},
+        ],
+    )
+    def test_normalizes_single_answer_under_interrupt_id(self, answer: Any) -> None:
+        interrupt_id = "a" * 32
+        body = json.dumps(
+            {"resume": answer, "update": {"marker": "set"}, "goto": "finish"}
+        )
+        command, consumed = parse_resume_command(
+            [_tool_output(interrupt_id, body)],
+            (pending_interrupt(id=interrupt_id),),
+        )
+
+        assert command is not None
+        assert command.resume == {interrupt_id: answer}
+        assert command.update == {"marker": "set"}
+        assert command.goto == "finish"
+        assert consumed == frozenset({interrupt_id})
+
+    def test_preserves_existing_single_id_map_without_wrapping_twice(self) -> None:
+        interrupt_id = "a" * 32
+        resume = {interrupt_id: {"approved": True}, "0" * 32: "unused"}
+        command, consumed = parse_resume_command(
+            [_tool_output(interrupt_id, json.dumps({"resume": resume}))],
+            (pending_interrupt(id=interrupt_id),),
+        )
+
+        assert command is not None
+        assert command.resume == resume
+        assert consumed == frozenset({interrupt_id})
 
 
 class TestInterruptArgumentsJson:
@@ -255,7 +411,7 @@ class TestApprovalResumeChannel:
         assert command is not None
         # approve=True echoes the original interrupt value back as the
         # resume payload (matches Agent Framework's behavior).
-        assert command.resume == {"question": "Where?"}
+        assert command.resume == {"int-1": {"question": "Where?"}}
         assert consumed == frozenset({"int-1"})
 
     def test_approve_false_yields_no_command(self) -> None:
@@ -265,6 +421,22 @@ class TestApprovalResumeChannel:
         command, consumed = parse_resume_command(items, (pending,))
         assert command is None
         assert consumed == frozenset()
+
+    @pytest.mark.parametrize(
+        "answer", [{}, {"f" * 32: "business payload"}, {"a" * 32: "business payload"}]
+    )
+    def test_approval_dictionary_is_an_answer_not_a_resume_map(
+        self, answer: Any
+    ) -> None:
+        interrupt_id = "a" * 32
+        command, consumed = parse_resume_command(
+            [_approval_response(interrupt_id, True)],
+            (pending_interrupt(id=interrupt_id, value=answer),),
+        )
+
+        assert command is not None
+        assert command.resume == {interrupt_id: answer}
+        assert consumed == frozenset({interrupt_id})
 
     @pytest.mark.parametrize(
         ("approve", "decision_type"),
@@ -362,7 +534,7 @@ class TestApprovalResumeChannel:
         command, consumed = parse_resume_command(items, (pending,))
 
         assert command is not None
-        assert command.resume == {"decisions": [{"type": "reject"}]}
+        assert command.resume == {"int-1": {"decisions": [{"type": "reject"}]}}
         assert consumed == frozenset({"int-1"})
         assert validate_approval_responses(items, (pending,)) is None
 
@@ -391,7 +563,7 @@ class TestApprovalResumeChannel:
         command, consumed = parse_resume_command(items, (pending,))
 
         assert command is not None
-        assert command.resume == value
+        assert command.resume == {"int-1": value}
         assert consumed == frozenset({"int-1"})
 
     def test_function_call_output_wins_over_approval(self) -> None:
@@ -403,15 +575,14 @@ class TestApprovalResumeChannel:
         command, consumed = parse_resume_command(items, (pending,))
         assert command is not None
         # function_call_output (richer payload) wins over the approval echo.
-        assert command.resume == "Seattle"
+        assert command.resume == {"int-1": "Seattle"}
         assert consumed == frozenset({"int-1"})
 
-    def test_approval_for_unknown_id_is_ignored(self) -> None:
+    def test_approval_for_unknown_id_does_not_answer_pending_request(self) -> None:
         pending = pending_interrupt(id="int-1")
         items = [_approval_response("other", True)]
-        command, consumed = parse_resume_command(items, (pending,))
-        assert command is None
-        assert consumed == frozenset()
+        with pytest.raises(IncompleteResumeError, match="MCP approval requests"):
+            parse_resume_command(items, (pending,))
 
 
 class TestParallelInterruptResumeMap:
@@ -426,119 +597,118 @@ class TestParallelInterruptResumeMap:
 
     def test_builds_resume_map_for_parallel_interrupts(self) -> None:
         pending = (
-            pending_interrupt(id="int-a", value="a?"),
-            pending_interrupt(id="int-b", value="b?"),
+            pending_interrupt(id="1" * 32, value="a?"),
+            pending_interrupt(id="2" * 32, value="b?"),
         )
         items = [
-            _tool_output("int-a", '{"resume": "A"}'),
-            _tool_output("int-b", '{"resume": "B"}'),
+            _tool_output("1" * 32, '{"resume": "A"}'),
+            _tool_output("2" * 32, '{"resume": "B"}'),
         ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "A", "int-b": "B"}
-        assert consumed == frozenset({"int-a", "int-b"})
+        assert command.resume == {"1" * 32: "A", "2" * 32: "B"}
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
-    def test_map_allows_partial_answers(self) -> None:
-        # Answering only one of two parallel pauses is legal; LangGraph keeps
-        # the unanswered branch suspended.
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-        items = [_tool_output("int-a", "A")]
-        command, consumed = parse_resume_command(items, pending)
-        assert command is not None
-        assert command.resume == {"int-a": "A"}
-        assert consumed == frozenset({"int-a"})
+    def test_map_requires_every_pending_answer(self) -> None:
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+        items = [_tool_output("1" * 32, "A")]
+        with pytest.raises(IncompleteResumeError, match="function call " + "2" * 32):
+            parse_resume_command(items, pending)
 
     def test_update_only_does_not_implicitly_resume_with_none(self) -> None:
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-        items = [_tool_output("int-a", '{"update": {"marker": "set"}}')]
-        command, consumed = parse_resume_command(items, pending)
-        assert command is not None
-        assert command.resume is None
-        assert command.update == {"marker": "set"}
-        assert consumed == frozenset({"int-a"})
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+        items = [
+            _tool_output("1" * 32, '{"update": {"marker": "set"}}'),
+            _tool_output("2" * 32, "B"),
+        ]
+        with pytest.raises(IncompleteResumeError, match="function call " + "1" * 32):
+            parse_resume_command(items, pending)
 
     def test_explicit_null_still_resumes_with_none(self) -> None:
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
-        items = [_tool_output("int-a", '{"resume": null}')]
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
+        items = [
+            _tool_output("1" * 32, '{"resume": null}'),
+            _tool_output("2" * 32, "B"),
+        ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": None}
-        assert consumed == frozenset({"int-a"})
+        assert command.resume == {"1" * 32: None, "2" * 32: "B"}
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
     def test_preserves_updates_and_gotos_from_every_answer(self) -> None:
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
         items = [
             _tool_output(
-                "int-a",
+                "1" * 32,
                 json.dumps({"resume": "A", "update": {"a": 1}, "goto": "route-a"}),
             ),
             _tool_output(
-                "int-b",
+                "2" * 32,
                 json.dumps({"resume": "B", "update": {"b": 2}, "goto": "route-b"}),
             ),
         ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "A", "int-b": "B"}
+        assert command.resume == {"1" * 32: "A", "2" * 32: "B"}
         assert command.update == [("a", 1), ("b", 2)]
         assert command.goto == ("route-a", "route-b")
-        assert consumed == frozenset({"int-a", "int-b"})
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
     def test_map_mixes_both_resume_channels(self) -> None:
         pending = (
-            pending_interrupt(id="int-a"),
-            pending_interrupt(id="int-b", value="echo-me"),
+            pending_interrupt(id="1" * 32),
+            pending_interrupt(id="2" * 32, value="echo-me"),
         )
         items = [
-            _tool_output("int-a", "A"),
-            _approval_response("int-b", True),
+            _tool_output("1" * 32, "A"),
+            _approval_response("2" * 32, True),
         ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "A", "int-b": "echo-me"}
-        assert consumed == frozenset({"int-a", "int-b"})
+        assert command.resume == {"1" * 32: "A", "2" * 32: "echo-me"}
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
     def test_map_skips_rejected_approvals(self) -> None:
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
         items = [
-            _tool_output("int-a", "A"),
-            _approval_response("int-b", False),
+            _tool_output("1" * 32, "A"),
+            _approval_response("2" * 32, False),
         ]
         command, _ = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "A"}
+        assert command.resume == {"1" * 32: "A"}
 
     def test_routes_by_id_not_by_position(self) -> None:
         # Clients are under no obligation to answer in emission order, and
         # nothing in the Responses API preserves it. Pairing items to pending
         # interrupts by index would silently swap the answers here.
         pending = (
-            pending_interrupt(id="int-a", value="a?"),
-            pending_interrupt(id="int-b", value="b?"),
+            pending_interrupt(id="1" * 32, value="a?"),
+            pending_interrupt(id="2" * 32, value="b?"),
         )
         items = [
-            _tool_output("int-b", '{"resume": "B"}'),
-            _tool_output("int-a", '{"resume": "A"}'),
+            _tool_output("2" * 32, '{"resume": "B"}'),
+            _tool_output("1" * 32, '{"resume": "A"}'),
         ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "A", "int-b": "B"}
-        assert consumed == frozenset({"int-a", "int-b"})
+        assert command.resume == {"1" * 32: "A", "2" * 32: "B"}
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
     def test_first_answer_wins_when_one_id_is_answered_twice(self) -> None:
         # Two answers for the same pause in a single request: the first is
         # kept and the duplicate dropped, rather than the last write winning.
         # The other pause must be unaffected either way.
-        pending = (pending_interrupt(id="int-a"), pending_interrupt(id="int-b"))
+        pending = (pending_interrupt(id="1" * 32), pending_interrupt(id="2" * 32))
         items = [
-            _tool_output("int-a", '{"resume": "first"}'),
-            _tool_output("int-a", '{"resume": "second"}'),
-            _tool_output("int-b", '{"resume": "B"}'),
+            _tool_output("1" * 32, '{"resume": "first"}'),
+            _tool_output("1" * 32, '{"resume": "second"}'),
+            _tool_output("2" * 32, '{"resume": "B"}'),
         ]
         command, consumed = parse_resume_command(items, pending)
         assert command is not None
-        assert command.resume == {"int-a": "first", "int-b": "B"}
-        assert consumed == frozenset({"int-a", "int-b"})
+        assert command.resume == {"1" * 32: "first", "2" * 32: "B"}
+        assert consumed == frozenset({"1" * 32, "2" * 32})
 
 
 class TestApprovalIdRoundTrip:
@@ -585,7 +755,7 @@ class TestApprovalIdRoundTrip:
             (pending,),
         )
         assert command is not None
-        assert command.resume == "echo-me"
+        assert command.resume == {"int-1": "echo-me"}
         assert consumed == frozenset({approval_id})
 
     async def test_validate_approval_responses_accepts_emitted_approval_id(
@@ -638,13 +808,20 @@ class TestValidateApprovalResponses:
         ]
         assert validate_approval_responses(items, (pending,)) is None
 
-    def test_blank_function_output_does_not_override_rejection(self) -> None:
+    @pytest.mark.parametrize("output", ["", "  "])
+    def test_blank_function_output_keeps_function_channel_priority(
+        self, output: str
+    ) -> None:
         pending = pending_interrupt(id="int-1")
         items = [
-            _tool_output("int-1", "  "),
+            _tool_output("int-1", output),
             _approval_response("int-1", False),
         ]
-        assert validate_approval_responses(items, (pending,)) is not None
+        assert validate_approval_responses(items, (pending,)) is None
+        command, consumed = parse_resume_command(items, (pending,))
+        assert command is not None
+        assert command.resume == {"int-1": output}
+        assert consumed == frozenset({"int-1"})
 
     @pytest.mark.parametrize("decisions", [(True, False), (False, True)])
     def test_conflicting_approvals_return_error(

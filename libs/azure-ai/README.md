@@ -256,6 +256,75 @@ leave all pending interrupts unchanged. For a recognized LangChain
 `HumanInTheLoopMiddleware` request, every action must also allow the selected
 decision; otherwise the whole request fails and all interrupts remain pending.
 
+Both hosts require one valid result or approval decision for **every currently
+pending interrupt in the same request**. This replaces partial continuation:
+collect the complete batch on the client, then submit it once. An MCP rejection
+(`approve: false`) counts as a decision; existing graph-specific rejection
+behavior is unchanged. Rich `function_call_output` commands must include
+`resume`; `update` and `goto` may accompany it but cannot replace it.
+Empty and whitespace-only string outputs are valid results and are preserved.
+
+As in LangGraph, `resume` dictionaries whose keys are all 32-character lowercase
+hexadecimal interrupt IDs are ID maps, including an empty dictionary. An ID map
+must include every pending ID even when only one interrupt is pending; an empty
+or stale map cannot apply accompanying updates. To resume with an empty object
+as the answer, send `{"resume": {"<call_id>": {}}}`.
+
+Missing responses return HTTP 400 with an `invalid_request_error` object, before
+SSE starts or background work is admitted. Function errors identify the first
+missing `call_id` (`No tool output found for function call <id>.`); MCP errors
+list the missing approval request IDs. The checkpoint is unchanged and no
+partial answers are saved, so retry with the complete batch against the same
+parent. Each paired function/MCP item represents the same interrupt, not two
+separate requests. Interrupts raised later belong to a new batch.
+
+Already-admitted queued turns are checked again when execution starts. If they
+are incomplete for the then-current checkpoint, their terminal result reports
+`invalid_request_error`; an HTTP response already sent cannot become a 400.
+
+#### Continuation hooks
+
+Both hosts expose an asynchronous `validate_resume_input` hook. It receives the
+selected pending interrupts and a normalized resume command. Responses first
+calls the existing `build_resume_command` hook; Invocations honors `build_input`
+overrides returning a `Command`. Custom protocols therefore do not have to use
+the default function/MCP wire format just to reach their existing resume hook.
+The default validator still requires a complete batch, including explicit MCP
+rejections as decisions. A command that will execute must itself answer every
+pending interrupt; original MCP items cannot fill gaps left by custom hooks.
+Only a whole-batch rejection may count MCP decisions without resume values.
+Responses also honors custom `detect_rejection` protocols that decline the whole
+pending batch without a resume command; partial MCP decisions remain invalid.
+
+Normalization, validation, and custom rejection detection may run at admission
+and again at execution. Keep these hooks side-effect-free: do not advance the
+graph or accumulate partial answers. The host owns HTTP error conversion and
+request-context cleanup.
+Unexpected hook failures return server errors; task-backed Invocations persist
+a terminal failed envelope and end their event streams.
+
+For Invocations, select `thread_id`, `checkpoint_ns`, and `checkpoint_id` through
+the shared `build_checkpoint_config` hook so preflight and task execution inspect
+the same checkpoint:
+
+```python
+from langchain_core.runnables import RunnableConfig
+from langchain_azure_ai.agents.hosting import InvocationsHostServer
+
+class NamespacedHost(InvocationsHostServer):
+    def build_checkpoint_config(self, thread_id: str) -> RunnableConfig:
+        config = super().build_checkpoint_config(thread_id)
+        config["configurable"]["thread_id"] = f"my-agent:{thread_id}"
+        return config
+```
+
+**Migration:** move checkpoint-identity overrides out of
+`build_task_runnable_config` and into `build_checkpoint_config`.
+`build_task_runnable_config` remains available for execution-only settings such
+as callbacks and transient task context; changing its checkpoint identity now
+raises a configuration error with migration guidance. Ordinary, non-task-backed
+Invocations still honor `build_runnable_config` overrides.
+
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
 | Graph configuration | Conversation source | Graph input on later turns |
@@ -337,7 +406,6 @@ For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
 
 Azure AI Content Understanding is also available as a document loader via `AzureAIContentUnderstandingLoader`. See the [Content Understanding loader notebook](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/content_understanding_loader_demo.ipynb) for a full walkthrough.
-
 
 ## Changelog
 

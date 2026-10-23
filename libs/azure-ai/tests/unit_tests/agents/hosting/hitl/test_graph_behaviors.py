@@ -229,15 +229,7 @@ class TestParallelInterrupts:
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_stays_paused_until_every_branch_is_answered(self) -> None:
-        """Answering one of two parallel pauses must not resume the other.
-
-        The branch that was answered runs to completion, the other stays
-        suspended, and the turn comes back with exactly *one* sentinel — the
-        outstanding one. Re-emitting the answered question too would leave
-        the client unable to tell what is still owed, and answering it again
-        is a no-op (see the duplicate-answer test), so the conversation would
-        dead-end.
-        """
+        """A partial batch advances neither branch and can be retried in full."""
         host = ResponsesHostServer(build_parallel_interrupt_graph())
         conversation_id = "conv-parallel-partial"
         with client_for(host) as client:
@@ -259,22 +251,19 @@ class TestParallelInterrupts:
                     "input": [resume_item(call_ids["question_a"], "A")],
                 },
             )
-            assert second.status_code == 200, second.text
-            second_payload = second.json()
-            second_sentinels = sentinels(second_payload)
-            assert len(second_sentinels) == 1, second_payload
-            assert interrupt_value(second_sentinels[0]) == "question_b"
-            # Same interrupt, so the client may reuse either id it was given.
-            assert second_sentinels[0]["call_id"] == call_ids["question_b"]
-            # Branch a already committed its output while b stays suspended.
-            assert "a=A" in assistant_text(second_payload), second_payload
-            assert "b=" not in assistant_text(second_payload), second_payload
+            assert second.status_code == 400, second.text
+            assert second.json()["error"]["message"] == (
+                f"No tool output found for function call {call_ids['question_b']}."
+            )
 
             third = client.post(
                 "/responses",
                 json={
                     "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_b"], "B")],
+                    "input": [
+                        resume_item(call_ids["question_a"], "A"),
+                        resume_item(call_ids["question_b"], "B"),
+                    ],
                 },
             )
             assert third.status_code == 200, third.text
@@ -285,7 +274,7 @@ class TestParallelInterrupts:
             assert "a=A" in text and "b=B" in text, third_payload
 
     @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_does_not_reemit_answered_branch_that_returns_empty_update(self) -> None:
+    def test_full_resume_completes_branch_that_returns_empty_update(self) -> None:
         host = ResponsesHostServer(build_parallel_empty_update_interrupt_graph())
         conversation_id = "conv-parallel-empty-update"
         with client_for(host) as client:
@@ -304,35 +293,19 @@ class TestParallelInterrupts:
                 "/responses",
                 json={
                     "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_a"], "A")],
+                    "input": [
+                        resume_item(call_ids["question_a"], "A"),
+                        resume_item(call_ids["question_b"], "B"),
+                    ],
                 },
             )
             assert second.status_code == 200, second.text
-            second_sentinels = sentinels(second.json())
-            assert len(second_sentinels) == 1, second.text
-            assert interrupt_value(second_sentinels[0]) == "question_b"
-
-            third = client.post(
-                "/responses",
-                json={
-                    "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_b"], "B")],
-                },
-            )
-            assert third.status_code == 200, third.text
-            assert third.json()["status"] == "completed", third.text
-            assert not sentinels(third.json()), third.text
+            assert second.json()["status"] == "completed", second.text
+            assert not sentinels(second.json()), second.text
 
     @REAL_INTERRUPT_ASYNC_XFAIL
-    def test_ignores_a_repeated_answer_to_the_same_interrupt(self) -> None:
-        """Answering an already-resolved interrupt is a no-op, not a rewrite.
-
-        A client that retries — a dropped connection, an impatient user, a
-        buggy loop — must not be able to overwrite an answer the graph has
-        already consumed, nor knock the still-outstanding branch loose. The
-        stale id no longer matches anything pending, so the host falls back
-        to re-emitting the outstanding sentinel and the first answer stands.
-        """
+    def test_first_answer_wins_for_duplicate_in_complete_batch(self) -> None:
+        """Duplicate answers cannot overwrite the first value in a full batch."""
         host = ResponsesHostServer(build_parallel_interrupt_graph())
         conversation_id = "conv-parallel-duplicate"
         with client_for(host) as client:
@@ -349,44 +322,20 @@ class TestParallelInterrupts:
                 "/responses",
                 json={
                     "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_a"], "A1")],
+                    "input": [
+                        resume_item(call_ids["question_a"], "A1"),
+                        resume_item(call_ids["question_a"], "A2"),
+                        resume_item(call_ids["question_b"], "B"),
+                    ],
                 },
             )
             assert second.status_code == 200, second.text
-            assert "a=A1" in assistant_text(second.json()), second.text
-
-            # Same interrupt, different answer, after it was already consumed.
-            third = client.post(
-                "/responses",
-                json={
-                    "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_a"], "A2")],
-                },
-            )
-            assert third.status_code == 200, third.text
-            third_payload = third.json()
-            # The outstanding pause is re-emitted, unchanged and still alone.
-            third_sentinels = sentinels(third_payload)
-            assert len(third_sentinels) == 1, third_payload
-            assert interrupt_value(third_sentinels[0]) == "question_b"
-            # The graph was never advanced, so the turn carries no new output.
-            assert assistant_text(third_payload) == "", third_payload
-
-            fourth = client.post(
-                "/responses",
-                json={
-                    "conversation": {"id": conversation_id},
-                    "input": [resume_item(call_ids["question_b"], "B")],
-                },
-            )
-            assert fourth.status_code == 200, fourth.text
-            fourth_payload = fourth.json()
-            assert fourth_payload["status"] == "completed", fourth_payload
-            assert not sentinels(fourth_payload), fourth_payload
-            text = assistant_text(fourth_payload)
-            # The first answer stood; the retry never reached the graph.
-            assert "a=A1" in text and "b=B" in text, fourth_payload
-            assert "A2" not in text, fourth_payload
+            payload = second.json()
+            assert payload["status"] == "completed", payload
+            assert not sentinels(payload), payload
+            text = assistant_text(payload)
+            assert "a=A1" in text and "b=B" in text, payload
+            assert "A2" not in text, payload
 
 
 class TestSequentialInterrupts:

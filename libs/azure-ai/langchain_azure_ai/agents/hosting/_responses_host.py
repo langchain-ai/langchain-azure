@@ -38,7 +38,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
-    from azure.ai.agentserver.core import resolve_state_subdir
+    from azure.ai.agentserver.core import (
+        FoundryAgentRequestContext,
+        reset_request_context,
+        resolve_state_subdir,
+        set_request_context,
+    )
+    from azure.ai.agentserver.core.platform_headers import ERROR_SOURCE
     from azure.ai.agentserver.core.streaming import EventStream, streams
     from azure.ai.agentserver.responses import (
         ResponseContext,
@@ -60,6 +66,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from starlette.responses import JSONResponse, Response
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -70,6 +77,7 @@ from langchain_azure_ai.agents.hosting import (
 )
 
 from ._converters import (
+    IncompleteResumeError,
     UsageAccumulator,
     build_messages_input,
     detect_pending_interrupts,
@@ -79,7 +87,9 @@ from ._converters import (
     stream_graph_to_events,
     track_pending_interrupts,
     validate_approval_responses,
+    validate_resume_command,
 )
+from ._messages import INTERNAL_SERVER_ERROR
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     CheckpointRef,
@@ -113,6 +123,10 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
+
+
+class _ResumeRejectionError(ValueError):
+    """A custom protocol rejection that terminates the pending batch."""
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -383,9 +397,87 @@ class ResponsesHostServer:
 
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self._app)
+        self._install_resume_validation()
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
+
+    def _install_resume_validation(self) -> None:
+        # The SDK has no public pre-admission validator. Its history preflight
+        # already has a parsed request and context, before persistence or SSE.
+        endpoint = self._app._endpoint
+        prefetch = getattr(
+            endpoint,
+            "_langchain_azure_history_prefetch",
+            endpoint._prefetch_history_ids,
+        )
+        setattr(endpoint, "_langchain_azure_history_prefetch", prefetch)
+
+        @wraps(prefetch)
+        async def prefetch_and_validate(
+            execution: Any, *, span: Any, agent_session_id: str | None
+        ) -> Response | None:
+            error = await prefetch(
+                execution, span=span, agent_session_id=agent_session_id
+            )
+            if error is not None:
+                return error
+            if not self._graph_has_checkpointer:
+                return None
+            context = execution.context
+            token = set_request_context(
+                FoundryAgentRequestContext(
+                    user_id=context.platform_context.user_id_key or None,
+                    call_id=context.platform_context.call_id or None,
+                    session_id=agent_session_id,
+                )
+            )
+            try:
+                config = await self.build_runnable_config(execution.parsed, context)
+                pending = await detect_pending_interrupts(self._graph, config)
+                if pending:
+                    await self._prepare_resume_command(
+                        execution.parsed, context, pending
+                    )
+            except _ResumeRejectionError:
+                return None
+            except IncompleteResumeError as exc:
+                logger.info("Rejected incomplete Responses continuation: %s", exc)
+                span.end(exc)
+                return JSONResponse(
+                    {"error": exc.as_error()},
+                    status_code=400,
+                    headers={
+                        **endpoint._session_headers(agent_session_id),
+                        ERROR_SOURCE: "user",
+                    },
+                )
+            except asyncio.CancelledError as exc:
+                span.end(exc)
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Responses continuation preflight failed")
+                span.end(exc)
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": INTERNAL_SERVER_ERROR,
+                            "type": "server_error",
+                            "param": None,
+                            "code": "server_error",
+                        }
+                    },
+                    status_code=500,
+                    headers={
+                        **endpoint._session_headers(agent_session_id),
+                        ERROR_SOURCE: "upstream",
+                    },
+                )
+            finally:
+                reset_request_context(token)
+            return None
+
+        setattr(endpoint, "_prefetch_history_ids", prefetch_and_validate)
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -562,7 +654,9 @@ class ResponsesHostServer:
         LangChain ``HumanInTheLoopMiddleware`` requests to ordered
         approve/reject decisions.
         Other approvals echo the interrupt's value. Override to plug in
-        custom resume protocols.
+        custom resume protocols. This hook normalizes input before validation
+        and must not mutate graph state. It may run at admission and again when
+        a queued turn executes.
 
         Args:
             request: The parsed create-response request.
@@ -572,11 +666,90 @@ class ResponsesHostServer:
 
         Returns:
             A ``(command, consumed_call_ids)`` pair. ``command`` is
-            ``None`` when no matching resume item was found.
+            ``None`` when the input produces no resumable command.
         """
         del request  # unused in the default implementation
         items = await context.get_input_items()
-        return parse_resume_command(items, pending)
+        return parse_resume_command(items, pending, require_complete=False)
+
+    async def _prepare_resume_command(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence["Interrupt"],
+    ) -> tuple[Optional["Command"], frozenset[str]]:
+        """Honor whole-batch rejection before normalizing and validating input."""
+        items = await context.get_input_items()
+        approval_error = validate_approval_responses(items, pending)
+        rejection = await self.detect_rejection(request, context, pending)
+        if approval_error is None and rejection is not None:
+            raise _ResumeRejectionError(rejection)
+        resume_command, consumed_call_ids = await self.build_resume_command(
+            request, context, pending
+        )
+        await self.validate_resume_input(request, context, pending, resume_command)
+        if rejection is not None:
+            raise _ResumeRejectionError(rejection)
+        return resume_command, consumed_call_ids
+
+    async def validate_resume_input(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence["Interrupt"],
+        resume_command: Optional["Command"],
+    ) -> None:
+        """Validate a complete continuation batch before graph execution.
+
+        Runs before HTTP admission and again when the turn executes. A queued
+        turn is checked against the checkpoint selected when it starts.
+        The existing :meth:`build_resume_command` hook runs first, so custom
+        protocols are checked using their normalized command rather than being
+        rejected for not using the default wire format. This hook must not
+        mutate graph state or retain partial answers.
+
+        A custom :meth:`detect_rejection` protocol may reject the whole batch
+        without producing a resume command. Built-in approval errors do not
+        excuse missing decisions. Otherwise, MCP decisions cannot fill gaps
+        in the normalized command.
+
+        Args:
+            request: The parsed create-response request.
+            context: The response context for the request.
+            pending: Interrupts pending on the selected checkpoint.
+            resume_command: Command normalized by :meth:`build_resume_command`,
+                or ``None`` when no resume command was produced.
+
+        Raises:
+            IncompleteResumeError: If the request omits a pending response.
+            ValueError: If a custom protocol rejects the whole pending batch.
+        """
+        if not pending:
+            return
+        items = await context.get_input_items()
+        rejection = await self.detect_rejection(request, context, pending)
+        try:
+            validate_resume_command(
+                resume_command,
+                pending,
+                items=items,
+                rejecting=rejection is not None,
+            )
+        except IncompleteResumeError as exc:
+            if (
+                rejection is not None
+                and validate_approval_responses(items, pending) is None
+            ):
+                raise _ResumeRejectionError(rejection) from None
+            if exc.param is not None:
+                raise
+            validate_resume_command(
+                resume_command,
+                pending,
+                items=items,
+                output_items=await context.get_history(),
+                rejecting=rejection is not None,
+            )
 
     async def detect_rejection(
         self,
@@ -595,6 +768,8 @@ class ResponsesHostServer:
 
         Override to plug in custom rejection protocols (e.g. recognising
         a sentinel ``function_call_output`` payload as a rejection).
+        Custom whole-batch rejection detection may run at admission and again
+        at execution, so this hook must be side-effect-free.
 
         Args:
             request: The parsed create-response request.
@@ -906,22 +1081,10 @@ class ResponsesHostServer:
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
-                    # HITL:
-                    # Rejection short-circuits the turn into ``response.failed``
-                    # so a client-issued ``mcp_approval_response{approve:false}``
-                    # is not silently dropped.
-                    approval_error = await self.detect_rejection(
-                        request, context, pending
-                    )
-                    if approval_error is not None:
-                        yield stream.emit_failed(
-                            code="interrupt_rejected",
-                            message=approval_error,
-                        )
-                        return
-                    resume_command, consumed_call_ids = await self.build_resume_command(
-                        request, context, pending
-                    )
+                    (
+                        resume_command,
+                        consumed_call_ids,
+                    ) = await self._prepare_resume_command(request, context, pending)
 
                 if pending and resume_command is None:
                     # Graph is paused but the client did not supply a matching
@@ -1002,11 +1165,24 @@ class ResponsesHostServer:
                     yield event
 
             yield stream.emit_completed(usage=usage.response_usage)
-        except Exception as exc:  # noqa: BLE001
+        except _ResumeRejectionError as exc:
+            yield stream.emit_failed(
+                code="interrupt_rejected",
+                message=str(exc),
+                usage=usage.response_usage,
+            )
+        except IncompleteResumeError as exc:
+            logger.info("Rejected incomplete Responses continuation: %s", exc)
+            yield stream.emit_failed(
+                code="invalid_request_error",
+                message=str(exc),
+                usage=usage.response_usage,
+            )
+        except Exception:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
             yield stream.emit_failed(
                 code="internal_error",
-                message=str(exc),
+                message=INTERNAL_SERVER_ERROR,
                 usage=usage.response_usage,
             )
 

@@ -8,7 +8,7 @@ and surfaces the proposed call to the client as the **standard OpenAI
 already supports MCP server approvals (e.g. the OpenAI Python SDK)
 can drive this agent without code changes.
 
-The host also emits a paired `function_call` item with the same id, so
+The host also emits a paired `function_call` item for the same interrupt, so
 clients that need to override the approval payload (or send a richer
 LangGraph `Command`) can use the standard `function_call_output` channel
 as an alternative.
@@ -34,10 +34,10 @@ The graph has three nodes:
   invokes the tool and emits a `ToolMessage`.
 
 When the graph pauses, the host serializes the pending interrupt as
-**two** output items in the same response, both keyed by the same
-LangGraph interrupt id:
+**two** output items in the same response, both referring to the same
+LangGraph interrupt:
 
-1. An **`mcp_approval_request`** item with `id == interrupt.id`,
+1. An **`mcp_approval_request`** item with a host-generated `mcpr_*` ID,
    `server_label == "langgraph"`, `name ==
    "__hosted_agent_adapter_interrupt__"`, and `arguments` JSON of the
    form:
@@ -91,7 +91,7 @@ The response `output` array will contain:
 - an `mcp_approval_request` item — the OpenAI-standard approval
   prompt. **Copy its `id`** to use in Step 2.
 - a paired `function_call` item with `name ==
-  "__hosted_agent_adapter_interrupt__"` and the same id (advanced
+  "__hosted_agent_adapter_interrupt__"` and `call_id == interrupt.id` (advanced
   channel — see "Advanced resume" below).
 
 The approval item's `arguments` JSON describes the proposed action:
@@ -196,9 +196,53 @@ curl -X POST http://127.0.0.1:8088/responses \
 The graph resumes with the client-supplied payload (`Vancouver` instead
 of `Seattle`) and the tool is invoked with the overridden arguments.
 
-This channel supports `{"resume": ...}`, `{"update": {...}}`, and
-`{"goto": "..."}` in any combination — the same payload shape as a
-LangGraph `Command(...)`.
+This channel requires a resume value, either a raw payload or
+`{"resume": ...}`. A rich command may also include `update` and `goto`;
+control-only commands do not answer an interrupt.
+Empty and whitespace-only string outputs are valid answers. An interrupt-ID
+map must include the pending ID even for a single interrupt; to pass an empty
+object as the answer, use `{"resume": {"<call_id>": {}}}`.
+
+#### Complete-batch continuation
+
+Both Responses and Invocations hosts require an answer for **every interrupt
+currently pending on the selected checkpoint**, in one request. Collect all
+answers on the client before submitting them; the host no longer accepts or
+saves partial batches. Use `input` for Responses and the structured `message`
+list for Invocations.
+
+For function-call responses, missing results return HTTP 400:
+
+```json
+{
+  "error": {
+    "message": "No tool output found for function call <missing-call-id>.",
+    "type": "invalid_request_error",
+    "param": "input",
+    "code": null
+  }
+}
+```
+
+For MCP responses, the message is
+`The following MCP approval requests do not have an approval: <missing-ids>`
+and `param` is `null`. `approve: false` is a response, not a missing decision;
+the existing rejection semantics described above are unchanged.
+
+Incomplete requests do not advance the graph, start SSE, or admit background
+work. Retry the complete batch against the same parent. A paired
+`function_call` / `mcp_approval_request` represents one interrupt, so either
+channel can answer it. A later sequential interrupt starts a new batch.
+
+Both hosts expose `validate_resume_input` after input normalization. Custom
+Responses resume protocols can keep their `build_resume_command` override;
+Invocations can keep a `build_input` override returning a `Command`. These hooks
+may run at admission and again at execution, so they must not mutate graph
+state or retain partial answers.
+
+For custom Invocations checkpoint selection, use `build_checkpoint_config`
+rather than changing identity in the execution-only task config hook. See the
+[hook contract and migration example](../../../../../libs/azure-ai/README.md#continuation-hooks).
 
 #### Conflict resolution
 
