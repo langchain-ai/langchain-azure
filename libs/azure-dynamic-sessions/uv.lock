@@ -784,9 +784,9 @@ typing = [
 [package.metadata]
 requires-dist = [
     { name = "azure-core", specifier = ">=1.38.0" },
-    { name = "azure-identity", specifier = "~=1.16" },
+    { name = "azure-identity", specifier = ">=1.16" },
     { name = "langchain-core", specifier = ">=1.0.1" },
-    { name = "requests", specifier = "~=2.31" },
+    { name = "requests", specifier = ">=2.31" },
 ]
 
 [package.metadata.requires-dev]
