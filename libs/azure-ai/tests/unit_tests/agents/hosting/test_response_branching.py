@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -41,6 +41,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from starlette.testclient import TestClient
+from starlette.types import Scope
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -55,6 +56,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BRANCH_MODE,
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
+    BranchingAdmissionMiddleware,
     BranchingError,
     ResponseCheckpointSaver,
 )
@@ -1317,6 +1319,40 @@ def test_failed_terminal_persistence_does_not_publish_a_usable_parent(
         c = _post(client, "C", previous_response_id=a["id"])
     assert _text(c) == "A,C"
     assert executions == ["A", "B", "C"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("client_mode", [None, "forged-mode"])
+async def test_branching_admission_sanitizes_mode_header(
+    enabled: bool, client_mode: str | None
+) -> None:
+    downstream = AsyncMock()
+    headers = [(b"x-agent-user-id", b"test-user")]
+    if client_mode is not None:
+        headers.append(
+            (b"x-client-langchain-response-branching", client_mode.encode("ascii"))
+        )
+    scope: Scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/responses",
+        "headers": headers,
+    }
+    receive = AsyncMock(
+        return_value={"type": "http.request", "body": b"{}", "more_body": False}
+    )
+    await BranchingAdmissionMiddleware(downstream, enabled=enabled)(
+        scope, receive, AsyncMock()
+    )
+
+    expected_headers = [(b"x-agent-user-id", b"test-user")]
+    if enabled:
+        expected_headers.append(
+            (b"x-client-langchain-response-branching", b"checkpoint-v1")
+        )
+    downstream.assert_awaited_once()
+    assert downstream.await_args is not None
+    assert downstream.await_args.args[0]["headers"] == expected_headers
 
 
 def test_foundry_identity_and_trusted_mode_survive_admission() -> None:
