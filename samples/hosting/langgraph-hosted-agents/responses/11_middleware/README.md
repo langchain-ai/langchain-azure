@@ -5,21 +5,49 @@ the **Responses protocol**. The email tool is simulated; no real email is sent.
 
 ## How It Works
 
+### Middleware
+
+[agent.py](agent.py) combines both middleware with ordinary `create_agent` wiring.
+The model and checkpointer are supplied by [main.py](main.py):
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+
+from agent import check_message_limit, send_email
+
+graph = create_agent(
+    model=model,
+    tools=[send_email],
+    middleware=[
+        check_message_limit,
+        HumanInTheLoopMiddleware(
+            interrupt_on={
+                "send_email": {"allowed_decisions": ["approve", "edit", "reject"]}
+            }
+        ),
+    ],
+    checkpointer=checkpointer,
+)
+```
+
+- Built-in [HumanInTheLoopMiddleware](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), which pauses email actions for approve/edit/reject.
+- One custom [`@before_model` hook](https://docs.langchain.com/oss/python/langchain/middleware/custom#node-style-hooks), which stops the turn at 50 accumulated messages before a model call.
+
+| Review decision | Expected result |
+| --- | --- |
+| Approve | Execute the proposed simulated email. |
+| Edit | Change only the recipient; preserve subject/body. The original model call stays unchanged, and the tool result includes the executed arguments and a human-review notice. |
+| Reject | Return rejection feedback without executing the tool. |
+
+The message check is not a pre-tool limit: a reviewed tool can execute on resume
+before the next check stops the following model call.
+
 ### Model Integration
 
 [main.py](main.py) connects `ChatOpenAI` to the Foundry project's model endpoint
 using `DefaultAzureCredential`, `use_responses_api=True`, and
 `output_version="responses/v1"`.
-
-### Middleware
-
-[agent.py](agent.py) combines:
-
-- Built-in [HumanInTheLoopMiddleware](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), which pauses email actions for approve/edit/reject.
-- One custom [`@before_model` hook](https://docs.langchain.com/oss/python/langchain/middleware/custom#node-style-hooks), which stops the turn at 50 accumulated messages before a model call.
-
-The message check is not a pre-tool limit: a reviewed tool can execute on resume
-before the next check stops the following model call.
 
 ### Agent Hosting
 
@@ -55,10 +83,7 @@ python client.py --decision edit --recipient bob@example.com
 python client.py --decision reject
 ```
 
-The tool waits for review. Edit changes only the recipient; reject returns
-feedback without executing it. A decision applies to all displayed actions.
-Edits preserve the original model call and add the executed arguments and a
-human-review notice to the tool result.
+The tool waits for review. A decision applies to all displayed actions.
 The client handles one review round and reports if another review is needed.
 
 ### Streaming

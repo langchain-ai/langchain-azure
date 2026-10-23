@@ -1337,6 +1337,35 @@ def check_11_middleware(decision: str, *, stream: bool) -> None:
         server.terminate()
 
 
+def check_11_message_limit() -> None:
+    """responses/11_middleware: custom hook stops at 50 accumulated messages."""
+    requires_foundry_endpoint()
+    server = start_sample("responses/11_middleware/main.py")
+    try:
+        _step("50 messages: custom hook ends the turn")
+        response = _post(
+            server,
+            "/responses",
+            json_body={
+                "input": [{"role": "user", "content": "Check the message limit."}] * 50,
+            },
+        )
+        _assert(response.status_code == 200, f"HTTP 200 (got {response.status_code})")
+        payload = response.json()
+        _assert(payload.get("status") == "completed", "response status == completed")
+        _assert(
+            _response_text(payload).strip() == "Conversation limit reached.",
+            "custom hook returns the conversation limit message",
+        )
+        _assert(
+            not set(_output_types(payload))
+            & {"function_call", "function_call_output", "mcp_approval_request"},
+            "limit response has no tool or approval output",
+        )
+    finally:
+        server.terminate()
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -1388,6 +1417,7 @@ def _build_registry() -> list[Check]:
         Check("responses/11_middleware", "edit_sse", partial(check_11_middleware, "edit", stream=True), "Native middleware edit (SSE)."),
         Check("responses/11_middleware", "reject_json", partial(check_11_middleware, "reject", stream=False), "Native middleware reject (JSON)."),
         Check("responses/11_middleware", "reject_sse", partial(check_11_middleware, "reject", stream=True), "Native middleware reject (SSE)."),
+        Check("responses/11_middleware", "message_limit", check_11_message_limit, check_11_message_limit.__doc__ or ""),
         Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
         Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
         Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),
