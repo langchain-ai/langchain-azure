@@ -8,8 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -50,6 +50,27 @@ async def _close_resource(close: Callable[[], Awaitable[None]]) -> None:
     await task
 
 
+async def _finish_cleanup(
+    close: Awaitable[None], cancellation: asyncio.CancelledError | None = None
+) -> None:
+    cleanup = asyncio.ensure_future(close)
+    try:
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+        await cleanup
+    except Exception:
+        if cancellation is None:
+            raise
+        logger.exception("Hosting cleanup failed during cancellation")
+    finally:
+        if cancellation is not None:
+            raise cancellation
+
+
 class StateStoreClientFactory:
     """Create, lend and close compatible clients within one handler.
 
@@ -70,6 +91,15 @@ class StateStoreClientFactory:
         self.closing = False
         self.closed = False
         self.session: aiohttp.ClientSession | None = None
+
+    @contextmanager
+    def bind(self) -> Iterator[None]:
+        """Bind this factory only for the current iterator operation."""
+        token = _current_factory.set(self)
+        try:
+            yield
+        finally:
+            _current_factory.reset(token)
 
     async def acquire(
         self,
@@ -131,19 +161,20 @@ class StateStoreClientFactory:
 
 
 @asynccontextmanager
-async def state_store_client_scope() -> AsyncIterator[None]:
+async def state_store_client_scope(
+    *, bind: bool = True
+) -> AsyncIterator[StateStoreClientFactory]:
     """Own reusable clients and bound cleanup after the handler exits."""
     factory = StateStoreClientFactory()
-    token = _current_factory.set(factory)
+    token = _current_factory.set(factory) if bind else None
     cancellation: asyncio.CancelledError | None = None
     try:
-        yield
+        yield factory
     except asyncio.CancelledError as exc:
         cancellation = exc
         raise
     finally:
         factory.closing = True
-        _current_factory.reset(token)
 
         async def close() -> None:
             try:
@@ -166,22 +197,11 @@ async def state_store_client_scope() -> AsyncIterator[None]:
                 factory.closed = True
                 await factory.stack.aclose()
 
-        cleanup = asyncio.create_task(close())
         try:
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError as exc:
-                    if cancellation is None:
-                        cancellation = exc
-            await cleanup
-        except Exception:
-            if cancellation is None:
-                raise
-            logger.exception("State Store cleanup failed during cancellation")
+            if token is not None:
+                _current_factory.reset(token)
         finally:
-            if cancellation is not None:
-                raise cancellation
+            await _finish_cleanup(close(), cancellation)
 
 
 @asynccontextmanager

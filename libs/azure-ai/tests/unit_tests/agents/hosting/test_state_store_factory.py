@@ -264,6 +264,25 @@ async def test_scopes_never_share_clients(clients: list[Any]) -> None:
     assert all(c.options["transport"].session.closed for c in clients)
 
 
+async def test_scope_reset_failure_still_closes_resources(clients: list[Any]) -> None:
+    async def events() -> Any:
+        async with state_store_client_scope():
+            async with get_state_store(object(), FoundryStateStore, "store"):
+                pass
+            yield "ready"
+
+    iterator = events()
+    assert await asyncio.create_task(anext(iterator)) == "ready"
+    try:
+        with pytest.raises(ValueError, match="different Context"):
+            await iterator.aclose()
+        clients[0].aclose.assert_awaited_once()
+        assert clients[0].options["transport"].session.closed
+    finally:
+        if not clients[0].options["transport"].session.closed:
+            await clients[0].options["transport"].session.close()
+
+
 async def test_factory_rejects_another_event_loop_before_borrowing(
     clients: list[Any],
 ) -> None:

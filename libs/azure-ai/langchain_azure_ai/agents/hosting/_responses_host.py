@@ -68,6 +68,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
     _add_request_hosting_features,
     _hosting_feature_scope,
+    _request_hosting_features,
 )
 
 from ._converters import (
@@ -90,6 +91,7 @@ from ._responses import (
     TaskStorageManager,
 )
 from ._storage import state_store_client_scope
+from ._storage.state_store_factory import _close_resource, _finish_cleanup
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
@@ -101,12 +103,16 @@ if TYPE_CHECKING:
 async def _closing_stream(
     stream: AsyncIterator[Any],
 ) -> AsyncIterator[AsyncIterator[Any]]:
+    cancellation: asyncio.CancelledError | None = None
     try:
         yield stream
+    except asyncio.CancelledError as exc:
+        cancellation = exc
+        raise
     finally:
         close = getattr(stream, "aclose", None)
         if close is not None:
-            await close()
+            await _finish_cleanup(_close_resource(close), cancellation)
 
 
 logger = logging.getLogger(__name__)
@@ -1072,15 +1078,29 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        with _hosting_feature_scope(self._hosting_features):
-            async with (
-                state_store_client_scope(),
-                _closing_stream(
-                    self.handle_create(request, context, cancellation_signal)
-                ) as events,
-            ):
-                async for event in events:
+        features = self._hosting_features
+        async with state_store_client_scope(bind=False) as factory:
+            events = self.handle_create(request, context, cancellation_signal)
+            cancellation: asyncio.CancelledError | None = None
+            try:
+                while True:
+                    # AgentServer can resume this iterator in a different Task.
+                    with factory.bind(), _hosting_feature_scope(features):
+                        try:
+                            event = await anext(events)
+                        except StopAsyncIteration:
+                            return
+                        finally:
+                            features = _request_hosting_features.get()
                     yield event
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+                raise
+            finally:
+                close = getattr(events, "aclose", None)
+                if close is not None:
+                    with factory.bind(), _hosting_feature_scope(features):
+                        await _finish_cleanup(_close_resource(close), cancellation)
 
     # ------------------------------------------------------------------
     # Validation

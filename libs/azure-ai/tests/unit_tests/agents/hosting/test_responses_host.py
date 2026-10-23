@@ -114,6 +114,177 @@ async def test_handler_owns_clients_through_generator_exit(
     store.aclose.assert_awaited_once()
 
 
+@pytest.mark.parametrize("ending", ["complete", "close", "cancel"])
+async def test_handler_context_is_bound_per_iteration_across_tasks(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents import hosting
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+    from langchain_azure_ai.agents.hosting._storage.state_store_factory import (
+        _current_factory,
+    )
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
+    factories = []
+    expected_features = HostingFeature.RESPONSES | HostingFeature.HITL
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        factory = _current_factory.get()
+        assert factory is not None
+        factories.append(factory)
+        try:
+            async with get_state_store(server, FoundryStateStore, "store"):
+                pass
+            hosting._add_request_hosting_features(HostingFeature.HITL)
+            yield "first"
+            assert _current_factory.get() is factory
+            assert hosting.get_hosting_features() == expected_features
+            if ending == "cancel":
+                raise asyncio.CancelledError("stop")
+            yield "second"
+        finally:
+            assert _current_factory.get() is factory
+            assert hosting.get_hosting_features() == expected_features
+            async with get_state_store(server, FoundryStateStore, "store"):
+                store.aclose.assert_not_awaited()
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    iterator = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+
+    async def advance() -> Any:
+        return await anext(iterator)
+
+    try:
+        assert await asyncio.create_task(advance()) == "first"
+        assert _current_factory.get() is None
+        if ending == "close":
+            await cast(AsyncGenerator[Any, None], iterator).aclose()
+        elif ending == "cancel":
+            with pytest.raises(asyncio.CancelledError, match="stop"):
+                await asyncio.create_task(advance())
+        else:
+            assert await asyncio.create_task(advance()) == "second"
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.create_task(advance())
+        assert _current_factory.get() is None
+        assert hosting._request_hosting_features.get() == HostingFeature.NONE
+        acquire.assert_awaited_once()
+        store.aclose.assert_awaited_once()
+        assert factories[0].session is not None and factories[0].session.closed
+    finally:
+        await factories[0].stack.aclose()
+
+
+@pytest.mark.parametrize("ignore_cancellation", [False, True])
+async def test_iterator_shutdown_timeout_still_closes_factory(
+    monkeypatch: pytest.MonkeyPatch, ignore_cancellation: bool
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import (
+        get_state_store,
+        state_store_factory,
+    )
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "graph"):
+            pass
+        try:
+            yield "messages", (AIMessage(content="ready"), {})
+        finally:
+            closing.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                if not ignore_cancellation:
+                    raise
+                await release.wait()
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+
+    async def handler() -> None:
+        iterator = server._handle_create_async_gen(
+            _request(), _context(), asyncio.Event()
+        )
+        async for event in iterator:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+        await cast(AsyncGenerator[Any, None], iterator).aclose()
+
+    task = asyncio.create_task(handler())
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, "Iterator shutdown must not block factory cleanup"
+        with pytest.raises(TimeoutError):
+            await task
+        store.aclose.assert_awaited_once()
+        assert acquire.call_args.kwargs["transport"].session.closed
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_agentserver_cancel_winddown_preserves_handler_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from azure.ai.agentserver.responses.hosting._orchestrator import _iter_with_winddown
+
+    from langchain_azure_ai.agents.hosting import get_hosting_features
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    cancellation_signal = asyncio.Event()
+    settled = []
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        try:
+            async with get_state_store(server, FoundryStateStore, "store") as first:
+                pass
+            yield "ready"
+        finally:
+            assert get_hosting_features() & HostingFeature.RESPONSES
+            async with get_state_store(server, FoundryStateStore, "store") as reused:
+                assert reused is first
+                store.aclose.assert_not_awaited()
+            settled.append(True)
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    events = _iter_with_winddown(
+        server._handle_create_async_gen(_request(), _context(), cancellation_signal),
+        cancellation_signal,
+    )
+    assert await anext(events) == "ready"
+    cancellation_signal.set()
+    with pytest.raises(StopAsyncIteration):
+        await anext(events)
+    assert settled == [True]
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
+
+
 async def test_early_handler_close_settles_graph_before_closing_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
