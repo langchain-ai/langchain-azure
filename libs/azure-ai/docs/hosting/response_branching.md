@@ -213,7 +213,7 @@ sequenceDiagram
 The handler emits an SDK admission checkpoint before provider or graph I/O,
 then calls the overridable `build_runnable_config` hook. A new root gets its
 user-scoped response ID as the thread ID, initially without a checkpoint ID.
-For a child, the default hook calls
+For a child without persisted recovery progress, the default hook calls
 `select_branch_checkpoint`:
 
 - Load the parent through `ResponseProviderProtocol.get_response` with the
@@ -246,6 +246,9 @@ supplies the namespace, then reads `graph.aget_state` through
 
 Only then does the child execute its input. Failed checkpoint reads or
 eligibility checks prevent execution even when response metadata looked valid.
+Parent-state validation precedes rejection of unsupported approval or tool-result
+inputs. A fresh branch builds its input directly after these checks; interrupt
+detection and HITL resume handling remain in the ordinary continuation path.
 
 #### 3. Execute new input and persist recoverable progress
 
@@ -322,9 +325,11 @@ LangGraph message IDs with the response, so persisted text is not appended
 again on recovery.
 
 For a child C created from A, recovery first checks C's persisted progress.
-If it exists, resume C directly. If no progress was persisted, load A's stored
-boundary again, validate its exact checkpoint, and replay C's request input.
-No independent origin record is needed:
+After configuration hooks, graph-bound configuration merging, and saver setup,
+the handler validates C's own checkpoint and ownership before configuring native
+resume with input `None`. This path does not select A's checkpoint. Only if no
+progress was persisted does it load A's stored boundary again, validate its exact
+checkpoint, and replay C's request input. No independent origin record is needed:
 
 | Persisted state at recovery                                               | Action                                                                                                                                                            |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -364,7 +369,7 @@ storage may run again. This is not an exactly-once guarantee.
 | Source                                                                                                | What to follow                                                                                                                                                                                   |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Responses handler](../../langchain_azure_ai/agents/hosting/_responses_host.py)                       | `build_runnable_config`, `handle_create`, `_new_stream`: configuration, execution, and recovery orchestration.                                                                                   |
-| [Branch selection and saver wrapper](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | `select_branch_checkpoint`, `validate_branch_checkpoint`, `mark_response_boundary`, `ResponseCheckpointSaver`: metadata selection, exact reads, persistence barriers, and recovery-head pinning. |
+| [Branch selection and saver wrapper](../../langchain_azure_ai/agents/hosting/_responses/branching.py) | `get_recovery_checkpoint`, `select_branch_checkpoint`, `validate_branch_checkpoint`, `mark_response_boundary`, `ResponseCheckpointSaver`: separate recovery progress and parent selection, exact reads, persistence barriers, and recovery-head pinning. |
 | [Graph-stream conversion](../../langchain_azure_ai/agents/hosting/_converters/_stream.py)             | `stream_graph_to_events`, `StreamConverter.checkpoint`: graph persistence before SDK progress publication.                                                                                       |
 | [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py)                   | Parent-state preservation, reducer history, configuration hooks, concurrent siblings, write failures, recovery ownership, terminal storage failure, and durable saver recreation.                |
 

@@ -59,6 +59,7 @@ from langchain_azure_ai.agents.hosting._responses.branching import (
     BranchingAdmissionMiddleware,
     BranchingError,
     ResponseCheckpointSaver,
+    select_branch_checkpoint,
 )
 from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (
     TaskStorageManager,
@@ -367,7 +368,24 @@ def test_paused_parent_is_rejected_without_resuming(stream: bool, reply: str) ->
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_static_pause_is_not_mistaken_for_a_finished_graph(stream: bool) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        "B",
+        [{"type": "function_call_output", "call_id": "unused", "output": "B"}],
+        [
+            {
+                "type": "mcp_approval_response",
+                "approval_request_id": "unused",
+                "approve": True,
+            }
+        ],
+    ],
+    ids=["text", "tool_result", "approval"],
+)
+def test_static_pause_is_not_mistaken_for_a_finished_graph(
+    stream: bool, value: Any
+) -> None:
     graph, executions = _branch_graph()
     graph.interrupt_before_nodes = ["record"]
     server = ResponsesHostServer(
@@ -379,7 +397,7 @@ def test_static_pause_is_not_mistaken_for_a_finished_graph(stream: bool) -> None
         assert not any(
             item["type"] == "mcp_approval_request" for item in parent["output"]
         )
-        child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
+        child = _post(client, value, previous_response_id=parent["id"], stream=stream)
     assert child["status"] == "failed", child
     assert "paused parent" in child["error"]["message"]
     assert executions == []
@@ -902,6 +920,9 @@ async def test_checkpoint_write_failure_never_publishes_missing_progress(
     )
 
 
+@pytest.mark.parametrize(
+    "host_class", [ResponsesHostServer, _ConfiguredHost, _ReplacementConfiguredHost]
+)
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize(
     "progress",
@@ -917,9 +938,16 @@ async def test_checkpoint_write_failure_never_publishes_missing_progress(
     ],
 )
 async def test_recovery_uses_exact_parent_or_owned_progress(
-    enabled: bool, progress: str
+    enabled: bool, progress: str, host_class: type[ResponsesHostServer]
 ) -> None:
     graph, executions = _branch_graph()
+    graph.checkpointer = _ConfiguredSaver()
+    graph = graph.with_config(
+        {
+            "configurable": {"tenant_id": "tenant"},
+            "metadata": {"graph_marker": "bound"},
+        }
+    )
     config: RunnableConfig = {"configurable": {"thread_id": "root"}}
     await graph.ainvoke({"messages": [HumanMessage(content="A")]}, config)
     parent_config = (await graph.aget_state(config)).config
@@ -966,7 +994,7 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
     await graph.ainvoke({"messages": [HumanMessage(content="C")]}, parent_config)
     executions.clear()
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(
+    server = host_class(
         graph, store=provider if enabled else None, enable_response_branching=enabled
     )
     if progress == "none":
@@ -992,7 +1020,13 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
     context.persisted_response = _response_object(
         "child", previous_response_id="parent", internal_metadata=metadata
     )
-    with patch.object(provider, "get_response", wraps=provider.get_response) as lookup:
+    with (
+        patch.object(provider, "get_response", wraps=provider.get_response) as lookup,
+        patch(
+            "langchain_azure_ai.agents.hosting._responses_host.select_branch_checkpoint",
+            wraps=select_branch_checkpoint,
+        ) as selection,
+    ):
         events = [
             event
             async for event in server.handle_create(
@@ -1003,6 +1037,7 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
             lookup.assert_awaited_once_with("parent", context=context.platform_context)
         else:
             lookup.assert_not_awaited()
+            selection.assert_not_awaited()
     terminal = events[-1]["response"]
     assert terminal["status"] == (
         "completed" if progress in {"none", "own", "published"} else "failed"
@@ -1023,6 +1058,39 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
         assert snapshot.values["ledger"] == ["A", "B"]
         if progress == "none":
             assert _text(terminal) == "A,B"
+
+
+@pytest.mark.parametrize("saved_progress", [False, True])
+async def test_branching_root_recovery_is_rejected_before_config(
+    saved_progress: bool,
+) -> None:
+    graph, executions = _branch_graph()
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    metadata: dict[str, object] = {BRANCH_MODE_METADATA: BRANCH_MODE}
+    if saved_progress:
+        metadata[METADATA_LANGGRAPH_THREAD_ID] = "root"
+        metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = "root-progress"
+    context = _context(response_id="root", conversation_id=None)
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    context.is_recovery = True
+    context.persisted_response = _response_object("root", internal_metadata=metadata)
+    with patch.object(
+        server, "build_runnable_config", wraps=server.build_runnable_config
+    ) as config:
+        events = [
+            event
+            async for event in server.handle_create(
+                _request(), context, asyncio.Event()
+            )
+        ]
+    terminal = events[-1]["response"]
+    assert terminal["status"] == "failed", terminal
+    assert "Interrupted root responses are not resumed" in terminal["error"]["message"]
+    assert executions == []
+    config.assert_not_awaited()
+    context.get_input_items.assert_not_awaited()
 
 
 async def test_recovery_restores_text_from_completed_parallel_pending_writes(

@@ -198,13 +198,42 @@ def _require_completed_tools(parent: Mapping[str, Any]) -> None:
         )
 
 
+def get_recovery_checkpoint(context: ResponseContext) -> CheckpointRef | None:
+    """Read the current response's progress without selecting its parent.
+
+    Args:
+        context: The response context carrying any persisted recovery state.
+
+    Returns:
+        The saved progress reference, or ``None`` when no progress was recorded.
+
+    Raises:
+        BranchingError: If recorded checkpoint metadata is malformed.
+    """
+    if not context.is_recovery or context.persisted_response is None:
+        return None
+    metadata = _response_metadata(context.persisted_response)
+    ref = TaskStorageManager(metadata).checkpoint_ref
+    if ref is None and any(
+        name in metadata
+        for name in (
+            METADATA_LANGGRAPH_THREAD_ID,
+            METADATA_LANGGRAPH_CHECKPOINT_ID,
+        )
+    ):
+        raise BranchingError(
+            "invalid_branch_state", "The recorded execution checkpoint is invalid."
+        )
+    return ref
+
+
 async def select_branch_checkpoint(
     provider: ResponseProviderProtocol | None,
     *,
     parent_id: str,
     context: ResponseContext,
 ) -> CheckpointRef:
-    """Select saved response progress, or the completed parent's exact boundary."""
+    """Select the completed parent's exact boundary for fresh execution."""
     if provider is None:
         provider = getattr(context, "_provider", None)
     selections = _branch_selections.get()
@@ -212,67 +241,49 @@ async def select_branch_checkpoint(
     if selections is not None and key in selections:
         return selections[key]
 
-    ref = None
-    if context.is_recovery and context.persisted_response is not None:
-        metadata = _response_metadata(context.persisted_response)
-        ref = TaskStorageManager(metadata).checkpoint_ref
-        if ref is None and any(
-            name in metadata
-            for name in (
-                METADATA_LANGGRAPH_THREAD_ID,
-                METADATA_LANGGRAPH_CHECKPOINT_ID,
-            )
-        ):
-            raise BranchingError(
-                "invalid_branch_state", "The recorded execution checkpoint is invalid."
-            )
-
-    if ref is None:
-        if provider is None:
-            raise BranchingError(
-                "invalid_branch_state", "The Responses provider is unavailable."
-            )
-        parent = await provider.get_response(
-            parent_id, context=context.platform_context
+    if provider is None:
+        raise BranchingError(
+            "invalid_branch_state", "The Responses provider is unavailable."
         )
-        if parent is None or parent.get("status") != "completed":
-            raise BranchingError(
-                "invalid_branch_state",
-                "The parent response must be stored and completed.",
-            )
-        metadata = _response_metadata(parent)
-        boundary = metadata.get(BRANCH_BOUNDARY_KEY)
-        if boundary is None:
-            raise BranchingError(
-                "invalid_branch_state",
-                "The parent response has no completed response-branching boundary.",
-            )
-        if (
-            not isinstance(boundary, dict)
-            or boundary.get("version") != "1"
-            or boundary.get("checkpoint_ns") != ""
-            or boundary.get("paused") not in ("true", "false")
-        ):
-            raise BranchingError(
-                "invalid_branch_state", "The response checkpoint record is invalid."
-            )
-        ref = TaskStorageManager(metadata).checkpoint_ref
-        if ref is None:
-            raise BranchingError(
-                "checkpoint_unavailable", "The parent has no completed checkpoint."
-            )
-        if any(name in boundary for name in ("thread_id", "checkpoint_id")) and (
-            CheckpointRef.from_dict(boundary) != ref
-        ):
-            raise BranchingError(
-                "invalid_branch_state", "The parent checkpoint metadata does not agree."
-            )
-        if boundary["paused"] == "true":
-            raise BranchingError(
-                "unsupported_branch_parent",
-                "Response branching does not support paused parent graphs.",
-            )
-        _require_completed_tools(parent)
+    parent = await provider.get_response(parent_id, context=context.platform_context)
+    if parent is None or parent.get("status") != "completed":
+        raise BranchingError(
+            "invalid_branch_state",
+            "The parent response must be stored and completed.",
+        )
+    metadata = _response_metadata(parent)
+    boundary = metadata.get(BRANCH_BOUNDARY_KEY)
+    if boundary is None:
+        raise BranchingError(
+            "invalid_branch_state",
+            "The parent response has no completed response-branching boundary.",
+        )
+    if (
+        not isinstance(boundary, dict)
+        or boundary.get("version") != "1"
+        or boundary.get("checkpoint_ns") != ""
+        or boundary.get("paused") not in ("true", "false")
+    ):
+        raise BranchingError(
+            "invalid_branch_state", "The response checkpoint record is invalid."
+        )
+    ref = TaskStorageManager(metadata).checkpoint_ref
+    if ref is None:
+        raise BranchingError(
+            "checkpoint_unavailable", "The parent has no completed checkpoint."
+        )
+    if any(name in boundary for name in ("thread_id", "checkpoint_id")) and (
+        CheckpointRef.from_dict(boundary) != ref
+    ):
+        raise BranchingError(
+            "invalid_branch_state", "The parent checkpoint metadata does not agree."
+        )
+    if boundary["paused"] == "true":
+        raise BranchingError(
+            "unsupported_branch_parent",
+            "Response branching does not support paused parent graphs.",
+        )
+    _require_completed_tools(parent)
 
     if selections is not None:
         selections[key] = ref

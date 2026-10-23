@@ -104,6 +104,7 @@ from ._responses.branching import (
     BranchingError,
     ResponseCheckpointSaver,
     branch_selection_scope,
+    get_recovery_checkpoint,
     mark_response_boundary,
     select_branch_checkpoint,
     validate_branch_checkpoint,
@@ -762,10 +763,11 @@ class ResponsesHostServer:
 
         With response branching enabled, this hook selects the completed
         parent's exact root checkpoint instead of the conversation-chain head.
-        Recovery selects the current response's persisted progress when present;
-        otherwise it selects the parent again. Selection is reused within the
-        request. Graph checkpoint validation finishes after subclass overrides
-        return, so they can supply application-specific saver configuration.
+        Recovery restores the current response's persisted progress without
+        selecting its parent; only requests without saved progress select the
+        parent again. Parent selection is reused within the request. Graph
+        checkpoint validation finishes after subclass overrides return, so they
+        can supply application-specific saver configuration.
 
         Args:
             request: The parsed create-response request.
@@ -780,13 +782,15 @@ class ResponsesHostServer:
                 return HostingRunnableConfig.create(
                     _scope_thread_id(context.response_id, context), context
                 ).runnable_config
-            ref = await select_branch_checkpoint(
-                self._response_provider,
-                parent_id=parent_id,
-                context=context,
-            )
+            selected_ref = get_recovery_checkpoint(context)
+            if selected_ref is None:
+                selected_ref = await select_branch_checkpoint(
+                    self._response_provider,
+                    parent_id=parent_id,
+                    context=context,
+                )
             return HostingRunnableConfig.create_from_checkpoint(
-                ref, context
+                selected_ref, context
             ).runnable_config
         thread_id = await self._resolve_thread_id(request, context)
         if not self._graph_has_checkpointer:
@@ -1018,12 +1022,12 @@ class ResponsesHostServer:
             context,
         )
         try:
-            branching = self._uses_response_branching(request, context)
+            branching_mode = self._uses_response_branching(request, context)
             recorded_mode = stream.internal_metadata.get(BRANCH_MODE_METADATA)
             if (
                 recovering
                 and recorded_mode is not None
-                and (recorded_mode != BRANCH_MODE or not branching)
+                and (recorded_mode != BRANCH_MODE or not branching_mode)
             ):
                 raise BranchingError(
                     "invalid_branch_state",
@@ -1036,11 +1040,12 @@ class ResponsesHostServer:
             yield stream.emit_failed(code="server_error", message=str(exc))
             return
         yield stream.emit_created()
-        branch_root = branching and not request.get("previous_response_id")
-        publish_branch = branching and (
+        parent_id = request.get("previous_response_id")
+        branch_root = branching_mode and not parent_id
+        publish_branch = branching_mode and (
             request.get("store") is not False or bool(request.get("background"))
         )
-        if branching:
+        if branching_mode:
             stream.internal_metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
         if branch_root and (recovering or context.shutdown.is_set()):
             yield stream.emit_in_progress()
@@ -1080,77 +1085,74 @@ class ResponsesHostServer:
             graph = self._graph
             request_saver = None
             saver = getattr(graph, "checkpointer", None)
-            if branching and not isinstance(saver, BaseCheckpointSaver):
+            if branching_mode and not isinstance(saver, BaseCheckpointSaver):
                 raise BranchingError(
                     "invalid_branch_state", "Recovery requires a checkpoint saver."
                 )
             checkpoint_ref = task_storage.checkpoint_ref if recovering else None
             with branch_selection_scope():
                 config = await self.build_runnable_config(request, context)
-                if branching and isinstance(saver, BaseCheckpointSaver):
+                if branching_mode and isinstance(saver, BaseCheckpointSaver):
                     bound_config = getattr(graph, "config", None)
                     if bound_config:
                         config = merge_configs(bound_config, config)
                         graph = copy(graph)
                         graph.config = None
-                    parent_id = request.get("previous_response_id")
-                    if parent_id:
-                        branch_ref = await select_branch_checkpoint(
-                            self._response_provider,
-                            parent_id=parent_id,
-                            context=context,
-                        )
-                        config = (
-                            HostingRunnableConfig(config)
-                            .with_checkpoint_ref(branch_ref)
-                            .with_response_context(context)
-                            .runnable_config
-                        )
-                        if not (recovering and checkpoint_ref is not None):
-                            await validate_branch_checkpoint(graph, config)
                     request_saver = ResponseCheckpointSaver(
                         saver,
                         branching=True,
                         response_key=_scope_thread_id(context.response_id, context),
                         parent_response_id=parent_id,
                     )
-                    graph = copy(graph)
-                    graph.checkpointer = request_saver
-            # Attach transient execution state after the overridable config
-            # hook. The public Responses handler contract supplies this exact
-            # Event as its third argument; keeping it out of build_runnable_config's
-            # signature also preserves existing subclass overrides.
-            config = (
-                HostingRunnableConfig(config)
-                .with_cancellation_signal(cancellation_signal)
-                .runnable_config
-            )
-
-            resume_command: Optional["Command"] = None
-            consumed_call_ids: frozenset[str] = frozenset()
-            graph_input: dict[str, Any] | Command | None
-
-            if checkpoint_ref is not None:
-                # Crash-recovered re-entry. The graph's own persistent
-                # checkpointer holds the mid-turn state, so resume it (input
-                # ``None``) rather than re-injecting the original input. If the
-                # response has no checkpoint yet, replay the request through
-                # the normal input / HITL parsing path below.
-                logger.debug("Recovery: resuming graph from persisted checkpoint")
+                    checkpoint_ref = get_recovery_checkpoint(context)
+                    config = (
+                        HostingRunnableConfig(config)
+                        .with_response_context(context)
+                        .runnable_config
+                    )
+                # Attach transient execution state after the overridable config
+                # hook without changing its signature or subclass overrides.
                 config = (
                     HostingRunnableConfig(config)
-                    .with_checkpoint_ref(checkpoint_ref)
+                    .with_cancellation_signal(cancellation_signal)
                     .runnable_config
                 )
-                if request_saver is not None:
-                    await request_saver.validate_progress(config)
-                    config = request_saver.resume_config(config)
-                graph_input = None
 
-            else:
-                if recovering:
-                    logger.debug("Recovery: replaying request input")
-                if branching and any(
+                if checkpoint_ref is not None:
+                    logger.debug("Recovery: resuming graph from persisted checkpoint")
+                    config = (
+                        HostingRunnableConfig(config)
+                        .with_checkpoint_ref(checkpoint_ref)
+                        .runnable_config
+                    )
+                    if request_saver is not None:
+                        await request_saver.validate_progress(config)
+                        config = request_saver.resume_config(config)
+                elif branching_mode and parent_id:
+                    selected_ref = await select_branch_checkpoint(
+                        self._response_provider,
+                        parent_id=parent_id,
+                        context=context,
+                    )
+                    config = (
+                        HostingRunnableConfig(config)
+                        .with_checkpoint_ref(selected_ref)
+                        .runnable_config
+                    )
+                    await validate_branch_checkpoint(graph, config)
+
+                if request_saver is not None:
+                    graph = copy(graph)
+                    graph.checkpointer = request_saver
+
+            graph_input: dict[str, Any] | Command | None
+
+            if recovering and checkpoint_ref is None:
+                logger.debug("Recovery: replaying request input")
+            if checkpoint_ref is not None:
+                graph_input = None
+            elif branching_mode:
+                if any(
                     item.get("type")
                     in {"function_call_output", "mcp_approval_response"}
                     for item in await context.get_input_items()
@@ -1160,12 +1162,14 @@ class ResponsesHostServer:
                         "Tool-result and approval inputs are not supported "
                         "by response branching.",
                     )
-                # Detect a pause from a previous turn and try to resume it.
-                pending = (
-                    ()
-                    if branching
-                    else await detect_pending_interrupts(self._graph, config)
+                graph_input = await self.build_input(
+                    request, context, skip_call_ids=frozenset()
                 )
+            else:
+                resume_command: Optional["Command"] = None
+                consumed_call_ids: frozenset[str] = frozenset()
+                # Detect a pause from a previous turn and try to resume it.
+                pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1236,7 +1240,7 @@ class ResponsesHostServer:
             ):
                 yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None and not branching:
+            if checkpoint_ref is not None and not branching_mode:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,
@@ -1295,9 +1299,11 @@ class ResponsesHostServer:
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
             yield stream.emit_failed(
-                code="server_error" if branching else "internal_error",
+                code="server_error" if branching_mode else "internal_error",
                 message=(
-                    "The response could not be executed." if branching else str(exc)
+                    "The response could not be executed."
+                    if branching_mode
+                    else str(exc)
                 ),
                 usage=usage.response_usage,
             )
