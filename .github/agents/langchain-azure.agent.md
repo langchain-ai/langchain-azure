@@ -58,8 +58,6 @@ uv lock --check      # verify uv.lock is up to date (run in CI)
 uv lock              # regenerate uv.lock after changing dependencies
 ```
 
-`libs/azure-postgresql` uses `uv run tox -e py`, `uv run tox -m lint`, and `uv run tox -m type`; its Makefile targets delegate to tox and are not equivalent to the other packages' lint targets. Use the package-specific commands when working there.
-
 ### CI/CD
 
 CI is path-aware — it runs lint/test for packages with changed files (via `.github/scripts/check_diff.py`, which lists all seven packages). Tests run on Python 3.11 and 3.14. Relevant infrastructure changes trigger all packages.
