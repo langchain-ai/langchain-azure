@@ -1489,14 +1489,16 @@ def _deep_agents_response(
     return response
 
 
-def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
+def _deep_agents_file_outputs(
+    response: dict[str, Any], file_path: str = "/final_report.md"
+) -> list[str]:
     last_edit = max(
         (
             index
             for index, item in enumerate(response.get("output", []))
             if item.get("type") == "function_call"
             and item.get("name") in {"write_file", "edit_file"}
-            and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
+            and json.loads(item["arguments"]).get("file_path") == file_path
         ),
         default=-1,
     )
@@ -1505,7 +1507,7 @@ def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
         for item in response.get("output", [])[last_edit + 1 :]
         if item.get("type") == "function_call"
         and item.get("name") == "read_file"
-        and json.loads(item["arguments"]).get("file_path") == "/final_report.md"
+        and json.loads(item["arguments"]).get("file_path") == file_path
     }
     return [
         str(item.get("output", ""))
@@ -1515,10 +1517,12 @@ def _deep_agents_file_outputs(response: dict[str, Any]) -> list[str]:
     ]
 
 
-def _deep_agents_report_matches(response: dict[str, Any], report: str) -> bool:
+def _deep_agents_report_matches(
+    response: dict[str, Any], report: str, file_path: str = "/final_report.md"
+) -> bool:
     expected = report.replace("\r\n", "\n").removesuffix("\n").split("\n")
     covered: set[int] = set()
-    for output in _deep_agents_file_outputs(response):
+    for output in _deep_agents_file_outputs(response, file_path):
         match = re.fullmatch(
             r"@@ lines (\d+)-(\d+)(?: of (\d+))?(?: \| [^\n]*?)? @@\n(.*)",
             output.replace("\r\n", "\n"),
@@ -1585,11 +1589,15 @@ def _deep_agents_exports(
     for exported in exports:
         url = urlsplit(exported["download_url"])
         blob_name = url.path.removeprefix(f"/{container}/")
+        match = re.fullmatch(
+            r"[0-9a-f]{32}/([A-Za-z0-9][A-Za-z0-9_-]{0,63}\.md)", blob_name
+        )
         _assert(
             url.scheme == "https"
             and url.netloc == account.netloc
             and url.path.startswith(f"/{container}/")
-            and re.fullmatch(r"[0-9a-f]{32}/final_report\.md", blob_name) is not None,
+            and match is not None
+            and exported.get("file_path") == f"/{match[1]}",
             "export targets a new blob in the configured account and container",
         )
         blob_names.add(blob_name)
@@ -1597,7 +1605,10 @@ def _deep_agents_exports(
 
 
 def _deep_agents_check_export(
-    response: dict[str, Any], report: str, blob_names: set[str]
+    response: dict[str, Any],
+    report: str,
+    blob_names: set[str],
+    report_name: str = "final_report.md",
 ) -> str:
     import hashlib
     from urllib.parse import parse_qs, urlsplit
@@ -1608,7 +1619,7 @@ def _deep_agents_check_export(
     download_url = exported["download_url"]
     permissions = parse_qs(urlsplit(download_url).query)
     _assert(
-        exported.get("file_path") == "/final_report.md"
+        exported.get("file_path") == f"/{report_name}"
         and exported.get("sha256")
         == hashlib.sha256(report.encode("utf-8")).hexdigest(),
         "export digest matches the complete saved report",
@@ -1631,13 +1642,20 @@ def _deep_agents_check_export(
     downloaded = httpx.get(download_url, timeout=30)
     downloaded.raise_for_status()
     _assert(
+        downloaded.headers.get("content-disposition")
+        == f'attachment; filename="{report_name}"',
+        "download uses the selected report filename",
+    )
+    _assert(
         downloaded.content == report.encode("utf-8"),
         "downloaded Blob bytes exactly match the saved and delivered report",
     )
     return download_url
 
 
-def _deep_agents_revised_report(response: dict[str, Any], report: str) -> str:
+def _deep_agents_revised_report(
+    response: dict[str, Any], report: str, file_path: str = "/final_report.md"
+) -> str:
     outputs = {
         item["call_id"]: str(item.get("output", ""))
         for item in response.get("output", [])
@@ -1648,7 +1666,7 @@ def _deep_agents_revised_report(response: dict[str, Any], report: str) -> str:
         if item.get("type") != "function_call" or item.get("name") != "edit_file":
             continue
         arguments = json.loads(item["arguments"])
-        if arguments.get("file_path") != "/final_report.md":
+        if arguments.get("file_path") != file_path:
             continue
         result = outputs.get(item["call_id"], "")
         if not result or result.lower().startswith("error"):
@@ -1780,10 +1798,11 @@ def _check_deep_agents(*, stream: bool) -> None:
                 "Plan with write_todos, save /research_request.md, delegate to one "
                 "research-agent to use web_search and think_tool and return "
                 "findings with source URLs, without writing the final report. "
-                "The coordinator must write /final_report.md itself, with a "
+                "The coordinator must write /report-v1.md itself, with a "
                 "short cited report based on those findings. Read back the "
                 "entire report, reading all remaining pages if needed, before "
-                "publishing it with publish_report and returning its full contents "
+                "publishing it with publish_report(report_name='report-v1.md') "
+                "and returning its full contents "
                 "followed by the exact Download paragraph. Limit this to one search. "
                 f"Include this exact label in the report: {marker}"
             ),
@@ -1812,9 +1831,9 @@ def _check_deep_agents(*, stream: bool) -> None:
             for item in calls
             if item.get("name") == "write_file"
             for arguments in [json.loads(item["arguments"])]
-            if arguments.get("file_path") == "/final_report.md"
+            if arguments.get("file_path") == "/report-v1.md"
         ]
-        _assert(bool(reports), "coordinator wrote /final_report.md")
+        _assert(bool(reports), "coordinator wrote /report-v1.md")
         report = reports[-1]
         task_outputs = [
             item.get("output", "")
@@ -1835,10 +1854,12 @@ def _check_deep_agents(*, stream: bool) -> None:
             "saved report contains its label and source URLs",
         )
         _assert(
-            _deep_agents_report_matches(response, report),
+            _deep_agents_report_matches(response, report, "/report-v1.md"),
             "read_file returned the complete report written during research",
         )
-        original_url = _deep_agents_check_export(response, report, blob_names)
+        original_url = _deep_agents_check_export(
+            response, report, blob_names, "report-v1.md"
+        )
 
         session_options: dict[str, Any] = {}
         if agent_name:
@@ -1878,7 +1899,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             blob_names=blob_names,
             previous_response_id=response["id"],
             input=(
-                "Use read_file to return the entire existing /final_report.md. "
+                "Use read_file to return the entire existing /report-v1.md. "
                 "Read all remaining pages if needed. Do not research, edit or write."
             ),
             **session_options,
@@ -1897,7 +1918,7 @@ def _check_deep_agents(*, stream: bool) -> None:
             "continuation did not research or rewrite the report",
         )
         _assert(
-            _deep_agents_report_matches(continued, report),
+            _deep_agents_report_matches(continued, report, "/report-v1.md"),
             "continued read_file returned the complete saved report",
         )
         _assert(
@@ -1919,11 +1940,14 @@ def _check_deep_agents(*, stream: bool) -> None:
             blob_names=blob_names,
             previous_response_id=continued["id"],
             input=(
-                "Add the following exact section to /final_report.md using "
-                "edit_file. Keep the entire original report, citations and URLs "
+                "Read /report-v1.md and use write_file to copy its exact content "
+                "to /report-v2.md. Then use edit_file to add the following exact "
+                "section to /report-v2.md. Do not change /report-v1.md. Keep the "
+                "entire original report, citations and URLs "
                 "unchanged; this revision needs no new research. The validation "
                 "label is only an identifier, not a research finding. "
-                "Read the entire updated file after editing, publish_report again, "
+                "Read the entire updated file after editing, call "
+                "publish_report(report_name='report-v2.md'), "
                 "then return its full contents followed by the new Download paragraph."
                 f"\n\n{revision_section}"
             ),
@@ -1934,7 +1958,15 @@ def _check_deep_agents(*, stream: bool) -> None:
                 revised_response.get("agent_session_id") == session_id,
                 "revision stayed in the original test session",
             )
-        revised = _deep_agents_revised_report(revised_response, report)
+        copies = [
+            arguments["content"]
+            for item in revised_response.get("output", [])
+            if item.get("type") == "function_call" and item.get("name") == "write_file"
+            for arguments in [json.loads(item["arguments"])]
+            if arguments.get("file_path") == "/report-v2.md"
+        ]
+        _assert(copies == [report], "revision starts from an exact named working copy")
+        revised = _deep_agents_revised_report(revised_response, report, "/report-v2.md")
         revised_lines = iter(revised.splitlines())
         _assert(
             all(
@@ -1945,15 +1977,25 @@ def _check_deep_agents(*, stream: bool) -> None:
             "revision preserves the original report and adds the requested section",
         )
         _assert(
-            not {"task", "web_search", "write_file"}
-            & set(_tool_call_names(revised_response)),
-            "revision did not repeat research or create a replacement file",
+            not {"task", "web_search"} & set(_tool_call_names(revised_response)),
+            "revision did not repeat research",
         )
         _assert(
-            _deep_agents_report_matches(revised_response, revised),
+            not any(
+                item.get("type") == "function_call"
+                and item.get("name") in {"write_file", "edit_file"}
+                and json.loads(item["arguments"]).get("file_path") == "/report-v1.md"
+                for item in revised_response.get("output", [])
+            ),
+            "revision did not modify the original working file",
+        )
+        _assert(
+            _deep_agents_report_matches(revised_response, revised, "/report-v2.md"),
             "read_file returned the complete revised saved report",
         )
-        revised_url = _deep_agents_check_export(revised_response, revised, blob_names)
+        revised_url = _deep_agents_check_export(
+            revised_response, revised, blob_names, "report-v2.md"
+        )
         _assert(revised_url != original_url, "revision has a new download snapshot")
         original_download = httpx.get(original_url, timeout=30)
         original_download.raise_for_status()
@@ -1970,7 +2012,8 @@ def _check_deep_agents(*, stream: bool) -> None:
             blob_names=blob_names,
             previous_response_id=revised_response["id"],
             input=(
-                "Read all of /final_report.md and return its full contents verbatim. "
+                "Use read_file to read both /report-v1.md and /report-v2.md in full, "
+                "then return only the full /report-v2.md contents verbatim. "
                 "Do not research, edit or publish another copy."
             ),
             **session_options,
@@ -1981,7 +2024,8 @@ def _check_deep_agents(*, stream: bool) -> None:
                 "revised read stayed in the original test session",
             )
         _assert(
-            _deep_agents_report_matches(reread, revised)
+            _deep_agents_report_matches(reread, report, "/report-v1.md")
+            and _deep_agents_report_matches(reread, revised, "/report-v2.md")
             and _deep_agents_answer_matches(reread, revised),
             "read-back and assistant answer both match the entire revised report",
         )
@@ -1998,7 +2042,8 @@ def _check_deep_agents(*, stream: bool) -> None:
             session_ids=session_ids,
             blob_names=blob_names,
             input=(
-                "Use read_file on /final_report.md. If it is missing, report that; "
+                "Use read_file on both /report-v1.md and /report-v2.md. "
+                "If they are missing, report that; "
                 "do not create or research anything."
             ),
             **session_options,
@@ -2013,11 +2058,14 @@ def _check_deep_agents(*, stream: bool) -> None:
             "new conversation checked the file",
         )
         _assert(
-            any(
-                "not found" in output.lower()
-                for output in _deep_agents_file_outputs(isolated)
+            all(
+                any(
+                    "not found" in output.lower()
+                    for output in _deep_agents_file_outputs(isolated, file_path)
+                )
+                for file_path in ("/report-v1.md", "/report-v2.md")
             ),
-            "the report does not exist in the new conversation",
+            "neither named report exists in the new conversation",
         )
         _assert(
             marker not in json.dumps(isolated)

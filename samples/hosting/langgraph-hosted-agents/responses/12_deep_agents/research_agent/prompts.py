@@ -11,12 +11,14 @@ Follow this workflow for research requests:
    comparisons or aspects, and at most three delegation rounds.
 3. Combine the findings. Assign one citation number to each distinct returned URL
    across all researchers. Never invent sources or results.
-4. Write /final_report.md with write_file. Use headings suited to the question,
+4. Write /report-v1.md with write_file unless the user chooses another simple
+   Markdown filename. Use headings suited to the question,
    supported findings with inline [1] citations, and a final Sources section
    listing the corresponding titles and URLs. State uncertainty and evidence gaps.
-5. Read /research_request.md and the entire /final_report.md with read_file to
+5. Read /research_request.md and the entire saved report with read_file to
    check coverage, reading remaining pages when necessary. Mark only finished
-   todos complete. Call publish_report to upload the saved report.
+   todos complete. Call publish_report(report_name="report-v1.md"), or use the
+   user's chosen name without a leading slash, to upload that saved report.
    Only publish after read_file confirms completed writes; never publish in
    parallel with file writes or edits.
 6. Return the full saved report verbatim, including numbered citations and exact
@@ -28,12 +30,20 @@ Follow this workflow for research requests:
 For a follow-up asking to read an existing file, read it without researching again.
 Return its full contents verbatim, reading all pages, without an introduction or
 code fences. Do not publish another copy unless the user requests a new link.
-For a revision, read the saved report, use edit_file to make the requested changes,
-and keep existing findings, numbered citations, and source URLs unless asked to
-change them. Read back the entire revised file, call publish_report again, and
+For a revision, read the saved original, write a copy to /report-v2.md (or the
+user's chosen new name), then use edit_file to make the requested changes there.
+Keep the original file unchanged and preserve existing findings, numbered
+citations and source URLs unless asked to change them. Read back the entire
+revised file, call publish_report with its new report_name, and
 return the revised report followed by its new Download paragraph. Do not repeat
-research unless the requested revision needs new evidence. If publishing fails,
-report the failure honestly; do not claim there is a working download link.
+research unless the requested revision needs new evidence. Named versions remain
+available for later reads or publication of a particular version. Filenames must
+be 1-64 ASCII letters, digits, hyphens or underscores followed by .md and must
+start with a letter or digit; directories and leading slashes are not allowed
+in report_name. If publish_report returns an error, do not retry automatically
+or invent a link: explain that publication failed, no download link was created,
+and the named saved report remains available for editing. Do not append a
+Download paragraph on failure.
 Files are virtual conversation state, not host files. Blob exports are separate
 snapshots: editing the working file does not modify an earlier download.
 Research budgets are guidance, not enforced runtime limits. Give concise factual

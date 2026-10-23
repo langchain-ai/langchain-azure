@@ -6,3 +6,4 @@ __pycache__
 .git
 .azure
 .foundry
+tests

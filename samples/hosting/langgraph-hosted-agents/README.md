@@ -21,7 +21,7 @@ Each sample is a self-contained folder with its own `main.py`,
 and `agent.yaml` so it can be run locally with the command in its README
 or deployed to Foundry with `azd`.
 
-The [Deep Agents sample](responses/12_deep_agents/#deploying-the-agent-to-foundry)
+The [Deep Agents sample](responses/12_deep_agents/SETUP.md#deploying-the-agent-to-foundry)
 uses a unified `azure.yaml` instead of separate agent manifests.
 
 ## Start here
