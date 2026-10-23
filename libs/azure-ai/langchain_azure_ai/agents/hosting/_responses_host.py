@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -67,6 +68,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
     _add_request_hosting_features,
     _hosting_feature_scope,
+    _request_hosting_features,
 )
 
 from ._converters import (
@@ -88,11 +90,32 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
+from ._storage import state_store_client_scope
+from ._storage.state_store_factory import _close_resource, _finish_cleanup
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
+
+
+@asynccontextmanager
+async def _closing_stream(
+    stream: AsyncIterator[Any],
+) -> AsyncIterator[AsyncIterator[Any]]:
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        yield stream
+    except asyncio.CancelledError as exc:
+        cancellation = exc
+        raise
+    finally:
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await _finish_cleanup(
+                _close_resource(close, "graph_iterator"), cancellation
+            )
+
 
 logger = logging.getLogger(__name__)
 
@@ -951,23 +974,23 @@ class ResponsesHostServer:
                     )
 
             active_interrupts: list["Interrupt"] = []
-            graph_stream = track_pending_interrupts(
+            async with _closing_stream(
                 self._graph.astream(
                     graph_input,
                     config=config,
                     stream_mode=self._stream_modes,
                     durability=self._durability,
-                ),
-                active_interrupts,
-            )
-            async for event in stream_graph_to_events(
-                graph_stream,
-                stream,
-                cancellation_signal=cancellation_signal,
-                shutdown_signal=context.shutdown,
-                usage=usage,
-            ):
-                yield event
+                )
+            ) as graph_stream:
+                graph_stream = track_pending_interrupts(graph_stream, active_interrupts)
+                async for event in stream_graph_to_events(
+                    graph_stream,
+                    stream,
+                    cancellation_signal=cancellation_signal,
+                    shutdown_signal=context.shutdown,
+                    usage=usage,
+                ):
+                    yield event
             checkpoint_ref = task_storage.checkpoint_ref
             if checkpoint_ref is not None:
                 await self._conversation_chain_store.set(
@@ -1057,11 +1080,32 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        with _hosting_feature_scope(self._hosting_features):
-            async for event in self.handle_create(
-                request, context, cancellation_signal
-            ):
-                yield event
+        features = self._hosting_features
+        async with state_store_client_scope(bind=False) as factory:
+            events = self.handle_create(request, context, cancellation_signal)
+            cancellation: asyncio.CancelledError | None = None
+            try:
+                while True:
+                    # AgentServer can resume this iterator in a different Task.
+                    with factory.bind(), _hosting_feature_scope(features):
+                        try:
+                            event = await anext(events)
+                        except StopAsyncIteration:
+                            return
+                        finally:
+                            features = _request_hosting_features.get()
+                    yield event
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+                raise
+            finally:
+                close = getattr(events, "aclose", None)
+                if close is not None:
+                    with factory.bind(), _hosting_feature_scope(features):
+                        await _finish_cleanup(
+                            _close_resource(close, "handler_iterator", factory),
+                            cancellation,
+                        )
 
     # ------------------------------------------------------------------
     # Validation

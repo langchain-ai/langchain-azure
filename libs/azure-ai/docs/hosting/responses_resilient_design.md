@@ -73,6 +73,36 @@ checkpointer. Without the conversation checkpoint reference, the checkpointer
 may contain dangling work that advanced beyond the last committed Responses
 boundary, and a later turn would not know which checkpoint is authoritative.
 
+### State Store client lifetime
+
+Each Responses handler owns a private `StateStoreClientFactory`. The Foundry
+checkpoint saver and conversation-chain store borrow clients from it, from config
+resolution through the final chain write. Each consumer, store name and platform
+user gets a separate client; hosted clients share a handler-owned connection pool.
+Every operation still refreshes store metadata and applies the existing isolation
+and TTL checks. No checkpoint values or descriptors are cached.
+The factory and request feature flags are bound separately for each iterator
+advance or close. Tokens are restored before yielding an event to AgentServer,
+so a later iteration can run in another Task without reusing an old token.
+
+Handler and graph iterator closes each have a five-second limit. Cleanup still
+runs if a ContextVar reset fails or iterator shutdown times out. The handler
+then waits up to five seconds for active storage
+operations. On timeout it cancels the borrowers and allows five seconds for them
+to release their clients. It then closes clients and the connection pool in LIFO
+order, allowing five seconds per resource. Timeouts are logged; a resource close
+timeout raises `TimeoutError` unless the handler is already being cancelled.
+Cancellation retains the original exception, and cleanup failures are logged.
+Timeout logs identify the resource or borrower phase, elapsed seconds and active
+borrower count, without including store names, user IDs or request headers.
+Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation
+retry loops; native asyncio cancellation still preserves its original exception.
+These limits apply only after handler exit; they do not limit graph runtime.
+Standalone operations and caller-supplied transports, pipelines or sessions keep their
+existing client lifetime. Local file storage does not allocate an HTTP session.
+Recovery starts a new factory; reuse does not cross handler invocations.
+Borrowing from another event loop raises `RuntimeError` before accessing clients.
+
 ### Assumptions
 
 The recovery behavior depends on these assumptions to work properly:
