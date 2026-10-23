@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
 from pathlib import Path
@@ -60,6 +61,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import merge_configs
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -828,6 +830,10 @@ class ResponsesHostServer:
           5. emits ``response.completed`` (or ``response.failed`` /
            ``response.cancelled`` on error).
 
+        Unreferenced checkpoints on the default conversation thread are not
+        reused by a new attempt. Recovery with a persisted response checkpoint
+        resumes that exact checkpoint; recovery without one replays the input.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -902,6 +908,34 @@ class ResponsesHostServer:
             else:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
+                conversation_id = (
+                    get_conversation_id(request) or context.conversation_id
+                )
+                configurable = config.get("configurable") or {}
+                if (
+                    self._graph_has_checkpointer
+                    and isinstance(conversation_id, str)
+                    and conversation_id
+                    and configurable.get("thread_id")
+                    == _scope_thread_id(conversation_id, context)
+                    and HostingRunnableConfig(config).checkpoint_ref is None
+                ):
+                    snapshot = await self._graph.aget_state(config)
+                    if snapshot.created_at is not None:
+                        # A replay without committed progress must not reuse
+                        # dangling work, even when the response ID is unchanged.
+                        thread_id = _scope_thread_id(
+                            f"{context.response_id}:{uuid.uuid4().hex}", context
+                        )
+                        logger.debug(
+                            "Conversation %s has no committed checkpoint; "
+                            "starting a fresh graph thread %s",
+                            conversation_id,
+                            thread_id,
+                        )
+                        config = merge_configs(
+                            config, {"configurable": {"thread_id": thread_id}}
+                        )
                 # Detect a pause from a previous turn and try to resume it.
                 pending = await detect_pending_interrupts(self._graph, config)
                 if pending:
