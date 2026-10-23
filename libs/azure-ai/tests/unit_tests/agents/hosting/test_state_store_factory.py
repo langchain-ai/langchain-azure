@@ -504,6 +504,10 @@ async def test_cleanup_cancels_stuck_borrower_before_closing(
         clients[0].aclose.assert_awaited_once()
         assert clients[0].options["transport"].session.closed
         assert "timed out" in caplog.text
+        record = next(r for r in caplog.records if "borrower_drain" in r.getMessage())
+        elapsed, borrowers = cast(tuple[float, int], record.args)
+        assert elapsed >= 0
+        assert borrowers == 1
     finally:
         release.set()
         await asyncio.gather(owner, *children, return_exceptions=True)
@@ -555,7 +559,10 @@ async def test_cleanup_preserves_original_cancellation(
 
 @pytest.mark.parametrize("ignore_cancellation", [False, True])
 async def test_cleanup_bounds_hanging_client_close(
-    monkeypatch: pytest.MonkeyPatch, clients: list[Any], ignore_cancellation: bool
+    monkeypatch: pytest.MonkeyPatch,
+    clients: list[Any],
+    ignore_cancellation: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
     closing, release = asyncio.Event(), asyncio.Event()
@@ -571,7 +578,9 @@ async def test_cleanup_bounds_hanging_client_close(
 
     async def handler() -> None:
         async with state_store_client_scope():
-            async with get_state_store(object(), FoundryStateStore, "store"):
+            async with get_state_store(
+                object(), FoundryStateStore, "private-store-name"
+            ):
                 pass
             clients[0].aclose.side_effect = close
 
@@ -583,9 +592,42 @@ async def test_cleanup_bounds_hanging_client_close(
         with pytest.raises(TimeoutError):
             await owner
         assert clients[0].options["transport"].session.closed
+        record = next(r for r in caplog.records if "timed out" in r.getMessage())
+        resource, elapsed, borrowers = cast(tuple[str, float, int], record.args)
+        assert resource == "store_client"
+        assert elapsed >= 0
+        assert borrowers == 0
+        assert "private-store-name" not in caplog.text
     finally:
         release.set()
         await asyncio.gather(owner, return_exceptions=True)
+
+
+async def test_session_timeout_log_has_safe_resource_label(
+    monkeypatch: pytest.MonkeyPatch,
+    clients: list[Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    session = SimpleNamespace(close=AsyncMock())
+
+    async def close() -> None:
+        await asyncio.sleep(1)
+
+    session.close.side_effect = close
+    monkeypatch.setattr(
+        state_store_factory.aiohttp, "ClientSession", lambda **kw: session
+    )
+    with pytest.raises(TimeoutError):
+        async with state_store_client_scope():
+            async with get_state_store(object(), FoundryStateStore, "private-store"):
+                pass
+    record = next(r for r in caplog.records if "timed out" in r.getMessage())
+    resource, elapsed, borrowers = cast(tuple[str, float, int], record.args)
+    assert resource == "shared_session"
+    assert elapsed >= 0
+    assert borrowers == 0
+    assert "private-store" not in caplog.text
 
 
 async def test_cleanup_preserves_asyncio_timeout(clients: list[Any]) -> None:

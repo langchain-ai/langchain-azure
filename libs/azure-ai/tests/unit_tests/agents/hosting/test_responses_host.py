@@ -250,7 +250,9 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
 
 @pytest.mark.parametrize("ignore_cancellation", [False, True])
 async def test_iterator_shutdown_timeout_still_closes_factory(
-    monkeypatch: pytest.MonkeyPatch, ignore_cancellation: bool
+    monkeypatch: pytest.MonkeyPatch,
+    ignore_cancellation: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from azure.ai.agentserver.core.storage import FoundryStateStore
 
@@ -304,6 +306,13 @@ async def test_iterator_shutdown_timeout_still_closes_factory(
             await task
         store.aclose.assert_awaited_once()
         assert acquire.call_args.kwargs["transport"].session.closed
+        resources = {
+            record.args[0]
+            for record in caplog.records
+            if "timed out" in record.getMessage() and isinstance(record.args, tuple)
+        }
+        assert "handler_iterator" in resources
+        assert resources <= {"handler_iterator", "graph_iterator"}
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

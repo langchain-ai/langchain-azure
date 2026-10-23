@@ -112,7 +112,9 @@ async def _closing_stream(
     finally:
         close = getattr(stream, "aclose", None)
         if close is not None:
-            await _finish_cleanup(_close_resource(close), cancellation)
+            await _finish_cleanup(
+                _close_resource(close, "graph_iterator"), cancellation
+            )
 
 
 logger = logging.getLogger(__name__)
@@ -1100,7 +1102,10 @@ class ResponsesHostServer:
                 close = getattr(events, "aclose", None)
                 if close is not None:
                     with factory.bind(), _hosting_feature_scope(features):
-                        await _finish_cleanup(_close_resource(close), cancellation)
+                        await _finish_cleanup(
+                            _close_resource(close, "handler_iterator", factory),
+                            cancellation,
+                        )
 
     # ------------------------------------------------------------------
     # Validation

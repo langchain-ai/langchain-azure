@@ -11,7 +11,8 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any
+from time import perf_counter
+from typing import Any, Literal
 
 import aiohttp
 from anyio import CancelScope
@@ -37,7 +38,15 @@ _current_factory: ContextVar[StateStoreClientFactory | None] = ContextVar(
 )
 
 
-async def _close_resource(close: Callable[[], Awaitable[None]]) -> None:
+async def _close_resource(
+    close: Callable[[], Awaitable[None]],
+    resource: Literal[
+        "handler_iterator", "graph_iterator", "store_client", "shared_session"
+    ],
+    factory: StateStoreClientFactory | None = None,
+) -> None:
+    factory = factory if factory is not None else _current_factory.get()
+    started = perf_counter()
     task = asyncio.ensure_future(close())
     done, _ = await asyncio.wait({task}, timeout=_CLEANUP_TIMEOUT_SECONDS)
     if not done:
@@ -46,8 +55,13 @@ async def _close_resource(close: Callable[[], Awaitable[None]]) -> None:
         task.add_done_callback(
             lambda done: None if done.cancelled() else done.exception()
         )
-        logger.warning("State Store resource cleanup timed out")
-        raise TimeoutError("State Store resource cleanup timed out")
+        logger.warning(
+            "Hosting cleanup timed out: resource=%s elapsed_seconds=%.3f borrowers=%d",
+            resource,
+            perf_counter() - started,
+            len(factory.borrowers) if factory is not None else 0,
+        )
+        raise TimeoutError(f"Hosting cleanup timed out: resource={resource}")
     await task
 
 
@@ -143,7 +157,7 @@ class StateStoreClientFactory:
                             auto_decompress=False,
                         )
                         self.stack.push_async_callback(
-                            _close_resource, self.session.close
+                            _close_resource, self.session.close, "shared_session", self
                         )
                     options["transport"] = AioHttpTransport(
                         session=self.session,
@@ -156,9 +170,11 @@ class StateStoreClientFactory:
                     )
                 store = await store_type.get_or_create(name, *args, **options)
                 if self.closed:
-                    await _close_resource(store.aclose)
+                    await _close_resource(store.aclose, "store_client", self)
                     raise RuntimeError("State Store client factory has already ended")
-                self.stack.push_async_callback(_close_resource, store.aclose)
+                self.stack.push_async_callback(
+                    _close_resource, store.aclose, "store_client", self
+                )
                 self.clients[key] = store
                 return store
 
@@ -180,10 +196,16 @@ async def state_store_client_scope(
         factory.closing = True
 
         async def close() -> None:
+            started = perf_counter()
             try:
                 await asyncio.wait_for(factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS)
             except TimeoutError:
-                logger.warning("State Store cleanup timed out waiting for borrowers")
+                logger.warning(
+                    "Hosting cleanup timed out: resource=borrower_drain "
+                    "elapsed_seconds=%.3f borrowers=%d",
+                    perf_counter() - started,
+                    len(factory.borrowers),
+                )
                 borrowers = set(factory.borrowers)
                 for borrower in borrowers:
                     borrower.cancel()
@@ -194,7 +216,10 @@ async def state_store_client_scope(
                         )
                     except TimeoutError:
                         logger.warning(
-                            "Closing State Store clients with active borrowers"
+                            "Hosting cleanup timed out: resource=borrower_cancel "
+                            "elapsed_seconds=%.3f borrowers=%d",
+                            perf_counter() - started,
+                            len(factory.borrowers),
                         )
             finally:
                 factory.closed = True
