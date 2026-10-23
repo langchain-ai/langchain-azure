@@ -73,6 +73,26 @@ checkpointer. Without the conversation checkpoint reference, the checkpointer
 may contain dangling work that advanced beyond the last committed Responses
 boundary, and a later turn would not know which checkpoint is authoritative.
 
+### Retrying a Conversation Without a Committed Reference
+
+If the default conversation thread already contains checkpoints but the chain
+store has no committed reference, the handler starts the attempt on a fresh,
+user-scoped graph thread. This prevents a failed first turn's intermediate
+state from being included when a new request retries the same conversation.
+The normal first attempt keeps the conversation's logical thread ID when that
+thread has no checkpoints. Successful execution publishes the selected thread
+and checkpoint through the existing conversation-chain write.
+
+Recovery of the same response still uses its persisted checkpoint reference
+when available. If only handler admission was persisted, the handler replays
+the input on a fresh thread when necessary, including when the response ID is
+unchanged. Existing conversation references and application-overridden thread
+selection remain authoritative. Dangling checkpoints are retained for the
+saver's normal cleanup; external side effects are not rolled back.
+
+This does not change interrupt, cancellation, shutdown, or steering publication
+semantics.
+
 ### Assumptions
 
 The recovery behavior depends on these assumptions to work properly:
