@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from typing import Any
 
 import aiohttp
+from anyio import CancelScope
 from azure.ai.agentserver.core import get_request_context
 from azure.ai.agentserver.core.storage import (
     FoundryStateStore,
@@ -55,13 +56,15 @@ async def _finish_cleanup(
 ) -> None:
     cleanup = asyncio.ensure_future(close)
     try:
-        while not cleanup.done():
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError as exc:
-                if cancellation is None:
-                    cancellation = exc
-        await cleanup
+        # Asyncio shielding alone cannot stop repeated AnyIO level cancellation.
+        with CancelScope(shield=True):
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError as exc:
+                    if cancellation is None:
+                        cancellation = exc
+            await cleanup
     except Exception:
         if cancellation is None:
             raise

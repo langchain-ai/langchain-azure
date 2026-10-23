@@ -93,6 +93,8 @@ to release their clients. It then closes clients and the connection pool in LIFO
 order, allowing five seconds per resource. Timeouts are logged; a resource close
 timeout raises `TimeoutError` unless the handler is already being cancelled.
 Cancellation retains the original exception, and cleanup failures are logged.
+Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation
+retry loops; native asyncio cancellation still preserves its original exception.
 These limits apply only after handler exit; they do not limit graph runtime.
 Standalone operations and caller-supplied transports, pipelines or sessions keep their
 existing client lifetime. Local file storage does not allocate an HTTP session.

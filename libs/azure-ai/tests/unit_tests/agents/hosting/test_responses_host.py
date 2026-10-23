@@ -18,6 +18,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anyio import create_task_group
 
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
@@ -112,6 +113,71 @@ async def test_handler_owns_clients_through_generator_exit(
     assert settled == [True]
     assert acquire.await_count == 1
     store.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_anyio_cancelled_handler_waits_for_cleanup_without_spinning(
+    monkeypatch: pytest.MonkeyPatch,
+    close_fails: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    started = asyncio.Event()
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    cancellations = []
+    shield_calls = 0
+    shield = asyncio.shield
+
+    def counted_shield(awaitable: Any) -> Any:
+        nonlocal shield_calls
+        shield_calls += 1
+        return shield(awaitable)
+
+    async def close() -> None:
+        await asyncio.sleep(0.02)
+        if close_fails:
+            raise RuntimeError("close failed")
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            pass
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            cancellations.append(exc)
+            raise
+        yield None
+
+    async def consume() -> None:
+        try:
+            async for _ in server._handle_create_async_gen(
+                _request(), _context(), asyncio.Event()
+            ):
+                pytest.fail("Cancelled handler must not yield output")
+        except asyncio.CancelledError as exc:
+            assert exc is cancellations[0]
+            raise
+
+    store.aclose.side_effect = close
+    monkeypatch.setattr(server, "handle_create", handle)
+    monkeypatch.setattr(asyncio, "shield", counted_shield)
+    async with create_task_group() as group:
+        group.start_soon(consume)
+        await started.wait()
+        group.cancel_scope.cancel()
+    assert len(cancellations) == 1
+    assert shield_calls < 10, "Cleanup must wait instead of retrying level cancellation"
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
+    if close_fails:
+        assert "close failed" in caplog.text
 
 
 @pytest.mark.parametrize("ending", ["complete", "close", "cancel"])
