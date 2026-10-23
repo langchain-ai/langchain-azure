@@ -389,6 +389,7 @@ def test_convert_delta_keeps_tool_calls_without_index() -> None:
 
     chunk = _convert_delta_to_message_chunk(delta, AIMessageChunk)
 
+    assert isinstance(chunk, AIMessageChunk)
     assert [(c["id"], c["name"], c["index"]) for c in chunk.tool_call_chunks] == [
         ("call_a", "get_weather", None),
         ("call_b", "get_time", None),
@@ -415,6 +416,7 @@ def test_aggregated_deltas_keep_complete_tool_calls_without_index_apart() -> Non
 
     merged = first + second
 
+    assert isinstance(merged, AIMessageChunk)
     assert [(c["id"], c["name"], c["args"]) for c in merged.tool_call_chunks] == [
         ("call_a", "get_weather", "{}"),
         ("call_b", "get_time", "{}"),
