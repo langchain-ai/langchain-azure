@@ -1,6 +1,7 @@
 import json
+import subprocess
 import sys
-from typing import Dict
+from pathlib import Path
 
 LIB_DIRS = [
     "libs/azure-dynamic-sessions",
@@ -12,15 +13,26 @@ LIB_DIRS = [
     "libs/azure-compute",
 ]
 
+REPO_ROOT = Path(
+    subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path(__file__).resolve().parent,
+        encoding="utf-8",
+    ).strip()
+)
+DOCS_DIRS = [
+    directory
+    for directory in [f"{lib}/docs" for lib in LIB_DIRS] + ["docs"]
+    if (REPO_ROOT / directory).is_dir()
+]
+
 if __name__ == "__main__":
     files = sys.argv[1:]
 
-    dirs_to_run: Dict[str, set] = {
-        "lint": set(),
-        "test": set(),
-    }
+    test_dirs: set[str] = set()
+    example_dirs: set[str] = set()
 
-    if len(files) == 300:
+    if len(files) >= 300:
         # max diff length is 300 files - there are likely files missing
         raise ValueError("Max diff reached. Please manually run CI on changed libs.")
 
@@ -34,21 +46,45 @@ if __name__ == "__main__":
                 ".github/scripts/check_diff.py",
             )
         ):
-            # add all LANGCHAIN_DIRS for infra changes
-            dirs_to_run["test"].update(LIB_DIRS)
-
-        if any(file.startswith(dir_) for dir_ in LIB_DIRS):
-            for dir_ in LIB_DIRS:
-                if file.startswith(dir_):
-                    dirs_to_run["test"].add(dir_)
+            test_dirs.update(LIB_DIRS)
+            example_dirs.update([*DOCS_DIRS, "samples"])
+        elif file.startswith(".github/tests/"):
+            example_dirs.update([*DOCS_DIRS, "samples"])
+        elif file.startswith("docs/"):
+            example_dirs.add("docs")
+        elif file.startswith("samples/"):
+            parts = file.split("/")
+            directory = "/".join(parts[:2]) if len(parts) > 2 else "samples"
+            example_dirs.add(directory)
         elif file.startswith("libs/"):
-            raise ValueError(
-                f"Unknown lib: {file}. check_diff.py likely needs an update for this new library!"
-            )
+            directory = "/".join(file.split("/")[:2])
+            if directory not in LIB_DIRS:
+                raise ValueError(
+                    f"Unknown lib: {file}. check_diff.py likely needs an update "
+                    "for this new library!"
+                )
+            docs_directory = f"{directory}/docs"
+            if file.startswith(f"{docs_directory}/"):
+                example_dirs.add(docs_directory)
+            else:
+                test_dirs.add(directory)
+                example_dirs.add("samples")
+                if docs_directory in DOCS_DIRS:
+                    example_dirs.add(docs_directory)
 
+    example_dirs = {
+        directory for directory in example_dirs if (REPO_ROOT / directory).is_dir()
+    }
+    if "samples" in example_dirs:
+        example_dirs = {
+            directory
+            for directory in example_dirs
+            if not directory.startswith("samples/")
+        }
     outputs = {
-        "dirs-to-lint": list(dirs_to_run["lint"] | dirs_to_run["test"]),
-        "dirs-to-test": list(dirs_to_run["test"]),
+        "dirs-to-lint": sorted(test_dirs),
+        "dirs-to-test": sorted(test_dirs),
+        "dirs-to-test-docs-samples": sorted(example_dirs),
     }
     for key, value in outputs.items():
         json_output = json.dumps(value)

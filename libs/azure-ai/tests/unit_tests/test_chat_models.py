@@ -23,9 +23,11 @@ from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa:
     ChatResponseMessage,
     CompletionsFinishReason,
     ModelInfo,
+    StreamingChatResponseMessageUpdate,
 )
 from langchain_core.messages import (  # noqa: E402
     AIMessage,
+    AIMessageChunk,
     ChatMessage,
     HumanMessage,
     SystemMessage,
@@ -35,6 +37,7 @@ from langchain_core.messages import (  # noqa: E402
 
 from langchain_azure_ai.chat_models.inference import (  # noqa: E402
     AzureAIChatCompletionsModel,
+    _convert_delta_to_message_chunk,
     _convert_message_content,
     _format_tool_call_for_azure_inference,
     to_inference_message,
@@ -368,6 +371,60 @@ def test_format_tool_call_has_function_type() -> None:
     result = _format_tool_call_for_azure_inference(tool_call)
     assert result.get("type") == "function"
     assert result.get("function", {}).get("name") == "echo"
+
+
+def test_convert_delta_keeps_tool_calls_without_index() -> None:
+    delta = StreamingChatResponseMessageUpdate(
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                },
+                {"id": "call_b", "function": {"name": "get_time", "arguments": "{}"}},
+            ],
+        }
+    )
+
+    chunk = _convert_delta_to_message_chunk(delta, AIMessageChunk)
+
+    assert isinstance(chunk, AIMessageChunk)
+    assert [(c["id"], c["name"], c["index"]) for c in chunk.tool_call_chunks] == [
+        ("call_a", "get_weather", None),
+        ("call_b", "get_time", None),
+    ]
+
+
+def test_aggregated_deltas_keep_complete_tool_calls_without_index_apart() -> None:
+    def delta(call_id: str, name: str) -> StreamingChatResponseMessageUpdate:
+        return StreamingChatResponseMessageUpdate(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": call_id, "function": {"name": name, "arguments": "{}"}}
+                ],
+            }
+        )
+
+    first = _convert_delta_to_message_chunk(
+        delta("call_a", "get_weather"), AIMessageChunk
+    )
+    second = _convert_delta_to_message_chunk(
+        delta("call_b", "get_time"), AIMessageChunk
+    )
+
+    merged = first + second
+
+    assert isinstance(merged, AIMessageChunk)
+    assert [(c["id"], c["name"], c["args"]) for c in merged.tool_call_chunks] == [
+        ("call_a", "get_weather", "{}"),
+        ("call_b", "get_time", "{}"),
+    ]
+    assert [(c["id"], c["name"], c["args"]) for c in merged.tool_calls] == [
+        ("call_a", "get_weather", {}),
+        ("call_b", "get_time", {}),
+    ]
 
 
 # ---------------------------------------------------------------------------

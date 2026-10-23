@@ -163,9 +163,6 @@ jobs:
           uv pip install --no-deps --reinstall-package "$PKG_NAME" "$RELEASE_WHEEL"
           mkdir -p "$RUNNER_TEMP/release-tests"
           cp -R tests Makefile pyproject.toml uv.lock "$RUNNER_TEMP/release-tests/"
-          if [[ -d docs ]]; then
-            cp -R docs "$RUNNER_TEMP/release-tests/"
-          fi
           echo "UV_PROJECT_ENVIRONMENT=$PWD/.venv" >> "$GITHUB_ENV"
 
       - name: Run unit tests
