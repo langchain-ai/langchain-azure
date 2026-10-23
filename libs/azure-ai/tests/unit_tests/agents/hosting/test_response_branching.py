@@ -37,7 +37,7 @@ from langgraph.checkpoint.base import (
     empty_checkpoint,
 )
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from starlette.testclient import TestClient
@@ -1021,6 +1021,126 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
         assert snapshot.values["ledger"] == ["A", "B"]
         if progress == "none":
             assert _text(terminal) == "A,B"
+
+
+async def test_recovery_restores_text_from_completed_parallel_pending_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saver = InMemorySaver()
+    left_saved = asyncio.Event()
+    left_emitted = asyncio.Event()
+    release_right = asyncio.Event()
+    executions: list[str] = []
+    original_put_writes = saver.aput_writes
+
+    async def put_writes(
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        await original_put_writes(config, writes, task_id, task_path)
+        if any(
+            channel == "messages" and any(message.id == "left-B" for message in value)
+            for channel, value in writes
+        ):
+            left_saved.set()
+
+    monkeypatch.setattr(saver, "aput_writes", put_writes)
+
+    async def left(state: MessagesState) -> dict[str, list[AIMessage]]:
+        text = next(
+            message.content
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        )
+        executions.append(f"left-{text}")
+        return {"messages": [AIMessage(content=f"left-{text}", id=f"left-{text}")]}
+
+    async def right(state: MessagesState) -> dict[str, list[AIMessage]]:
+        text = next(
+            message.content
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        )
+        executions.append(f"right-{text}")
+        if text == "B":
+            await release_right.wait()
+        return {"messages": [AIMessage(content=f"right-{text}", id=f"right-{text}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("left", left)
+    builder.add_node("right", right)
+    for node in ("left", "right"):
+        builder.add_edge(START, node)
+        builder.add_edge(node, END)
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver),
+        store=provider,
+        enable_response_branching=True,
+    )
+    with TestClient(server.app) as client:
+        parent = _post(client, "A")
+    assert parent["status"] == "completed", parent
+    executions.clear()
+    request = _request(previous_response_id=parent["id"], store=True, background=True)
+    context = _context(
+        response_id="child", conversation_id=None, current_text="B", provider=provider
+    )
+    context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+    snapshots: list[Any] = []
+
+    async def consume() -> None:
+        async for event in server.handle_create(request, context, asyncio.Event()):
+            if not isinstance(event, dict):
+                snapshots.append(deepcopy(event.response))
+            elif (
+                event["type"] == "response.output_text.delta"
+                and event["delta"] == "left-B"
+            ):
+                left_emitted.set()
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(left_saved.wait(), left_emitted.wait()), timeout=5
+        )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert snapshots and _text(snapshots[-1]) == ""
+    ref = TaskStorageManager(_metadata(snapshots[-1])).checkpoint_ref
+    assert ref is not None
+    saved = await saver.aget_tuple(_config(ref))
+    assert saved is not None and saved.pending_writes
+    assert any(
+        channel == "messages" and any(message.id == "left-B" for message in value)
+        for _, channel, value in saved.pending_writes
+    )
+    release_right.set()
+    for _ in range(2):
+        recovery = _context(
+            response_id="child",
+            conversation_id=None,
+            current_text="B",
+            provider=provider,
+        )
+        recovery.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE}
+        recovery.is_recovery = True
+        recovery.persisted_response = deepcopy(snapshots[-1])
+        events = [
+            event
+            async for event in server.handle_create(request, recovery, asyncio.Event())
+        ]
+        terminal = events[-1]["response"]
+        assert terminal["status"] == "completed", terminal
+        assert _text(terminal) == "left-Bright-B"
+        assert _text(snapshots[-1]) == ""
+    assert executions.count("left-B") == 1
+    assert executions.count("right-B") == 2
 
 
 @pytest.mark.parametrize("mode", [None, "unknown-mode"])

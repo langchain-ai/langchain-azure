@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from langchain_core.messages import (  # noqa: E402
 )
 
 from langchain_azure_ai.agents.hosting._converters._stream import (  # noqa: E402
+    StreamConverter,
     UsageAccumulator,
     _extract_checkpoint_ref,
     stream_graph_to_events,
@@ -453,6 +455,61 @@ async def test_ai_message_in_updates_does_not_duplicate_text() -> None:
     ]
     assert text_deltas == ["The answer ", "is 42."]
     assert _types(events).count("response.output_item.added") == 1
+
+
+@pytest.mark.parametrize("saved_message_id", [None, "cached", "earlier"])
+async def test_cached_updates_restore_only_unpersisted_text(
+    saved_message_id: str | None,
+) -> None:
+    stream = ResponseEventStream(response_id="resp-test")
+    stream.emit_created()
+    stream.emit_in_progress()
+    converter = StreamConverter(stream)
+    if saved_message_id is not None:
+        _ = [
+            event
+            async for event in converter.handle_message_chunk(
+                AIMessage(content="same text", id=saved_message_id)
+            )
+        ]
+    snapshots = [
+        deepcopy(event.response)
+        async for event in converter.checkpoint()
+        if not isinstance(event, dict)
+    ]
+    expected = ["same text"] * (2 if saved_message_id == "earlier" else 1)
+    update = {
+        "left": {"messages": [AIMessage(content="same text", id="cached")]},
+        "__metadata__": {"cached": True},
+    }
+    for _ in range(2):
+        stream = ResponseEventStream(response_id="resp-test", response=snapshots[-1])
+        stream.emit_created()
+        stream.emit_in_progress()
+        converter = StreamConverter(stream)
+        for _ in range(2):
+            _ = [event async for event in converter.handle_update(update)]
+        snapshots = [
+            deepcopy(event.response)
+            async for event in converter.checkpoint()
+            if not isinstance(event, dict)
+        ]
+        response = stream.emit_completed()["response"]
+        assert [
+            part["text"]
+            for item in response["output"]
+            if item["type"] == "message"
+            for part in item["content"]
+            if part["type"] == "output_text"
+        ] == expected
+
+
+@pytest.mark.parametrize("message_ids", [None, "message", ["message", 1]])
+def test_invalid_checkpoint_text_message_ids_are_rejected(message_ids: Any) -> None:
+    stream = ResponseEventStream(response_id="resp-test")
+    stream.internal_metadata["langgraph_text_message_ids"] = message_ids
+    with pytest.raises(ValueError, match="text message IDs"):
+        StreamConverter(stream)
 
 
 async def test_new_message_id_opens_a_new_output_item() -> None:

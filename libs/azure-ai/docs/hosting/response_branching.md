@@ -316,6 +316,11 @@ Admission middleware removes client-supplied mode headers before stamping the
 server's mode; this is not a client-controlled feature switch. Inconsistent
 recovery mode metadata fails explicitly.
 
+Completed nodes' pending writes return as cached updates rather than message
+events. The converter restores their missing text and checkpoints emitted
+LangGraph message IDs with the response, so persisted text is not appended
+again on recovery.
+
 For a child C created from A, recovery first checks C's persisted progress.
 If it exists, resume C directly. If no progress was persisted, load A's stored
 boundary again, validate its exact checkpoint, and replay C's request input.
