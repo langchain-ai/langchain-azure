@@ -15,7 +15,8 @@ The server must have an explicitly configured response provider.
 
 ## OpenAI compatibility target
 
-The public HTTP request and response behavior covered here must follow the
+Except for the conversation create-on-first-use rule specified here, public HTTP
+request and response behavior must follow the
 [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 and [conversation-state guide](https://developers.openai.com/api/docs/guides/conversation-state).
 The [OpenAI quickstart](https://developers.openai.com/api/docs/quickstart?tool-type=web-search)
@@ -34,6 +35,9 @@ This does not add OpenAI-hosted models or built-in tools to the configured graph
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID, although a sequential conversation may internally use its
   latest response's checkpoint.
+- A valid, previously unused `conversation` ID creates an empty conversation on
+  first use. An existing ID continues that conversation's current state. This
+  creation rule is a local contract; its OpenAI equivalence is not yet verified.
 - `previous_response_id` and `conversation` are mutually exclusive.
 - Request `store` controls response retention and defaults to `True`. Enabling
   branching must not silently override `store=False`.
@@ -79,10 +83,11 @@ Referencing A directly still starts from A. Both linkage forms can use the same
 internal state-selection model.
 
 This abstraction preserves the public API: a conversation remains a separate
-resource, and the linkage fields remain mutually exclusive. An empty conversation
-starts fresh. Initial items and independently added or deleted items must be
-reflected in the selected state; the latest response's checkpoint is usable only
-when it represents that conversation context.
+resource, and the linkage fields remain mutually exclusive. A valid new
+conversation ID creates an empty conversation and starts fresh. Initial items
+and independently added or deleted items must be reflected in the selected state;
+the latest response's checkpoint is usable only when it represents that
+conversation context.
 
 ## Quick start
 
@@ -162,19 +167,22 @@ Every call creates a new response. Regeneration can produce different output.
 For client-side **undo/rewind**, select an earlier parent. This does not delete
 history, replay stored SSE events, or undo external effects.
 
-### 4. Continue a conversation
+### 4. Create or continue a conversation
 
-Create the conversation resource first, then use its ID on successive requests:
+Supply a new conversation ID to create an empty conversation on first use, then
+reuse that ID on successive requests:
 
 ```python
-conversation = client.conversations.create()
+from uuid import uuid4
+
+conversation_id = f"conv_{uuid4().hex}"
 
 first = client.responses.create(
-    conversation=conversation.id,
+    conversation=conversation_id,
     input="Suggest a destination.",
 )
 next_turn = client.responses.create(
-    conversation={"id": conversation.id},
+    conversation={"id": conversation_id},
     input="Plan a relaxed itinerary.",
 )
 ```
@@ -184,9 +192,10 @@ Conversation items precede the new input; the response's input and output items
 are added to that conversation after it completes. In a sequential exchange,
 the next turn therefore includes the preceding turn.
 
-Supplying a conversation ID is a reference, not a create-or-upsert operation.
-Do not silently create a conversation for an unknown ID. A newly created
-conversation can have no items or contain initial items before its first response.
+A valid new ID creates a conversation with no history and starts a root response
+in a new thread. An existing ID continues that conversation's current state.
+Explicit creation through `client.conversations.create()` also remains supported,
+including conversations with initial items before their first response.
 
 ## Requirements and request rules
 
@@ -238,10 +247,13 @@ With `enable_response_branching=True`, request routing is:
 | `previous_response_id` only | Start from the parent's exact checkpoint. |
 | Existing `conversation`, without a previous response | Start from its existing items and the new input. An empty conversation starts a fresh root. |
 | Existing `conversation`, with previous responses | Continue its ordered item context. For sequential turns, use the latest response's checkpoint when it represents that context. |
-| Unknown `conversation` | Return a reference error; do not create a conversation or fall back to a root response. |
+| Valid, previously unused `conversation` | Create an empty conversation with the supplied ID and start a root response in a new thread. |
 | Both parent and `conversation` | Reject with HTTP 400. |
 
 Omitted or `null` linkage fields do not select a parent or conversation.
+Creation applies only to valid IDs confirmed absent in the request's authorized
+storage scope. Authorization errors and storage failures must not trigger
+conversation creation.
 The checkpoint shortcut must account for initial conversation items and any
 independently added or deleted items. A latest-response pointer alone is not the
 conversation's public history. Internal parent resolution must not rewrite the
@@ -265,7 +277,7 @@ Branching needs **both** response records and graph checkpoints:
 | Data | Where it lives | How to configure it |
 | --- | --- | --- |
 | Response, status, input/output, and internal checkpoint references | SDK response provider | Server: `ResponsesHostServer(..., store=provider)` |
-| Conversation resource and ordered items | SDK conversation storage | Create through the Conversations API; reference the returned ID in response requests. |
+| Conversation resource and ordered items | SDK conversation storage | Create on first use of a valid new ID, or create explicitly through the Conversations API. |
 | Graph state, pending writes, and checkpoint history | LangGraph checkpoint saver | Graph: `checkpointer=...` |
 
 With branching enabled, the server's `store` is a required explicit provider;
@@ -305,7 +317,8 @@ are logged. Exact reference-error statuses and codes need the verification below
 | Problem | Result and action |
 | --- | --- |
 | Request includes `response_id`, an invalid parent ID, or both linkage fields | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
-| Referenced response or conversation is missing or inaccessible | Return the corresponding OpenAI-compatible reference error before graph execution. Never silently create a new resource. |
+| Referenced response is missing or inaccessible | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response. |
+| Conversation ID is malformed, or lookup fails due to authorization or storage errors | Return the appropriate error before graph execution. Only confirmed absence of a valid ID permits creation; lookup failures must not create a replacement conversation. |
 | Stored parent lacks a checkpoint reference or its graph state cannot be restored | Backend failure. Restore the required data or choose another parent. |
 | Input contains approval or tool-result replies | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors. |
 | Exact checkpoint is missing or mismatched | Failed response. Restore the required data or choose another parent; there is no fallback to the latest checkpoint. |
@@ -366,7 +379,8 @@ root checkpoint namespace.
 ### Fresh request
 
 1. **Select.** Resolve the explicit parent or the conversation context using the
-   platform's authorization context. Response-ID selection uses
+   platform's authorization context. Create an empty conversation on first use
+   of a valid ID confirmed absent in that scope. Response-ID selection uses
    `select_branch_checkpoint`; `branch_selection_scope` caches it only for this
    request. Persist the resolved linkage for recovery before graph execution.
 2. **Validate.** After configuration hooks and graph-bound configuration merging,
@@ -471,19 +485,24 @@ Before claiming compatibility, cover these observable scenarios:
   missing providers and boolean constructor values are rejected.
 - B and C can select A independently, including when a newer sibling exists.
   A child with `store=False` does not delete or modify its stored parent.
-- Create a conversation through the Conversations API, then continue it using
-  both ID forms. Cover empty and initially populated conversations, independently
-  modified items, and recovery after the conversation advances.
+- Create a conversation on first use of a valid new ID, then reuse it with both
+  ID forms and verify continuation from the same conversation's current state.
+  Also cover explicit creation through the Conversations API, initial items,
+  independently modified items, and recovery after the conversation advances.
+- Malformed conversation IDs, authorization errors, and storage lookup failures
+  must not create conversations or start graph execution.
 - Return matched function outputs and approved or denied MCP decisions through
   the same linkage used for ordinary continuation.
 - Verify HTTP errors, error objects, terminal SSE events, and absence of graph
   execution on caller-input failures, not only internal helper results.
 
 The cited documentation does not establish every edge case. Confirm the following
-against OpenAI's HTTP API before choosing validation rules:
+against OpenAI's HTTP API before claiming compatibility for those behaviors:
 
-- Exact status, error code, and parameter attribution for unknown, inaccessible,
-  or malformed response and conversation references.
+- OpenAI's handling of a valid new conversation ID supplied directly, compared
+  with this spec's explicit create-on-first-use rule.
+- Exact status, error code, and parameter attribution for missing responses,
+  inaccessible resources, and malformed response or conversation references.
 - Acceptance of parents in different response statuses.
 - Partial, missing, duplicate, or unknown tool outputs and approval decisions,
   including requests with multiple outstanding calls. Do not assume function
