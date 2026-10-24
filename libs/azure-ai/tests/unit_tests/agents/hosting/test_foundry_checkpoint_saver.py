@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from azure.core.credentials_async import AsyncTokenCredential
@@ -137,6 +138,16 @@ class _FakeStateStore:
         self.closed = True
 
 
+@contextmanager
+def _mock_state_store(store: _FakeStateStore) -> Iterator[MagicMock]:
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
+        return_value=store,
+    ) as state_store:
+        state_store.get_or_create = AsyncMock(return_value=store)
+        yield state_store
+
+
 def _config(
     checkpoint_id: str | None = None,
     *,
@@ -169,11 +180,7 @@ def _checkpoint(checkpoint_id: str, value: str) -> Checkpoint:
 @pytest.fixture
 def saver_and_store() -> Iterator[tuple[FoundryCheckpointSaver, _FakeStateStore]]:
     store = _FakeStateStore()
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         yield FoundryCheckpointSaver(_credential()), store
 
 
@@ -227,11 +234,7 @@ async def test_put_stamps_state_store_user_agent() -> None:
 async def test_rejects_incompatible_existing_store() -> None:
     store = _FakeStateStore()
     store.user_isolation = False
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential(), user_isolation=True)
         with pytest.raises(ValueError, match="user_isolation=False"):
             await saver.aget_tuple(_config())
@@ -242,20 +245,16 @@ async def test_rejects_incompatible_existing_store() -> None:
 @pytest.mark.asyncio
 async def test_overlong_thread_id_uses_bounded_stable_store_name() -> None:
     store = _FakeStateStore()
-    get_or_create = AsyncMock(return_value=store)
     long_config = cast(
         RunnableConfig,
         {"configurable": {"thread_id": "thread-" + "x" * 200}},
     )
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=get_or_create,
-    ):
+    with _mock_state_store(store) as state_store:
         saver = FoundryCheckpointSaver(_credential())
         await saver.aget_tuple(long_config)
 
-    store_name = get_or_create.call_args.args[0]
+    state_store.get_or_create.assert_not_awaited()
+    store_name = state_store.call_args.args[0]
     assert len(store_name) <= 128
     assert store_name.startswith(f"{DEFAULT_STORE_NAME_PREFIX}/")
     assert store_name == saver._store_name(long_config["configurable"]["thread_id"])
@@ -264,13 +263,8 @@ async def test_overlong_thread_id_uses_bounded_stable_store_name() -> None:
 @pytest.mark.asyncio
 async def test_round_trip_latest_history_and_pending_writes() -> None:
     store = _FakeStateStore()
-    get_or_create = AsyncMock(return_value=store)
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=get_or_create,
-    ):
+    with _mock_state_store(store) as state_store:
         saver = FoundryCheckpointSaver(_credential())
         first_config = await saver.aput(
             _config(),
@@ -311,18 +305,14 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
     assert [item.config for item in history] == [second_config, first_config]
     assert [item.config for item in before] == [first_config]
     assert [item.config for item in filtered] == [first_config]
-    assert get_or_create.await_count == 8
+    assert state_store.get_or_create.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_list_before_filters_by_checkpoint_id_not_storage_order() -> None:
     store = _FakeStateStore()
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         # Lexicographic order of these ids is a-before < m-newer < z-older, which
         # intentionally disagrees with write/storage order so before-filtering must
@@ -368,11 +358,7 @@ async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
     older_id = "1f1b63e7-4a17-644a-bffe-764ddea781a4"
     newer_id = "1f1b63e7-4a17-67b7-8002-6c64d1d576fe"
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         older_config = await saver.aput(
             _config(),
@@ -408,11 +394,7 @@ async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
     store = _FakeStateStore()
     ids = [f"ckpt-{i:02d}" for i in range(5)]
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         for index, checkpoint_id in enumerate(ids):
             await saver.aput(
@@ -733,6 +715,45 @@ async def test_before_bound_need_not_exist_or_match_metadata(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["latest", "exact", "history"])
+async def test_reads_do_not_create_missing_thread_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        if operation == "history":
+            assert [item async for item in saver.alist(_config())] == []
+        else:
+            config = _config("missing" if operation == "exact" else None)
+            assert await saver.aget_tuple(config) is None
+
+    assert list((tmp_path / "state_stores").glob("*.json")) == []
+
+
+@pytest.mark.parametrize("operation", ["latest", "exact", "history"])
+async def test_read_store_errors_propagate_and_close_client(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    operation: str,
+) -> None:
+    saver, store = saver_and_store
+    error = RuntimeError("Storage unavailable")
+    with patch.object(store, "get", side_effect=error):
+        with pytest.raises(RuntimeError, match="Storage unavailable") as raised:
+            if operation == "history":
+                _ = [item async for item in saver.alist(_config())]
+            else:
+                config = _config("missing" if operation == "exact" else None)
+                await saver.aget_tuple(config)
+
+    assert raised.value is error
+    assert store.closed
+
+
+@pytest.mark.asyncio
 async def test_latest_history_survive_local_saver_reopen_with_tied_timestamps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -826,11 +847,7 @@ async def test_delete_thread_stamps_user_agent() -> None:
 @pytest.mark.asyncio
 async def test_saver_runs_with_real_langgraph() -> None:
     store = _FakeStateStore()
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
 
         async def increment(state: _GraphState) -> _GraphState:

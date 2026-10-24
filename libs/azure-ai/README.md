@@ -279,6 +279,10 @@ branch, leaves the conversation's checkpoint reference unchanged, and does not
 write new checkpoints or pending writes to the graph's configured saver.
 Streaming and non-streaming requests have the same behavior.
 
+The built-in Foundry conversation and checkpoint stores only read existing
+state stores. Missing stores are treated as having no saved state; reads do not
+create empty stores or their metadata. Stores are created on the first write.
+
 **Crash recovery is not supported for `store=false`.** Its in-memory branch
 does not survive a process crash. During graceful shutdown, the response fails
 with `server_shutdown` and is not deferred for recovery. A recovery invocation

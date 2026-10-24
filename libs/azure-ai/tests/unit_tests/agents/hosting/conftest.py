@@ -14,7 +14,10 @@ from typing import Annotated, Any, cast
 
 import pytest
 from azure.ai.agentserver.core import get_request_context
-from azure.ai.agentserver.core.storage import DEFAULT_ITEM_TTL_SECONDS
+from azure.ai.agentserver.core.storage import (
+    DEFAULT_ITEM_TTL_SECONDS,
+    FoundryStorageNotFoundError,
+)
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -36,7 +39,7 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
     properties: dict[str, SimpleNamespace] = {}
 
     class FakeFoundryStateStore:
-        def __init__(self, name: str) -> None:
+        def __init__(self, name: str, *_: object, **__: Any) -> None:
             self.name = name
 
         @classmethod
@@ -65,9 +68,21 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             return None
 
         async def get(self) -> SimpleNamespace:
-            return deepcopy(properties[self.name])
+            if self.name not in stores:
+                raise FoundryStorageNotFoundError("State store does not exist")
+            return deepcopy(
+                properties.get(
+                    self.name,
+                    SimpleNamespace(
+                        user_isolation=False,
+                        item_ttl_seconds=DEFAULT_ITEM_TTL_SECONDS,
+                    ),
+                )
+            )
 
         async def get_item(self, key: str) -> SimpleNamespace | None:
+            if self.name not in stores:
+                raise FoundryStorageNotFoundError("State store does not exist")
             value = stores[self.name].get(key)
             return SimpleNamespace(value=deepcopy(value)) if value is not None else None
 

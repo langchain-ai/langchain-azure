@@ -12,6 +12,7 @@ from azure.ai.agentserver.core.storage import (
     DEFAULT_ITEM_TTL_SECONDS,
     FoundryStateStore,
     FoundryStorageEndpoint,
+    FoundryStorageNotFoundError,
 )
 from azure.core.credentials_async import AsyncTokenCredential
 
@@ -62,10 +63,11 @@ class ConversationChainStoreProtocol(Protocol):
 class FoundryConversationChainStore:
     """Store each conversation chain in a separate ``FoundryStateStore``.
 
-    Store creation and reuse follow ``FoundryStateStore.get_or_create`` semantics.
-    ``user_isolation``, ``item_ttl_seconds``, ``description``, and ``tags`` apply
-    only when the underlying store is first created. Existing stores retain
-    their settings; neither mismatch policy updates them.
+    Reads do not create missing stores. Writes create stores as needed using
+    ``FoundryStateStore.get_or_create``. ``user_isolation``, ``item_ttl_seconds``,
+    ``description``, and ``tags`` apply only when the underlying store is first
+    created. Existing stores retain their settings; neither mismatch policy
+    updates them.
 
     By default, each read and write fetches the store properties and fails before
     item access if isolation or TTL differs from this instance's options. Set
@@ -163,20 +165,21 @@ class FoundryConversationChainStore:
         conversation_chain_id: str,
         key: str,
     ) -> dict[str, str] | None:
-        """Load a dictionary using the underlying store's existing settings.
+        """Load a dictionary without creating the underlying store.
 
         Args:
             conversation_chain_id: Identifier of the conversation chain.
             key: Record key within the conversation chain.
 
         Returns:
-            The stored string dictionary, or ``None`` when the key is absent.
+            The stored string dictionary, or ``None`` when the store or key
+            is absent.
 
         Raises:
             ValueError: Isolation or TTL differs and ``on_mismatch="fail"``.
             TypeError: The stored value is not a string dictionary.
         """
-        state_store = await FoundryStateStore.get_or_create(
+        state_store = FoundryStateStore(
             self._store_name(conversation_chain_id),
             self._credential,
             self._endpoint,
@@ -189,8 +192,11 @@ class FoundryConversationChainStore:
             **self._kwargs,
         )
         async with state_store:
-            await self._validate_store(state_store)
-            item = await state_store.get_item(key)
+            try:
+                await self._validate_store(state_store)
+                item = await state_store.get_item(key)
+            except FoundryStorageNotFoundError:
+                return None
         if item is None:
             return None
         if not isinstance(item.value, dict) or not all(

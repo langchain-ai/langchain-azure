@@ -22,6 +22,7 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.core.storage import FoundryStateStore
 from azure.ai.agentserver.core.streaming import streams
 from azure.ai.agentserver.responses import ResponseContext
 from azure.ai.agentserver.responses.models import (
@@ -30,6 +31,7 @@ from azure.ai.agentserver.responses.models import (
     MessageContentInputTextContent,
     ResponseObject,
 )
+from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -40,6 +42,7 @@ from langgraph.types import Command, Interrupt, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
     HostingFeature,
     ResponsesHostServer,
     ResponsesServerOptions,
@@ -350,9 +353,7 @@ def test_store_false_does_not_advance_conversation(
         checkpoints_before = list(checkpointer.list(None))
         writes_before = deepcopy(checkpointer.writes)
         blobs_before = deepcopy(checkpointer.blobs)
-        chains_before = deepcopy(
-            {key: value for key, value in foundry_state_stores.items() if value}
-        )
+        chains_before = deepcopy(foundry_state_stores)
         with (
             patch.object(checkpointer, "put", wraps=checkpointer.put) as put,
             patch.object(
@@ -394,9 +395,7 @@ def test_store_false_does_not_advance_conversation(
         assert list(checkpointer.list(None)) == checkpoints_before
         assert checkpointer.writes == writes_before
         assert checkpointer.blobs == blobs_before
-        assert {
-            key: value for key, value in foundry_state_stores.items() if value
-        } == chains_before
+        assert foundry_state_stores == chains_before
 
         following = client.post(
             "/responses",
@@ -408,6 +407,80 @@ def test_store_false_does_not_advance_conversation(
         following_text = "".join(
             part.get("text", "")
             for item in following_payload["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert following_text == ("saved | next" if existing_conversation else "next")
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+def test_store_false_does_not_create_foundry_stores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    existing_conversation: bool,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    saver = FoundryCheckpointSaver(cast(AsyncTokenCredential, object()))
+    server = ResponsesHostServer(_history_graph(saver))
+    routing = {"conversation": {"id": f"conv-read-only-{uuid.uuid4().hex}"}}
+    stores_path = tmp_path / "state_stores"
+
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post(
+                "/responses",
+                json={"input": "saved", "store": True, **routing},
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+
+        saved = {path.name: path.read_bytes() for path in stores_path.glob("*.json")}
+        response = client.post(
+            "/responses",
+            json={
+                "input": "transient",
+                "store": False,
+                "stream": streaming,
+                **routing,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = (
+            next(
+                event["response"]
+                for event_type, event in _parse_sse(response.text)
+                if event_type == "response.completed"
+            )
+            if streaming
+            else response.json()
+        )
+        assert payload["status"] == "completed", payload
+        text = "".join(
+            part.get("text", "")
+            for item in payload["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert text == ("saved | transient" if existing_conversation else "transient")
+        assert {
+            path.name: path.read_bytes() for path in stores_path.glob("*.json")
+        } == saved
+
+        following = client.post("/responses", json={"input": "next", **routing})
+        assert following.status_code == 200, following.text
+        assert following.json()["status"] == "completed", following.text
+        assert list(stores_path.glob("*.json"))
+        following_text = "".join(
+            part.get("text", "")
+            for item in following.json()["output"]
             if item.get("type") == "message"
             for part in item.get("content", [])
         )
@@ -509,7 +582,7 @@ def test_store_false_new_interrupt_does_not_persist(
         item.get("type") == "mcp_approval_request" for item in response.json()["output"]
     )
     assert list(checkpointer.list(None)) == []
-    assert not any(foundry_state_stores.values())
+    assert foundry_state_stores == {}
 
 
 async def test_completed_response_includes_langchain_usage_metadata(

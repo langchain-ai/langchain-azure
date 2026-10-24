@@ -116,6 +116,9 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     encoded in item keys within that store. The saver is async-only; use it
     with ``graph.ainvoke`` or ``graph.astream``.
 
+    Reads do not create missing thread stores. Checkpoint and pending-write
+    writes create stores as needed.
+
     Latest and history queries enumerate matching checkpoint keys to order by
     LangGraph ID, independently of storage creation order. Key-listing cost
     grows with retained history; checkpoint values are fetched only as needed.
@@ -176,7 +179,10 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Fetch an exact checkpoint or the latest checkpoint in a namespace."""
         thread_id, checkpoint_ns = self._thread_and_namespace(config)
-        store = await self._get_or_create_store(thread_id)
+        try:
+            store = await self._get_store(thread_id, create=False)
+        except FoundryStorageNotFoundError:
+            return None
         try:
             checkpoint_id = get_checkpoint_id(config)
 
@@ -261,7 +267,10 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 if field in filter:
                     tags[field] = str(filter[field])
 
-        store = await self._get_or_create_store(thread_id)
+        try:
+            store = await self._get_store(thread_id, create=False)
+        except FoundryStorageNotFoundError:
+            return
         try:
             if checkpoint_id and before_id and checkpoint_id >= before_id:
                 return
@@ -345,7 +354,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if step is not None:
             tags["step"] = str(step)
 
-        store = await self._get_or_create_store(thread_id)
+        store = await self._get_store(thread_id, create=True)
         try:
             await store.set_item(
                 self._checkpoint_key(checkpoint_ns, checkpoint_id),
@@ -376,7 +385,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if not task_id:
             raise ValueError("task_id must be a non-empty string")
 
-        store = await self._get_or_create_store(thread_id)
+        store = await self._get_store(thread_id, create=True)
         try:
             for ordinal, (channel, value) in enumerate(writes):
                 index = WRITES_IDX_MAP.get(channel, ordinal)
@@ -446,20 +455,21 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         finally:
             await store.aclose()
 
-    async def _get_or_create_store(self, thread_id: str) -> FoundryStateStore:
-        store = await FoundryStateStore.get_or_create(
-            self._store_name(thread_id),
-            self._credential,
-            self._endpoint,
-            user_isolation=self._user_isolation,
-            item_ttl_seconds=self._item_ttl_seconds,
-            description="LangGraph checkpoints",
-            api_version=self._api_version,
-            # AgentServer uses this callback to build the outbound User-Agent
-            # header. Keep it lazy so registered prefixes and the telemetry
-            # opt-out are evaluated per request.
-            get_server_version=get_user_agent,
-        )
+    async def _get_store(self, thread_id: str, *, create: bool) -> FoundryStateStore:
+        if create:
+            store = await FoundryStateStore.get_or_create(
+                self._store_name(thread_id),
+                self._credential,
+                self._endpoint,
+                user_isolation=self._user_isolation,
+                item_ttl_seconds=self._item_ttl_seconds,
+                description="LangGraph checkpoints",
+                api_version=self._api_version,
+                # AgentServer evaluates this callback per request.
+                get_server_version=get_user_agent,
+            )
+        else:
+            store = self._bound_store(thread_id)
         try:
             properties = await store.get()
             if properties.user_isolation != self._user_isolation:

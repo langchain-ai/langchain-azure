@@ -81,6 +81,12 @@ that branch; the configured LangGraph saver and the conversation checkpoint
 reference are not updated. The host does not emit SDK recovery checkpoint
 events for the turn. This applies to both streaming and non-streaming requests.
 
+Built-in Foundry conversation and checkpoint reads never create a state store.
+If a store does not exist, the read returns no saved state without creating an
+empty store or its metadata. Only write operations create missing stores.
+Reads of existing stores preserve their properties and stored items. Storage
+failures other than a missing store continue to propagate.
+
 **Crash recovery is not supported for `store=false`**, including when the server
 enables `resilient_background`. Request-local checkpoints only support normal
 conversation reads and interrupt handling within the isolated branch; they are
