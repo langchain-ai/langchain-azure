@@ -271,6 +271,33 @@ when steering is disabled is not supported for checkpointed graphs.
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
+### Non-stored responses
+
+Send `"store": false` to read the existing conversation state without advancing
+it. `ResponsesHostServer` runs the turn on a request-local in-memory checkpoint
+branch, leaves the conversation's checkpoint reference unchanged, and does not
+write new checkpoints or pending writes to the graph's configured saver.
+Streaming and non-streaming requests have the same behavior.
+
+**Crash recovery is not supported for `store=false`.** Its in-memory branch
+does not survive a process crash. During graceful shutdown, the response fails
+with `server_shutdown` and is not deferred for recovery. A recovery invocation
+for a non-stored response fails with `unsupported_recovery` before graph
+execution.
+
+```bash
+curl -X POST http://localhost:8088/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Explore another answer","conversation":{"id":"conv-example"},"store":false}'
+```
+
+The temporary branch is discarded after the request, so new interrupts from
+this turn cannot be resumed by a later request. Resuming an existing interrupt
+with `store=false` leaves the saved interrupt pending. Tool side effects,
+long-term LangGraph store writes, and tracing are not rolled back or disabled.
+Omitting `store` or setting it to `true` preserves normal conversation
+persistence. Agent Server SDK 2.3.0 rejects `background=true` with `store=false`.
+
 ### Durable graph state
 
 Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including

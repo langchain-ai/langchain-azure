@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -22,15 +23,20 @@ pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
 from azure.ai.agentserver.core.streaming import streams
+from azure.ai.agentserver.responses import ResponseContext
 from azure.ai.agentserver.responses.models import (
     CreateResponse,
     ItemMessage,
     MessageContentInputTextContent,
     ResponseObject,
 )
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command, Interrupt
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command, Interrupt, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
@@ -130,6 +136,43 @@ def _message_item(text: str) -> ItemMessage:
         role="user",
         content=[MessageContentInputTextContent({"type": "input_text", "text": text})],
     )
+
+
+def _history_graph(checkpointer: BaseCheckpointSaver | None) -> CompiledStateGraph:
+    async def echo(state: MessagesState) -> dict[str, list[AIMessage]]:
+        history = " | ".join(
+            message.content
+            for message in state["messages"]
+            if isinstance(message, HumanMessage) and isinstance(message.content, str)
+        )
+        return {"messages": [AIMessage(content=history)]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+def _interrupt_graph(
+    checkpointer: InMemorySaver, *, nested: bool = False
+) -> CompiledStateGraph:
+    def ask(state: MessagesState) -> dict[str, list[AIMessage]]:
+        answer = interrupt("Approve?")
+        return {"messages": [AIMessage(content=f"Approved: {answer}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=checkpointer)
+    if nested:
+        parent = StateGraph(MessagesState)
+        parent.add_node("child", graph)
+        parent.add_edge(START, "child")
+        parent.add_edge("child", END)
+        return parent.compile(checkpointer=checkpointer)
+    return graph
 
 
 def _request(**kwargs: object) -> CreateResponse:
@@ -270,6 +313,203 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "response.completed" in types
     deltas = [p["delta"] for t, p in events if t == "response.output_text.delta"]
     assert "".join(deltas) == "Hello, world!"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+@pytest.mark.parametrize("continuation", ["conversation", "previous_response_id"])
+@pytest.mark.parametrize("checkpointed", [False, True])
+def test_store_false_does_not_advance_conversation(
+    streaming: bool,
+    existing_conversation: bool,
+    continuation: str,
+    checkpointed: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(
+        _history_graph(checkpointer if checkpointed else None),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    routing: dict[str, Any] = (
+        {"conversation": {"id": f"conv-read-only-{uuid.uuid4().hex}"}}
+        if continuation == "conversation"
+        else {}
+    )
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post(
+                "/responses",
+                json={"input": "saved", "store": True, **routing},
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+            if continuation == "previous_response_id":
+                routing["previous_response_id"] = first.json()["id"]
+
+        checkpoints_before = list(checkpointer.list(None))
+        writes_before = deepcopy(checkpointer.writes)
+        blobs_before = deepcopy(checkpointer.blobs)
+        chains_before = deepcopy(
+            {key: value for key, value in foundry_state_stores.items() if value}
+        )
+        with (
+            patch.object(checkpointer, "put", wraps=checkpointer.put) as put,
+            patch.object(
+                checkpointer, "put_writes", wraps=checkpointer.put_writes
+            ) as put_writes,
+        ):
+            response = client.post(
+                "/responses",
+                json={
+                    "input": "transient",
+                    "store": False,
+                    "stream": streaming,
+                    **routing,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = (
+                next(
+                    event["response"]
+                    for event_type, event in _parse_sse(response.text)
+                    if event_type == "response.completed"
+                )
+                if streaming
+                else response.json()
+            )
+            assert payload["status"] == "completed", payload
+            text = "".join(
+                part.get("text", "")
+                for item in payload["output"]
+                if item.get("type") == "message"
+                for part in item.get("content", [])
+            )
+            assert text == (
+                "saved | transient" if existing_conversation else "transient"
+            )
+            put.assert_not_called()
+            put_writes.assert_not_called()
+
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert checkpointer.writes == writes_before
+        assert checkpointer.blobs == blobs_before
+        assert {
+            key: value for key, value in foundry_state_stores.items() if value
+        } == chains_before
+
+        following = client.post(
+            "/responses",
+            json={"input": "next", **routing},
+        )
+        assert following.status_code == 200, following.text
+        following_payload = following.json()
+        assert following_payload["status"] == "completed", following_payload
+        following_text = "".join(
+            part.get("text", "")
+            for item in following_payload["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert following_text == ("saved | next" if existing_conversation else "next")
+
+
+async def test_store_false_does_not_emit_recovery_checkpoints() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(store=False),
+            _context(),
+            asyncio.Event(),
+        )
+    ]
+
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    completed = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event.get("type") == "response.completed"
+    )
+    metadata = completed["response"]["metadata"]
+    internal_metadata = metadata.get("_internal_metadata", {})
+    assert METADATA_LANGGRAPH_THREAD_ID not in internal_metadata
+    assert METADATA_LANGGRAPH_CHECKPOINT_ID not in internal_metadata
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_store_false_preserves_pending_interrupt(
+    resume: bool,
+    nested: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer, nested=nested))
+    routing = {"conversation": {"id": f"conv-interrupt-{uuid.uuid4().hex}"}}
+    with _client(server) as client:
+        first = client.post("/responses", json={"input": "hello", **routing})
+        assert first.status_code == 200, first.text
+        pending = next(
+            item
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        )
+        checkpoints_before = list(checkpointer.list(None))
+        chains_before = deepcopy(foundry_state_stores)
+        resume_item = {
+            "type": "function_call_output",
+            "call_id": pending["call_id"],
+            "output": json.dumps({"resume": "yes"}),
+        }
+        preview = client.post(
+            "/responses",
+            json={
+                "input": [resume_item] if resume else "still waiting",
+                "store": False,
+                **routing,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["status"] == "completed", preview.text
+        if resume:
+            assert "Approved: yes" in json.dumps(preview.json()["output"])
+        else:
+            assert any(
+                item.get("call_id") == pending["call_id"]
+                for item in preview.json()["output"]
+            )
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert foundry_state_stores == chains_before
+
+        committed = client.post("/responses", json={"input": [resume_item], **routing})
+        assert committed.status_code == 200, committed.text
+        assert committed.json()["status"] == "completed", committed.text
+        assert "Approved: yes" in json.dumps(committed.json()["output"])
+
+
+def test_store_false_new_interrupt_does_not_persist(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer))
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={
+                "input": "hello",
+                "store": False,
+                "conversation": {"id": f"conv-preview-{uuid.uuid4().hex}"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed", response.text
+    assert any(
+        item.get("type") == "mcp_approval_request" for item in response.json()["output"]
+    )
+    assert list(checkpointer.list(None)) == []
+    assert not any(foundry_state_stores.values())
 
 
 async def test_completed_response_includes_langchain_usage_metadata(
@@ -429,6 +669,136 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
         while True:
             await anext(events)
     context.exit_for_recovery.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize("has_snapshot", [False, True])
+async def test_store_false_recovery_entry_is_rejected(
+    has_snapshot: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None)
+    context.is_recovery = True
+    if has_snapshot:
+        context.persisted_response = _response_object(
+            context.response_id,
+            internal_metadata={
+                METADATA_LANGGRAPH_THREAD_ID: "thread-before-crash",
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-before-crash",
+            },
+        )
+    build_config = AsyncMock(wraps=server.build_runnable_config)
+    monkeypatch.setattr(server, "build_runnable_config", build_config)
+
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(store=False),
+            context,
+            asyncio.Event(),
+        )
+    ]
+    lifecycle = [event for event in events if isinstance(event, dict)]
+
+    assert [event["type"] for event in lifecycle] == [
+        "response.created",
+        "response.in_progress",
+        "response.failed",
+    ]
+    failed_response = lifecycle[-1]["response"]
+    assert failed_response["error"]["code"] == "unsupported_recovery"
+    assert "store=false" in failed_response["error"]["message"]
+    assert failed_response["output"] == []
+    assert "_internal_metadata" not in failed_response["metadata"]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    build_config.assert_not_awaited()
+    context.get_input_items.assert_not_awaited()
+    context.exit_for_recovery.assert_not_awaited()
+
+
+@pytest.mark.parametrize("shutdown_phase", ["before_graph", "after_output"])
+async def test_store_false_shutdown_fails_without_recovery(
+    shutdown_phase: str,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    checkpointer = graph.checkpointer
+    assert isinstance(checkpointer, InMemorySaver)
+    server = ResponsesHostServer(graph)
+    context = _context()
+    context.exit_for_recovery.side_effect = RuntimeError(
+        "For store=false responses there is no task to defer for recovery."
+    )
+    if shutdown_phase == "before_graph":
+        context.shutdown.set()
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            shutdown_phase == "after_output"
+            and isinstance(event, dict)
+            and event.get("type") == "response.output_text.delta"
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert "response.completed" not in [event["type"] for event in lifecycle]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == []
+    context.exit_for_recovery.assert_not_awaited()
+    if shutdown_phase == "before_graph":
+        context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_shutdown_returns_terminal_failure(streaming: bool) -> None:
+    class ShuttingDownHost(ResponsesHostServer):
+        async def build_input(
+            self,
+            request: CreateResponse,
+            context: ResponseContext,
+            *,
+            skip_call_ids: frozenset[str] | None = None,
+        ) -> dict[str, Any]:
+            graph_input = await super().build_input(
+                request, context, skip_call_ids=skip_call_ids
+            )
+            context.shutdown.set()
+            return graph_input
+
+    graph = make_checkpointed_echo_graph()
+    checkpointer = graph.checkpointer
+    assert isinstance(checkpointer, InMemorySaver)
+    server = ShuttingDownHost(
+        graph, options=ResponsesServerOptions(resilient_background=True)
+    )
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={"input": "hello", "store": False, "stream": streaming},
+        )
+
+    assert response.status_code == 200, response.text
+    if streaming:
+        events = _parse_sse(response.text)
+        assert all(event_type != "response.completed" for event_type, _ in events)
+        payload = next(
+            event["response"]
+            for event_type, event in events
+            if event_type == "response.failed"
+        )
+    else:
+        payload = response.json()
+    assert payload["status"] == "failed", payload
+    assert payload["error"]["code"] == "server_shutdown", payload
+    assert list(checkpointer.list(None)) == []
 
 
 @pytest.mark.asyncio

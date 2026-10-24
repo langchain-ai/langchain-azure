@@ -73,6 +73,35 @@ checkpointer. Without the conversation checkpoint reference, the checkpointer
 may contain dangling work that advanced beyond the last committed Responses
 boundary, and a later turn would not know which checkpoint is authoritative.
 
+### Non-stored Turns
+
+For `store=false`, the host reads the committed conversation checkpoint into a
+request-local in-memory branch. Graph checkpoints and pending writes stay in
+that branch; the configured LangGraph saver and the conversation checkpoint
+reference are not updated. The host does not emit SDK recovery checkpoint
+events for the turn. This applies to both streaming and non-streaming requests.
+
+**Crash recovery is not supported for `store=false`**, including when the server
+enables `resilient_background`. Request-local checkpoints only support normal
+conversation reads and interrupt handling within the isolated branch; they are
+not recovery checkpoints and do not survive a process crash.
+
+- The host never restores a persisted response snapshot for a non-stored turn.
+- If a non-stored turn is invoked with `context.is_recovery=True`, it emits
+  `response.failed` with code `unsupported_recovery` before reading graph state
+  or executing graph nodes. It does not replay the request input.
+- On graceful shutdown, a non-stored turn emits `response.failed` with code
+  `server_shutdown`. It never calls `context.exit_for_recovery()` or leaves the
+  turn waiting for execution in the next process lifetime.
+- After a crash, the client must start a new request. A retry does not resume the
+  discarded branch; tools with external side effects must remain replay-safe.
+
+The branch is discarded after the request, including newly created interrupts.
+A non-stored resume of an existing interrupt leaves the saved interrupt pending.
+This flag does not roll back tool side effects or disable long-term store writes
+or tracing. `store=true` and the default behavior retain the durable flow below;
+Agent Server SDK 2.3.0 rejects `background=true` with `store=false`.
+
 ### Assumptions
 
 The recovery behavior depends on these assumptions to work properly:
@@ -93,6 +122,9 @@ The recovery behavior depends on these assumptions to work properly:
   These node executions should be side-effect-free or idempotent.
 
 ## Crash Recovery
+
+The recovery flow below applies to stored background responses with
+`resilient_background=True`. Non-stored turns are excluded.
 
 ### Important Events
 
