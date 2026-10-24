@@ -292,7 +292,6 @@ Branching needs **both** response records and graph checkpoints:
 | Data | Where it lives | How to configure it |
 | --- | --- | --- |
 | Response, status, input/output, and internal checkpoint references | SDK response provider | Server: `ResponsesHostServer(..., store=provider)` |
-| Conversation resource and ordered items | SDK conversation storage | Create on first use of a valid new ID, or create explicitly through the Conversations API. |
 | Graph state, pending writes, and checkpoint history | LangGraph checkpoint saver | Graph: `checkpointer=...` |
 
 With branching enabled, the server's `store` is a required explicit provider;
@@ -302,10 +301,9 @@ are separate contracts: having a provider does not force every response to be
 retained, and a client setting `store=True` cannot supply a missing provider.
 
 Use an appropriate provider explicitly, such as `FileResponseStore` for a local
-demo or `FoundryStorageProvider` on Foundry. Neither response retention nor
-conversation-item persistence replaces the graph's checkpointer. Disabling
-response retention must not be treated as deleting a conversation's items.
-The application owns the graph saver's initialization, lifecycle, and retention.
+demo or `FoundryStorageProvider` on Foundry. Response retention does not replace
+the graph's checkpointer. The application owns the graph saver's initialization,
+lifecycle, and retention.
 
 **Migration:** Branching callers that relied on automatic provider selection
 must pass that provider explicitly. Preserve its backend configuration and
@@ -375,9 +373,6 @@ again. Keep the checkpoint history needed to restore the child's state.
 
 The following details are for maintainers; applications do not need to manage
 these fields or call these helpers.
-
-<details>
-<summary>Checkpoint selection, persistence, and recovery</summary>
 
 ### Checkpoint references
 
@@ -476,8 +471,6 @@ appending persisted text again.
   The target contract below requires additional compatibility coverage.
 
 The branching helpers and saver wrapper are internal, not public extension points.
-
-</details>
 
 ## Implementation gaps and verification
 
