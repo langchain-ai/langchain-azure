@@ -52,7 +52,6 @@ from langchain_azure_ai.agents.hosting._responses import (
     HostingRunnableConfig,
 )
 from langchain_azure_ai.agents.hosting._responses.branching import (
-    BRANCH_BOUNDARY_KEY,
     BRANCH_MODE,
     BRANCH_MODE_HEADER,
     BRANCH_MODE_METADATA,
@@ -110,14 +109,14 @@ def _text(response: dict[str, Any]) -> str:
     )
 
 
-def _boundary(
+def _response_checkpoint(
     client: TestClient, server: ResponsesHostServer, response_id: str
 ) -> CheckpointRef:
     assert client.portal is not None
     assert server._response_provider is not None
     response = client.portal.call(server._response_provider.get_response, response_id)
     metadata = _metadata(response)
-    assert BRANCH_BOUNDARY_KEY in metadata
+    assert "langgraph_response_boundary_v1" not in metadata
     ref = TaskStorageManager(metadata).checkpoint_ref
     assert ref is not None
     return ref
@@ -189,7 +188,7 @@ def test_completed_branches_preserve_exact_parent_state(stream: bool) -> None:
     )
     with TestClient(server.app) as client:
         a = _post(client, "A", stream=stream)
-        parent_ref = _boundary(client, server, a["id"])
+        parent_ref = _response_checkpoint(client, server, a["id"])
         parent = saver.get_tuple(_config(parent_ref))
         assert parent is not None
         original_parent = deepcopy((parent.checkpoint, parent.pending_writes))
@@ -208,7 +207,7 @@ def test_completed_branches_preserve_exact_parent_state(stream: bool) -> None:
         ):
             assert response["status"] == "completed", response
             assert response.get("previous_response_id") == parent_id
-            assert _boundary(client, server, response["id"]).thread_id == (
+            assert _response_checkpoint(client, server, response["id"]).thread_id == (
                 parent_ref.thread_id
             )
             retrieved = client.get(f"/responses/{response['id']}")
@@ -261,9 +260,7 @@ def test_branching_does_not_use_conversation_chain_storage(stream: bool) -> None
     writes.assert_not_awaited()
 
 
-@pytest.mark.parametrize("boundary_saved", [False, True])
-async def test_completed_branch_recovery_does_not_require_parent_or_branch_records(
-    boundary_saved: bool,
+async def test_completed_branch_recovery_does_not_require_parent(
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:
     graph, executions = _branch_graph()
@@ -279,8 +276,6 @@ async def test_completed_branch_recovery_does_not_require_parent_or_branch_recor
         persisted_stream = ResponseEventStream(
             response_id=child["id"], response=persisted
         )
-        if not boundary_saved:
-            persisted_stream.internal_metadata.pop(BRANCH_BOUNDARY_KEY)
         foundry_state_stores.clear()
         executions.clear()
         context = _context(
@@ -325,7 +320,7 @@ def test_paused_parent_is_rejected_without_resuming(stream: bool, reply: str) ->
     with TestClient(server.app) as client:
         parent = _post(client, "start", stream=stream)
         assert parent["status"] == "completed", parent
-        ref = _boundary(client, server, parent["id"])
+        ref = _response_checkpoint(client, server, parent["id"])
         saved = saver.get_tuple(_config(ref))
         assert saved is not None
         original = deepcopy((saved.checkpoint, saved.pending_writes))
@@ -357,14 +352,14 @@ def test_paused_parent_is_rejected_without_resuming(stream: bool, reply: str) ->
             ]
         child = _post(client, value, previous_response_id=parent["id"], stream=stream)
         assert child["status"] == "failed", child
-        assert "paused parent" in child["error"]["message"]
+        assert "pending approvals or tool results" in child["error"]["message"]
         retained = saver.get_tuple(_config(ref))
         assert retained is not None
         assert (retained.checkpoint, retained.pending_writes) == original
         assert client.portal is not None
         assert server._response_provider is not None
         stored = client.portal.call(server._response_provider.get_response, child["id"])
-        assert BRANCH_BOUNDARY_KEY not in _metadata(stored)
+        assert stored["status"] == "failed"
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -451,7 +446,7 @@ def test_tool_call_completion_is_checked_even_without_interrupts(
     with TestClient(server.app) as client:
         parent = _post(client, "A", stream=stream)
         assert parent["status"] == "completed", parent
-        ref = _boundary(client, server, parent["id"])
+        ref = _response_checkpoint(client, server, parent["id"])
         assert client.portal is not None
         assert not client.portal.call(graph.aget_state, _config(ref)).next
         child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
@@ -581,23 +576,40 @@ def test_branching_rejects_unsupported_host_configuration(
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_legacy_parent_is_not_silently_reinterpreted(stream: bool) -> None:
+def test_completed_parent_without_branching_metadata_is_accepted(stream: bool) -> None:
     graph, executions = _branch_graph()
     provider = InMemoryResponseProvider()
     legacy = ResponsesHostServer(graph, store=provider)
     with TestClient(legacy.app) as client:
-        parent = _post(client, "A")
+        parent = _post(client, "A", stream=stream)
+        assert parent["status"] == "completed", parent
+        assert client.portal is not None
+        stored = client.portal.call(provider.get_response, parent["id"])
+        metadata = _metadata(stored)
+        assert BRANCH_MODE_METADATA not in metadata
+        assert "langgraph_response_boundary_v1" not in metadata
+        assert TaskStorageManager(metadata).checkpoint_ref is not None
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
     with TestClient(server.app) as client:
         child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
-    assert child["status"] == "failed", child
-    assert "response-branching boundary" in child["error"]["message"]
-    assert executions == ["A"]
+    assert child["status"] == "completed", child
+    assert _text(child) == "A,B"
+    assert executions == ["A", "B"]
 
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
-    "failure", ["missing", "wrong_id", "backend", "metadata", "conflicting_ref"]
+    "failure",
+    [
+        "missing",
+        "wrong_id",
+        "wrong_thread",
+        "wrong_namespace",
+        "wrong_checkpoint_id",
+        "backend",
+        "metadata",
+        "missing_ref",
+    ],
 )
 def test_invalid_parent_checkpoint_fails_without_running_graph(
     stream: bool, failure: str, monkeypatch: pytest.MonkeyPatch
@@ -609,16 +621,15 @@ def test_invalid_parent_checkpoint_fails_without_running_graph(
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
     with TestClient(server.app) as client:
         parent = _post(client, "A")
-        if failure in {"metadata", "conflicting_ref"}:
+        if failure in {"metadata", "missing_ref"}:
             assert client.portal is not None
             stored = client.portal.call(provider.get_response, parent["id"])
-            metadata = _metadata(stored)
-            boundary = metadata[BRANCH_BOUNDARY_KEY]
             if failure == "metadata":
-                boundary["version"] = "invalid"
+                stored["metadata"]["_internal_metadata"] = "not-json"
             else:
-                boundary.update(thread_id="other-thread", checkpoint_id="other-state")
-            stored["metadata"]["_internal_metadata"] = json.dumps(metadata)
+                metadata = _metadata(stored)
+                del metadata[METADATA_LANGGRAPH_CHECKPOINT_ID]
+                stored["metadata"]["_internal_metadata"] = json.dumps(metadata)
             client.portal.call(provider.update_response, stored)
         else:
             original_read = saver.aget_tuple
@@ -632,15 +643,33 @@ def test_invalid_parent_checkpoint_fails_without_running_graph(
                     return None
                 saved = await original_read(config)
                 assert saved is not None
+                if failure == "wrong_id":
+                    return saved._replace(
+                        checkpoint={
+                            **saved.checkpoint,
+                            "id": "not-the-selected-checkpoint",
+                        }
+                    )
+                field = {
+                    "wrong_thread": "thread_id",
+                    "wrong_namespace": "checkpoint_ns",
+                    "wrong_checkpoint_id": "checkpoint_id",
+                }[failure]
                 return saved._replace(
-                    checkpoint={**saved.checkpoint, "id": "not-the-selected-checkpoint"}
+                    config={
+                        **saved.config,
+                        "configurable": {
+                            **(saved.config.get("configurable") or {}),
+                            field: "not-the-selected-checkpoint",
+                        },
+                    }
                 )
 
             monkeypatch.setattr(saver, "aget_tuple", read)
         child = _post(client, "B", previous_response_id=parent["id"], stream=stream)
         assert client.portal is not None
         stored_child = client.portal.call(provider.get_response, child["id"])
-        assert BRANCH_BOUNDARY_KEY not in _metadata(stored_child)
+        assert stored_child["status"] == "failed"
     assert child["status"] == "failed", child
     assert "private checkpoint" not in child["error"]["message"]
     assert executions == ["A"]
@@ -913,11 +942,6 @@ async def test_checkpoint_write_failure_never_publishes_missing_progress(
     terminal = events[-1]["response"]
     assert terminal["status"] == "failed", terminal
     assert "private checkpoint" not in terminal["error"]["message"]
-    assert all(
-        BRANCH_BOUNDARY_KEY not in _metadata(event.response)
-        for event in events
-        if not isinstance(event, dict)
-    )
 
 
 @pytest.mark.parametrize(
@@ -931,7 +955,6 @@ async def test_checkpoint_write_failure_never_publishes_missing_progress(
         "own",
         "sibling",
         "missing",
-        "published",
         "malformed",
         "wrong_parent",
         "wrong_thread",
@@ -954,7 +977,7 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
     ref = HostingRunnableConfig(parent_config).checkpoint_ref
     assert ref is not None
     metadata: dict[str, Any] = {BRANCH_MODE_METADATA: BRANCH_MODE}
-    if progress in {"own", "sibling", "published", "wrong_parent", "wrong_thread"}:
+    if progress in {"own", "sibling", "wrong_parent", "wrong_thread"}:
         saver = graph.checkpointer
         assert isinstance(saver, BaseCheckpointSaver)
         execution = graph.copy(
@@ -978,13 +1001,7 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
         assert saved_ref is not None
         metadata[METADATA_LANGGRAPH_THREAD_ID] = saved_ref.thread_id
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = saved_ref.checkpoint_id
-        if progress == "published":
-            metadata[BRANCH_BOUNDARY_KEY] = {
-                "version": "1",
-                "checkpoint_ns": "",
-                "paused": "false",
-            }
-        elif progress == "wrong_thread":
+        if progress == "wrong_thread":
             metadata[METADATA_LANGGRAPH_THREAD_ID] = "other-thread"
     elif progress == "missing":
         metadata[METADATA_LANGGRAPH_THREAD_ID] = ref.thread_id
@@ -1003,11 +1020,6 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
             internal_metadata={
                 METADATA_LANGGRAPH_THREAD_ID: ref.thread_id,
                 METADATA_LANGGRAPH_CHECKPOINT_ID: ref.checkpoint_id,
-                BRANCH_BOUNDARY_KEY: {
-                    "version": "1",
-                    "checkpoint_ns": "",
-                    "paused": "false",
-                },
             },
         )
         parent["status"] = "completed"
@@ -1040,7 +1052,7 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
             selection.assert_not_awaited()
     terminal = events[-1]["response"]
     assert terminal["status"] == (
-        "completed" if progress in {"none", "own", "published"} else "failed"
+        "completed" if progress in {"none", "own"} else "failed"
     ), terminal
     assert executions == (["B"] if progress == "none" else [])
     if terminal["status"] == "completed":
@@ -1348,13 +1360,21 @@ def test_failed_terminal_persistence_does_not_publish_a_usable_parent(
         write: Callable[..., Awaitable[None]],
     ) -> Callable[..., Awaitable[None]]:
         async def persist(response: Any, *args: Any, **kwargs: Any) -> None:
-            if response.get("status") == "completed" and not terminal_writes:
-                response_id = str(response["id"])
-                metadata = _metadata(response)
-                assert BRANCH_BOUNDARY_KEY in metadata
-                assert TaskStorageManager(metadata).checkpoint_ref is not None
-                terminal_writes.append(response_id)
-                raise OSError("private storage details")
+            if response.get("status") == "completed":
+                ref = TaskStorageManager(_metadata(response)).checkpoint_ref
+                assert ref is not None
+                saver = graph.checkpointer
+                assert isinstance(saver, BaseCheckpointSaver)
+                saved = await saver.aget_tuple(_config(ref))
+                assert saved is not None
+                assert saved.checkpoint["id"] == ref.checkpoint_id
+                snapshot = await graph.aget_state(_config(ref))
+                assert not snapshot.next
+                assert not any(task.interrupts for task in snapshot.tasks)
+                assert snapshot.values["ledger"] == _text(response).split(",")
+                if not terminal_writes:
+                    terminal_writes.append(str(response["id"]))
+                    raise OSError("private storage details")
             await write(response, *args, **kwargs)
 
         return persist

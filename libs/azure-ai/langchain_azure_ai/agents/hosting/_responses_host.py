@@ -105,7 +105,6 @@ from ._responses.branching import (
     ResponseCheckpointSaver,
     branch_selection_scope,
     get_recovery_checkpoint,
-    mark_response_boundary,
     select_branch_checkpoint,
     validate_branch_checkpoint,
 )
@@ -1042,9 +1041,6 @@ class ResponsesHostServer:
         yield stream.emit_created()
         parent_id = request.get("previous_response_id")
         branch_root = branching_mode and not parent_id
-        publish_branch = branching_mode and (
-            request.get("store") is not False or bool(request.get("background"))
-        )
         if branching_mode:
             stream.internal_metadata[BRANCH_MODE_METADATA] = BRANCH_MODE
         if branch_root and (recovering or context.shutdown.is_set()):
@@ -1282,12 +1278,6 @@ class ResponsesHostServer:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
-            if publish_branch:
-                mark_response_boundary(
-                    stream,
-                    checkpoint_ref,
-                    paused=bool(new_pending),
-                )
             yield stream.emit_completed(usage=usage.response_usage)
         except BranchingError as exc:
             logger.exception("LangGraph response branch failed (%s)", exc.code)

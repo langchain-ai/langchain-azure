@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 
 from azure.ai.agentserver.responses import (
     ResponseContext,
-    ResponseEventStream,
     ResponseProviderProtocol,
 )
 from langchain_core.runnables import RunnableConfig
@@ -43,7 +42,6 @@ if TYPE_CHECKING:
 
 BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
 BRANCH_MODE = "checkpoint-v1"
-BRANCH_BOUNDARY_KEY = "langgraph_response_boundary_v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
 
 
@@ -233,7 +231,7 @@ async def select_branch_checkpoint(
     parent_id: str,
     context: ResponseContext,
 ) -> CheckpointRef:
-    """Select the completed parent's exact boundary for fresh execution."""
+    """Select the stored, completed parent's exact checkpoint for execution."""
     if provider is None:
         provider = getattr(context, "_provider", None)
     selections = _branch_selections.get()
@@ -252,36 +250,10 @@ async def select_branch_checkpoint(
             "The parent response must be stored and completed.",
         )
     metadata = _response_metadata(parent)
-    boundary = metadata.get(BRANCH_BOUNDARY_KEY)
-    if boundary is None:
-        raise BranchingError(
-            "invalid_branch_state",
-            "The parent response has no completed response-branching boundary.",
-        )
-    if (
-        not isinstance(boundary, dict)
-        or boundary.get("version") != "1"
-        or boundary.get("checkpoint_ns") != ""
-        or boundary.get("paused") not in ("true", "false")
-    ):
-        raise BranchingError(
-            "invalid_branch_state", "The response checkpoint record is invalid."
-        )
     ref = TaskStorageManager(metadata).checkpoint_ref
     if ref is None:
         raise BranchingError(
             "checkpoint_unavailable", "The parent has no completed checkpoint."
-        )
-    if any(name in boundary for name in ("thread_id", "checkpoint_id")) and (
-        CheckpointRef.from_dict(boundary) != ref
-    ):
-        raise BranchingError(
-            "invalid_branch_state", "The parent checkpoint metadata does not agree."
-        )
-    if boundary["paused"] == "true":
-        raise BranchingError(
-            "unsupported_branch_parent",
-            "Response branching does not support paused parent graphs.",
         )
     _require_completed_tools(parent)
 
@@ -306,26 +278,6 @@ async def validate_branch_checkpoint(
             "unsupported_branch_parent",
             "Response branching does not support paused parent graphs.",
         )
-
-
-def mark_response_boundary(
-    stream: ResponseEventStream, ref: CheckpointRef | None, *, paused: bool
-) -> None:
-    """Mark the response's final graph checkpoint for SDK terminal persistence."""
-    if ref is None:
-        raise BranchingError(
-            "checkpoint_unavailable", "The response produced no checkpoint boundary."
-        )
-    if TaskStorageManager.from_stream(stream).checkpoint_ref != ref:
-        raise BranchingError(
-            "invalid_branch_state",
-            "The completed boundary does not match the execution checkpoint.",
-        )
-    stream.internal_metadata[BRANCH_BOUNDARY_KEY] = {
-        "version": "1",
-        "checkpoint_ns": "",
-        "paused": str(paused).lower(),
-    }
 
 
 class ResponseCheckpointSaver(BaseCheckpointSaver[Any]):
