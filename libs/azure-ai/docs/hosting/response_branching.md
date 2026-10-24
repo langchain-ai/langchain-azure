@@ -22,6 +22,14 @@ The [OpenAI quickstart](https://developers.openai.com/api/docs/quickstart?tool-t
 provides the client usage baseline; the API reference defines the field semantics.
 This does not add OpenAI-hosted models or built-in tools to the configured graph.
 
+> **Current limitation:** Branching from a parent with outstanding function
+> calls (`function_call`) or MCP approval requests (`mcp_approval_request`) is
+> not supported yet. Providing `function_call_output` or `mcp_approval_response`
+> does not enable branching from that parent. Support is planned for a future
+> update. The tool/approval branching behavior described below is a compatibility
+> target, not a current capability. Ordinary tool and approval continuation
+> behavior is unchanged.
+
 - `previous_response_id` selects a specific response, not a thread's latest state.
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID, although a sequential conversation may internally use its
