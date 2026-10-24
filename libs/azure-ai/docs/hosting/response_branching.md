@@ -374,6 +374,10 @@ again. Keep the checkpoint history needed to restore the child's state.
 The following details are for maintainers; applications do not need to manage
 these fields or call these helpers.
 
+The execution flow below is limited to finished-parent branching. Branching from
+parents awaiting function results or MCP approval decisions is deferred to
+[Future scope](#future-scope-function-calls-and-mcp-approvals).
+
 ### Checkpoint references
 
 | Name | Meaning |
@@ -388,19 +392,19 @@ root checkpoint namespace.
 
 ### Fresh request
 
-1. **Select.** Resolve the explicit parent or the conversation context using the
-   platform's authorization context. Create an empty conversation on first use
-   of a valid ID confirmed absent in that scope. Response-ID selection uses
-   `select_branch_checkpoint`; `branch_selection_scope` caches it only for this
-   request. Persist the resolved linkage for recovery before graph execution.
-2. **Validate.** After configuration hooks and graph-bound configuration merging,
-   re-pin the parent's thread, root namespace, and checkpoint ID. Read through
+1. **Select.** Resolve the starting state using the platform's authorization
+   context. An explicit parent uses `select_branch_checkpoint`; a conversation
+   ID resolves to its current response/checkpoint reference. A valid new ID
+   confirmed absent in that scope initializes an empty head and starts a root
+   response. `branch_selection_scope` caches response-ID selections only for this
+   request. Persist the resolved starting reference for recovery before execution.
+2. **Validate.** For a selected parent, verify that its stored response is
+   completed and has no outstanding function calls or MCP approval requests.
+   After configuration hooks and graph-bound configuration merging, re-pin the
+   parent's thread, root namespace, and checkpoint ID. Read through
    `validate_branch_checkpoint` and `ResponseCheckpointSaver`. The returned tuple
-   and payload must match the selected identity. A finished-answer branch has no
-   next tasks or interrupts; tool and approval continuation must instead validate
-   its replies against the selected pending state. Validation failure prevents
-   execution. Extending the current finished-parent helpers for that continuation
-   is an implementation requirement, not existing support.
+   and payload must match the selected identity, with no next tasks or interrupts.
+   Validation failure prevents execution.
 3. **Execute and save.** Shallow-copy the graph and attach a request-local saver
    wrapper; leave the application's graph and saver unchanged. Pass current input
    and instructions, using the checkpoint for prior state. Run with
@@ -415,13 +419,21 @@ root checkpoint namespace.
    same confirmed final checkpoint reference; no separate boundary is written.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
-checkpoint alone cannot make a reusable parent: the stored response must also
-pass the graph-state and input checks for the selected continuation path.
-Response-ID branching must not select a mutable conversation head.
-Conversation continuation may use `conversation_chain_store` to locate the
-latest response's checkpoint, but that pointer must remain consistent with the
-SDK's ordered conversation items. It is not a replacement for the conversation
-resource. That store defaults to `FoundryConversationChainStore`.
+checkpoint alone cannot make a reusable parent: its response must also be stored
+and completed, and its output and restored graph state must satisfy the current
+finished-parent requirements. A response whose graph pauses for a tool result or
+approval is not a reusable parent within this scope.
+
+### Conversation head references
+
+Conversation continuation needs a mapping from `conversation_id` to its current
+response/checkpoint reference. The existing `conversation_chain_store` may be
+reused for that mapping; a full conversation chain is not required for branching.
+
+Response-ID branching selects the exact reference from the stored parent response
+without consulting the mutable conversation head. A conversation request resolves
+its head once and persists that starting reference for recovery. Later head
+updates must not redirect an in-flight or recovered request.
 
 ### Internal metadata and isolation
 
@@ -432,9 +444,9 @@ resource. That store defaults to `FoundryConversationChainStore`.
 - Graph ownership: `langgraph_response_execution` stores the JSON-encoded array
   `[response_key, parent_response_id]`; the parent is `null` for a root response.
   Private subgraph checkpoints are not stamped.
-- A conversation's internally resolved parent or item snapshot must be retained
+- A conversation's resolved parent response/checkpoint reference must be retained
   separately from the public request fields. Recovery must use that admitted
-  context, not whatever response is latest when recovery starts.
+  reference, not whatever response is latest when recovery starts.
 - A root thread uses the response key: the response ID prefixed with
   `user-<SHA-256 hex digest of user_id_key>:` when a nonempty platform
   `user_id_key` is present. This is separate from backend `user_isolation`.
@@ -444,8 +456,8 @@ resource. That store defaults to `FoundryConversationChainStore`.
 After configuration hooks and saver setup, validate that saved child progress
 belongs to both the current response key and the parent resolved for that request.
 Matching the thread alone is insufficient. Valid progress needs no parent lookup;
-absent progress requires the same admitted parent or conversation snapshot,
-not a fresh selection of a mutable conversation head.
+absent progress requires the same admitted starting reference, not a fresh
+selection of a mutable conversation head.
 
 `ResponseCheckpointSaver.resume_config` removes the outward `checkpoint_id`
 for native resume, retaining the exact reference as a request-local recovery
