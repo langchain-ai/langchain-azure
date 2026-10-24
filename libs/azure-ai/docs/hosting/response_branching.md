@@ -199,41 +199,35 @@ including conversations with initial items before their first response.
 
 ## Requirements and request rules
 
+> **Current scope:** Branching requires a finished parent graph with no pending
+> tasks, interrupts, function calls, or MCP approval requests. Parents with
+> outstanding `function_call` or `mcp_approval_request` items remain ineligible
+> even when matching replies are supplied. Support for these branching flows is
+> deferred to the future scope below. Ordinary tool and approval continuation
+> behavior is unchanged.
+
 A response-ID parent is reusable only when:
 
 1. It was stored and is available to the requesting caller.
 2. Its stored internal metadata identifies its exact final graph checkpoint.
 3. That checkpoint and the history needed to restore it are still available.
-4. The new input satisfies the applicable tool-output or approval protocol for
-   the selected state.
+4. Its graph has finished, with no pending tasks or interrupts, and its output
+   has no outstanding function calls or MCP approval requests.
 
 Parents created before branching was enabled or through ordinary continuation
 are eligible when they satisfy these checks. No branching-specific marker is
 required.
 
 **Response completion and graph completion are different.** A response can
-contain tool calls or approval requests while its graph is paused. Continuing
-from that response with the appropriate replies is part of the public protocol.
-For an ordinary answer with no pending work, restore the finished checkpoint.
-For tool or approval continuation, restore the selected pending state and apply
-the replies without changing the saved parent or another branch.
+contain tool calls or approval requests while its graph is paused. Such a parent
+is outside the current branching scope, even if its response status is
+`completed`. Current branching restores a finished checkpoint.
 
-### Tool outputs, approvals, and instructions
+### Instructions, checkpoints, and routing
 
-- Match a `function_call_output` to its function call using `call_id`, following
-  the [function-calling guide](https://developers.openai.com/api/docs/guides/function-calling).
-- Match an `mcp_approval_response` to the approval request's `id` using
-  `approval_request_id`; preserve the `approve` decision, including rejection.
-  The [MCP guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
-  explicitly demonstrates this continuation with `previous_response_id`.
-- Do not reject these input types merely because branching is enabled. Validate
-  them against the selected response or conversation context before graph work.
-- Do not infer that all outstanding MCP approvals must be answered in one
-  request from the single-approval examples. Partial, missing, duplicate, and
-  unknown-reply behavior requires the compatibility verification below.
-- Do not inherit a previous response's top-level `instructions` through a graph
-  checkpoint. Distinguish request-scoped instructions from actual system or
-  developer message items supplied in conversation history.
+Do not inherit a previous response's top-level `instructions` through a graph
+checkpoint. Distinguish request-scoped instructions from actual system or
+developer message items supplied in conversation history.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore
@@ -265,10 +259,31 @@ The adapter must create its own host to configure branching. Unsupported
 combinations, or a saver without the required async methods, raise `ValueError`
 during initialization.
 
-The branching flag controls the checkpoint execution strategy. It must not change
-the public meanings of `conversation`, `store`, tool replies, or `instructions`.
+The branching flag controls the checkpoint execution strategy for supported
+requests. It must not change the public meanings of `conversation`, `store`,
+or `instructions`.
 With branching disabled, the constructor's existing optional-provider default
 remains unchanged.
+
+### Future scope: function calls and MCP approvals
+
+These rules describe planned support for branching from parents awaiting tool
+results or MCP approval decisions. They are not part of the current branching
+scope. Future support must restore the selected pending state and apply replies
+without changing the saved parent or another branch.
+
+- Match a `function_call_output` to its function call using `call_id`, following
+  the [function-calling guide](https://developers.openai.com/api/docs/guides/function-calling).
+- Match an `mcp_approval_response` to the approval request's `id` using
+  `approval_request_id`; preserve the `approve` decision, including rejection.
+  The [MCP guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
+  explicitly demonstrates this continuation with `previous_response_id`.
+- Once supported, do not reject these input types merely because branching is
+  enabled. Validate them against the selected response or conversation context
+  before graph work.
+- Do not infer that all outstanding MCP approvals must be answered in one
+  request from the single-approval examples. Partial, missing, duplicate, and
+  unknown-reply behavior requires the compatibility verification below.
 
 ## What must be stored?
 
