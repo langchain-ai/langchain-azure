@@ -66,6 +66,24 @@ The branches share a LangGraph thread, with separate checkpoint histories.
 For response-ID branching, the host restores graph state directly; it does not
 rebuild it from response message history.
 
+For internal state selection, a conversation can be treated as a **moving
+response reference**, while a response ID is a **fixed reference**:
+
+| Reference | Starting state |
+| --- | --- |
+| `previous_response_id=A.id` | A's exact saved state, regardless of later responses. |
+| `conversation=conversation.id` | The conversation's current state; in a sequential exchange, normally its latest response's checkpoint. |
+
+If a conversation advances through A, B, and D, its reference moves forward to D.
+Referencing A directly still starts from A. Both linkage forms can use the same
+internal state-selection model.
+
+This abstraction preserves the public API: a conversation remains a separate
+resource, and the linkage fields remain mutually exclusive. An empty conversation
+starts fresh. Initial items and independently added or deleted items must be
+reflected in the selected state; the latest response's checkpoint is usable only
+when it represents that conversation context.
+
 ## Quick start
 
 ### 1. Enable branching on the server
