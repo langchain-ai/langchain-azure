@@ -156,6 +156,60 @@ updates:
         update-types:
           - "major"
 
+  - package-ecosystem: "uv"
+    directory: "/libs/azure-compute"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "langchain-core"
+      - dependency-name: "langchain"
+      - dependency-name: "langchain-classic"
+      - dependency-name: "langchain-text-splitters"
+      - dependency-name: "langchain-tests"
+      - dependency-name: "langchain-model-profiles"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "uv"
+    directories:
+      - "/samples/hosting/langgraph-hosted-agents/invocations/04_resilient/client"
+      - "/samples/hosting/langgraph-hosted-agents/responses/10_resilient/client"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    versioning-strategy: increase
+    ignore:
+      - dependency-name: "langchain-core"
+      - dependency-name: "langchain"
+      - dependency-name: "langchain-classic"
+      - dependency-name: "langchain-text-splitters"
+      - dependency-name: "langchain-tests"
+      - dependency-name: "langchain-model-profiles"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
   - package-ecosystem: "pip"
     directory: "/samples/react-agent-docintelligence"
     schedule:
