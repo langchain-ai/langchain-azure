@@ -51,6 +51,12 @@ class FakeCollection:
 
     def __init__(self) -> None:
         self.docs: List[Dict[str, Any]] = []
+        # Cosine similarity the fake vector index reports for the next
+        # `similarity_search` call, i.e. how close the query embedding
+        # actually is to the nearest stored document. Defaults to a perfect
+        # match so existing tests, which don't care about scoring, keep
+        # behaving as if every stored entry is an exact hit.
+        self.next_score = 1.0
 
     def delete_many(self, flt: Optional[Dict[str, Any]]) -> None:
         if not flt:
@@ -115,11 +121,16 @@ def _make_cosmosdb_stub() -> ModuleType:
             query: str,
             k: int = 4,
             pre_filter: Optional[Dict[str, Any]] = None,
+            score_threshold: float = 0.0,
             **kwargs: Any,
         ) -> List[Document]:
-            # Every stored document is treated as an equally strong
-            # nearest-neighbour match: only `pre_filter` decides what comes
-            # back, isolating the behaviour under test from embedding math.
+            # `pre_filter` decides which stored documents are even candidates;
+            # `self._collection.next_score` stands in for the cosine
+            # similarity the real vector index would compute between the
+            # query and its nearest neighbor, filtered the same way
+            # `_similarity_search_with_score` filters real results.
+            if self._collection.next_score < score_threshold:
+                return []
             candidates = self._collection.docs
             if pre_filter:
                 candidates = [d for d in candidates if _matches(d, pre_filter)]
@@ -196,3 +207,53 @@ def test_update_then_lookup_round_trips_for_the_same_llm_string() -> None:
     cache.update("2+2?", "model-a", [Generation(text="4")])
 
     assert cache.lookup("2+2?", "model-a") == [Generation(text="4")]
+
+
+def test_lookup_rejects_a_weak_nearest_neighbor_by_default() -> None:
+    """A barely-related cached entry must not be served as a cache hit.
+
+    Real text embeddings are rarely orthogonal, let alone opposite, so a
+    cache willing to accept any non-negative similarity effectively never
+    misses: it would return the nearest stored answer for almost any
+    unrelated prompt. With no `score_threshold` configured, a weak match
+    must be treated as a miss rather than a false hit.
+    """
+    collection = FakeCollection()
+    cache = _make_cache(collection)
+    cache.update("what is 2+2?", "model-a", [Generation(text="4")])
+
+    collection.next_score = 0.1
+    assert cache.lookup("tell me about the French Revolution", "model-a") is None
+
+
+def test_lookup_accepts_a_strong_nearest_neighbor_by_default() -> None:
+    """A genuinely close match must still be served without any configuration."""
+    collection = FakeCollection()
+    cache = _make_cache(collection)
+    cache.update("what is 2+2?", "model-a", [Generation(text="4")])
+
+    collection.next_score = 0.95
+    assert cache.lookup("what's 2+2?", "model-a") == [Generation(text="4")]
+
+
+def test_explicit_score_threshold_of_zero_is_honored() -> None:
+    """An explicit `score_threshold=0.0` must not be bumped up to the default.
+
+    `0.0` is falsy, so a naive `self.score_threshold or DEFAULT` would mistake
+    an intentional "accept anything non-negative" setting for "not provided."
+    """
+    collection = FakeCollection()
+    cache = AzureCosmosDBMongoVCoreSemanticCache(
+        cosmosdb_connection_string="mongodb://example",
+        database_name="db",
+        collection_name="coll",
+        embedding=None,  # type: ignore[arg-type]
+        cosmosdb_client={"db": {"coll": collection}},
+        score_threshold=0.0,
+    )
+    cache.update("what is 2+2?", "model-a", [Generation(text="4")])
+
+    collection.next_score = 0.0
+    assert cache.lookup("tell me about the French Revolution", "model-a") == [
+        Generation(text="4")
+    ]
