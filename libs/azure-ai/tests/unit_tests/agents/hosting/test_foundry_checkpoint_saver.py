@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from azure.ai.agentserver.core.storage import FoundryStorageNotFoundError
 from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
@@ -230,18 +232,35 @@ async def test_put_stamps_state_store_user_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_incompatible_existing_store() -> None:
+@pytest.mark.parametrize(
+    "setting,value", [("user_isolation", False), ("item_ttl_seconds", 600)]
+)
+async def test_uses_existing_store_without_descriptor_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    value: Any,
+) -> None:
     store = _FakeStateStore()
-    store.user_isolation = False
+    setattr(store, setting, value)
+    read_properties = AsyncMock(side_effect=AssertionError("Unexpected descriptor GET"))
+    monkeypatch.setattr(store, "get", read_properties)
     with patch(
         "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
-        saver = FoundryCheckpointSaver(_credential(), user_isolation=True)
-        with pytest.raises(ValueError, match="user_isolation=False"):
-            await saver.aget_tuple(_config())
+        saver = FoundryCheckpointSaver(_credential())
+        config = await saver.aput(
+            _config(),
+            _checkpoint("checkpoint-1", "first"),
+            cast(CheckpointMetadata, {"source": "input", "step": -1}),
+            {},
+        )
+        result = await saver.aget_tuple(config)
 
+    assert result is not None
+    assert result.checkpoint["channel_values"] == {"messages": ["first"]}
+    read_properties.assert_not_awaited()
     assert store.closed is True
 
 
@@ -795,28 +814,51 @@ async def test_alist_keeps_storage_and_matching_checkpoint_errors_visible(
 
 
 @pytest.mark.asyncio
-async def test_delete_user_isolated_thread_deletes_items() -> None:
+@pytest.mark.parametrize("configured_isolation", [False, True])
+@pytest.mark.parametrize("actual_isolation", [False, True])
+async def test_delete_thread_uses_store_isolation(
+    configured_isolation: bool,
+    actual_isolation: bool,
+) -> None:
     store = _FakeStateStore()
-    await store.set_item(
-        "/checkpoint-1",
-        {"checkpoint_id": "checkpoint-1"},
-        tags={"kind": "checkpoint", "ns": ""},
-    )
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
-        return_value=store,
+    store.user_isolation = actual_isolation
+    for index in range(101):
+        await store.set_item(
+            f"/checkpoint-{index}",
+            {"checkpoint_id": f"checkpoint-{index}"},
+            tags={"kind": "checkpoint", "ns": ""},
+        )
+    with (
+        patch(
+            "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+            "FoundryStateStore",
+            return_value=store,
+        ),
+        patch.object(store, "get", wraps=store.get) as read_properties,
     ):
-        saver = FoundryCheckpointSaver(_credential())
+        saver = FoundryCheckpointSaver(
+            _credential(),
+            user_isolation=configured_isolation,
+        )
         await saver.adelete_thread("thread-1")
 
-    assert store.deleted is False
-    assert store.items == {}
+    read_properties.assert_awaited_once()
+    assert store.deleted is not actual_isolation
+    if actual_isolation:
+        assert store.items == {}
+        assert len(store.list_keys_calls) == 2
+    else:
+        assert store.list_keys_calls == []
     assert store.closed is True
 
 
 @pytest.mark.asyncio
 async def test_delete_thread_stamps_user_agent() -> None:
-    store = SimpleNamespace(delete=AsyncMock(), aclose=AsyncMock())
+    store = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(user_isolation=False)),
+        delete=AsyncMock(),
+        aclose=AsyncMock(),
+    )
     with patch(
         "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
         return_value=store,
@@ -826,6 +868,40 @@ async def test_delete_thread_stamps_user_agent() -> None:
 
     assert state_store.call_args.kwargs["get_server_version"] is get_user_agent
     store.delete.assert_awaited_once()
+    store.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type", [FoundryStorageNotFoundError, RuntimeError, asyncio.CancelledError]
+)
+async def test_delete_thread_descriptor_failure_does_not_delete(
+    error_type: type[BaseException],
+) -> None:
+    error = error_type("descriptor unavailable")
+    store = SimpleNamespace(
+        get=AsyncMock(side_effect=error),
+        delete=AsyncMock(),
+        list_keys=AsyncMock(),
+        delete_item=AsyncMock(),
+        aclose=AsyncMock(),
+    )
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
+        return_value=store,
+    ):
+        saver = FoundryCheckpointSaver(_credential(), user_isolation=False)
+        if error_type is FoundryStorageNotFoundError:
+            await saver.adelete_thread("thread-1")
+        else:
+            with pytest.raises(error_type) as raised:
+                await saver.adelete_thread("thread-1")
+            assert raised.value is error
+
+    store.get.assert_awaited_once()
+    store.delete.assert_not_awaited()
+    store.list_keys.assert_not_awaited()
+    store.delete_item.assert_not_awaited()
     store.aclose.assert_awaited_once()
 
 

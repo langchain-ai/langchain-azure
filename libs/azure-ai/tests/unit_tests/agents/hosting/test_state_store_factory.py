@@ -21,7 +21,10 @@ from azure.ai.agentserver.core.storage import (
 from azure.core.pipeline.transport import AioHttpTransport
 from langchain_core.runnables import RunnableConfig
 
-from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
+    FoundryConversationChainStore,
+)
 from langchain_azure_ai.agents.hosting._storage import (
     get_state_store,
     state_store_client_scope,
@@ -305,29 +308,58 @@ async def test_factory_rejects_another_event_loop_before_borrowing(
     clients[0].aclose.assert_awaited_once()
 
 
-async def test_scoped_saver_revalidates_settings_before_item_access(
+async def test_scoped_saver_refreshes_existence_without_revalidation(
     clients: list[Any],
 ) -> None:
     saver = FoundryCheckpointSaver(credential=AsyncMock())
     config: RunnableConfig = {"configurable": {"thread_id": "thread"}}
-    # A returned store must pass the original validation on every operation.
-    with pytest.raises(ValueError, match="user_isolation=False"):
-        async with state_store_client_scope():
-            async with get_state_store(
-                saver, FoundryStateStore, saver._store_name("thread")
-            ) as store:
-                cast(Any, store).get.return_value = SimpleNamespace(
-                    user_isolation=True, item_ttl_seconds=30 * 24 * 60 * 60
-                )
-                cast(Any, store).list_keys = AsyncMock(
-                    return_value=SimpleNamespace(keys=[], has_more=False)
-                )
-            assert await saver.aget_tuple(config) is None
-            cast(Any, store).get.return_value.user_isolation = False
-            await saver.aget_tuple(config)
-    assert cast(Any, store).list_keys.await_count == 1
-    assert cast(Any, store).get.await_count == 4
+    async with state_store_client_scope():
+        async with get_state_store(
+            saver, FoundryStateStore, saver._store_name("thread")
+        ) as store:
+            cast(Any, store).get.return_value = SimpleNamespace(
+                user_isolation=False, item_ttl_seconds=600
+            )
+            cast(Any, store).list_keys = AsyncMock(
+                return_value=SimpleNamespace(keys=[], has_more=False)
+            )
+        assert await saver.aget_tuple(config) is None
+        assert await saver.aget_tuple(config) is None
+        assert len(clients) == 1
+        assert cast(Any, store).get.await_count == 2
+        assert cast(Any, store).list_keys.await_count == 2
     cast(Any, store).aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
+async def test_scoped_chain_store_reuses_existing_settings(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], on_mismatch: str
+) -> None:
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    chain = FoundryConversationChainStore(
+        user_isolation=True, on_mismatch=cast(Any, on_mismatch)
+    )
+    data = {"value": "stored"}
+    async with state_store_client_scope():
+        async with get_state_store(
+            chain, FoundryStateStore, chain._store_name("chain")
+        ) as store:
+            fake = cast(Any, store)
+            fake.get.return_value = SimpleNamespace(
+                user_isolation=False, item_ttl_seconds=600
+            )
+            fake.set_item = AsyncMock()
+            fake.get_item = AsyncMock(return_value=SimpleNamespace(value=data))
+        await chain.set("chain", "key", data)
+        assert await chain.get("chain", "key") == data
+        assert len(clients) == 1
+        assert fake.get.await_count == 2
+        fake.set_item.assert_awaited_once_with("key", data)
+    fake.aclose.assert_awaited_once()
 
 
 async def test_failed_acquisition_closes_owned_session(

@@ -79,8 +79,9 @@ Each Responses handler owns a private `StateStoreClientFactory`. The Foundry
 checkpoint saver and conversation-chain store borrow clients from it, from config
 resolution through the final chain write. Each consumer, store name and platform
 user gets a separate client; hosted clients share a handler-owned connection pool.
-Every operation still refreshes store metadata and applies the existing isolation
-and TTL checks. No checkpoint values or descriptors are cached.
+Each acquisition resolves the store metadata to detect missing stores. Isolation
+and TTL are creation options; existing stores retain their settings without
+revalidation. No checkpoint values or descriptors are cached.
 The factory and request feature flags are bound separately for each iterator
 advance or close. Tokens are restored before yielding an event to AgentServer,
 so a later iteration can run in another Task without reusing an old token.
