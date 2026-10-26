@@ -995,6 +995,13 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
+            if not store_response and context.shutdown.is_set():
+                yield stream.emit_failed(
+                    code="server_shutdown",
+                    message=_NON_STORED_SHUTDOWN_MESSAGE,
+                )
+                return
+
             active_interrupts: list["Interrupt"] = []
             graph_stream = track_pending_interrupts(
                 graph.astream(

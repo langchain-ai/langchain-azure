@@ -917,9 +917,19 @@ def test_store_false_shutdown_returns_terminal_failure(streaming: bool) -> None:
             context.shutdown.set()
             return graph_input
 
-    graph = make_checkpointed_echo_graph()
-    checkpointer = graph.checkpointer
-    assert isinstance(checkpointer, InMemorySaver)
+    node_runs = 0
+
+    async def echo(state: MessagesState) -> dict[str, list[AIMessage]]:
+        nonlocal node_runs
+        node_runs += 1
+        return {"messages": [AIMessage(content="hello")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    checkpointer = InMemorySaver()
+    graph = builder.compile(checkpointer=checkpointer)
     server = ShuttingDownHost(
         graph, options=ResponsesServerOptions(resilient_background=True)
     )
@@ -942,6 +952,7 @@ def test_store_false_shutdown_returns_terminal_failure(streaming: bool) -> None:
         payload = response.json()
     assert payload["status"] == "failed", payload
     assert payload["error"]["code"] == "server_shutdown", payload
+    assert node_runs == 0
     assert list(checkpointer.list(None)) == []
 
 
