@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import pytest
+from pytest_mock import MockerFixture
 
 pytest.importorskip("azure.ai.agentserver.responses")
 
@@ -71,6 +72,66 @@ def sync_source_saver(
     else:
         with SqliteSaver.from_conn_string(":memory:") as saver:
             yield saver
+
+
+@pytest.mark.parametrize("imported", [False, True], ids=["local", "imported"])
+async def test_transient_pending_writes_do_not_reload_cached_checkpoints(
+    source_saver: BaseCheckpointSaver,
+    imported: bool,
+    mocker: MockerFixture,
+) -> None:
+    branch = TransientCheckpointSaver(source_saver)
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": ""}
+    }
+    checkpoint = empty_checkpoint()
+    saver = source_saver if imported else branch
+    config = await saver.aput(config, checkpoint, {}, {})
+    if imported:
+        assert await branch.aget_tuple(config) is not None
+    source_before = [saved async for saved in source_saver.alist(config)]
+    decode = mocker.spy(branch.serde, "loads_typed")
+
+    for number in range(32):
+        await branch.aput_writes(config, [("history", [str(number)])], f"task-{number}")
+
+    assert decode.call_count == 0
+    saved = await branch.aget_tuple(config)
+    assert saved is not None
+    assert saved.pending_writes == [
+        (f"task-{number}", "history", [str(number)]) for number in range(32)
+    ]
+    assert [saved async for saved in source_saver.alist(config)] == source_before
+
+
+@pytest.mark.parametrize("imported", [False, True], ids=["local", "imported"])
+def test_transient_sync_pending_writes_do_not_reload_cached_checkpoints(
+    sync_source_saver: BaseCheckpointSaver,
+    imported: bool,
+    mocker: MockerFixture,
+) -> None:
+    branch = TransientCheckpointSaver(sync_source_saver)
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": ""}
+    }
+    checkpoint = empty_checkpoint()
+    saver = sync_source_saver if imported else branch
+    config = saver.put(config, checkpoint, {}, {})
+    if imported:
+        assert branch.get_tuple(config) is not None
+    source_before = list(sync_source_saver.list(config))
+    decode = mocker.spy(branch.serde, "loads_typed")
+
+    for number in range(32):
+        branch.put_writes(config, [("history", [str(number)])], f"task-{number}")
+
+    assert decode.call_count == 0
+    saved = branch.get_tuple(config)
+    assert saved is not None
+    assert saved.pending_writes == [
+        (f"task-{number}", "history", [str(number)]) for number in range(32)
+    ]
+    assert list(sync_source_saver.list(config)) == source_before
 
 
 @pytest.mark.parametrize("preload", [False, True])

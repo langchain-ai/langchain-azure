@@ -47,6 +47,7 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
     select them as the active branch. Imported pending writes retain their
     original indices; unsupported ordinary-write imports fail rather than
     guessing indices omitted by the source's public checkpoint tuple.
+    Cached checkpoint identities let task writes skip reloading saved values.
     """
 
     def __init__(self, source: BaseCheckpointSaver) -> None:
@@ -54,6 +55,7 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         self._source: BaseCheckpointSaver = source
         self._memory: BaseCheckpointSaver[str] = InMemorySaver(serde=source.serde)
         self._active_checkpoints: dict[tuple[str, str], str] = {}
+        self._local_checkpoints: set[tuple[str, str, str]] = set()
 
     def with_allowlist(
         self, extra_allowlist: Collection[tuple[str, ...]]
@@ -300,12 +302,14 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
             "channel_values": {"checkpoint": checkpoint},
             "channel_versions": {"checkpoint": checkpoint["id"]},
         }
-        return self._memory.put(
+        saved_config = self._memory.put(
             config,
             local_checkpoint,
             metadata,
             local_checkpoint["channel_versions"],
         )
+        self._local_checkpoints.add((*self._branch_key(saved_config), checkpoint["id"]))
+        return saved_config
 
     def put(
         self,
@@ -337,7 +341,11 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         """Keep pending task writes within the request."""
-        self.get_tuple(config)
+        if (
+            *self._branch_key(config),
+            get_checkpoint_id(config),
+        ) not in self._local_checkpoints:
+            self.get_tuple(config)
         self._put_writes(config, writes, task_id, task_path)
 
     def _put_writes(
@@ -381,7 +389,11 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         """Save pending writes without writing to the source saver."""
-        await self.aget_tuple(config)
+        if (
+            *self._branch_key(config),
+            get_checkpoint_id(config),
+        ) not in self._local_checkpoints:
+            await self.aget_tuple(config)
         self._put_writes(config, writes, task_id, task_path)
 
     def get_next_version(
