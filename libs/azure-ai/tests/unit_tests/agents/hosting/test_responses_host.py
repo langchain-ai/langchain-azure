@@ -1277,18 +1277,6 @@ async def test_cached_root_scopes_thread_for_current_user(
             METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "",
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
         },
-        # The SDK stores internal metadata in a JSON value limited to 512 characters.
-        pytest.param(
-            {
-                METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513,
-                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
-            },
-            id="legacy_metadata_exceeds_512_characters",
-        ),
-        pytest.param(
-            json.dumps({METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513}),
-            id="json_metadata_exceeds_512_characters",
-        ),
     ],
 )
 async def test_previous_response_root_metadata_falls_back_to_root(

@@ -98,9 +98,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Responses metadata values, including the internal JSON bag, allow 512 characters.
-_MAX_INTERNAL_METADATA_CHARS = 512
-
 StreamMode = Literal[
     "values",
     "updates",
@@ -258,22 +255,11 @@ def _response_root_id(response: Any) -> str | None:
     if not isinstance(metadata, dict):
         return None
     internal = metadata.get("_internal_metadata")
-    if not isinstance(internal, (str, dict)):
-        return None
-    try:
-        encoded = (
-            internal
-            if isinstance(internal, str)
-            else json.dumps(
-                internal, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            )
-        )
-        if len(encoded) > _MAX_INTERNAL_METADATA_CHARS:
-            return None
-        if isinstance(internal, str):
+    if isinstance(internal, str):
+        try:
             internal = json.loads(internal)
-    except (TypeError, ValueError):
-        return None
+        except ValueError:
+            return None
     if not isinstance(internal, dict):
         return None
     value = internal.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
