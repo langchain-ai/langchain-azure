@@ -1122,6 +1122,57 @@ async def test_previous_response_thread_metadata_avoids_ancestor_reads(
 
 
 @pytest.mark.parametrize(
+    ("owner_key", "caller_key"),
+    [("user-a", "user-b"), ("user-a", None), (None, "user-b")],
+)
+async def test_previous_response_thread_metadata_rejects_other_user(
+    owner_key: str | None, caller_key: str | None
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    owner_config = await server.build_runnable_config(
+        _request(),
+        _context(response_id="resp-root", conversation_id=None, user_id_key=owner_key),
+    )
+    expected_config = await server.build_runnable_config(
+        _request(),
+        _context(response_id="resp-root", conversation_id=None, user_id_key=caller_key),
+    )
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=[
+                _response_object(
+                    "resp-parent",
+                    previous_response_id="resp-root",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_THREAD_ID: owner_config["configurable"][
+                            "thread_id"
+                        ],
+                    },
+                ),
+                _response_object("resp-root"),
+            ]
+        )
+    )
+    context = _context(conversation_id=None, provider=provider, user_id_key=caller_key)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert (
+        config["configurable"]["thread_id"]
+        == expected_config["configurable"]["thread_id"]
+    )
+    assert (
+        config["configurable"]["thread_id"] != owner_config["configurable"]["thread_id"]
+    )
+    assert provider.get_response.await_args_list == [
+        call("resp-parent", context=context.platform_context),
+        call("resp-root", context=context.platform_context),
+    ]
+
+
+@pytest.mark.parametrize(
     "metadata",
     [
         None,

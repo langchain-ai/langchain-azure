@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
 from pathlib import Path
@@ -749,7 +750,10 @@ class ResponsesHostServer:
             except (TypeError, ValueError):
                 thread_id = None
             if isinstance(thread_id, str) and thread_id:
-                return thread_id
+                namespace_match = re.match(r"user-[0-9a-f]{64}:", thread_id)
+                namespace = namespace_match.group() if namespace_match else ""
+                if namespace == _scope_thread_id("", context):
+                    return thread_id
 
             root_response_id = response_id
             response_id = _response_field(response, "previous_response_id")
