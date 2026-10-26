@@ -117,8 +117,13 @@ async def test_handler_owns_clients_through_generator_exit(
 
 @pytest.mark.parametrize("boundary", ["graph", "handler"])
 @pytest.mark.parametrize("primary_kind", ["error", "recovery", "generator_exit"])
+@pytest.mark.parametrize("cancelled_close", [False, True])
 async def test_iterator_cleanup_preserves_primary_error(
-    monkeypatch: pytest.MonkeyPatch, boundary: str, primary_kind: str
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    primary_kind: str,
+    cancelled_close: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from azure.ai.agentserver.responses import ResponseExitForRecovery
 
@@ -130,8 +135,15 @@ async def test_iterator_cleanup_preserves_primary_error(
         "generator_exit": GeneratorExit(),
     }[primary_kind]
 
+    async def close() -> None:
+        if cancelled_close:
+            worker = asyncio.create_task(asyncio.sleep(0))
+            worker.cancel("close worker cancelled")
+            await worker
+        raise RuntimeError("close failed")
+
     class Iterator:
-        aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+        aclose = AsyncMock(side_effect=close)
 
         def __aiter__(self) -> Any:
             return self
@@ -151,6 +163,9 @@ async def test_iterator_cleanup_preserves_primary_error(
                 server._handle_create_async_gen(_request(), _context(), asyncio.Event())
             )
     assert caught.value is primary
+    task = asyncio.current_task()
+    assert task is not None and task.cancelling() == 0
+    assert "Hosting cleanup failed during handler exit" in caplog.text
     iterator.aclose.assert_awaited_once()
 
 
@@ -284,13 +299,13 @@ async def test_anyio_cancelled_handler_waits_for_cleanup_without_spinning(
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     server = ResponsesHostServer(make_echo_graph())
     cancellations = []
-    shield_calls = 0
-    shield = asyncio.shield
+    wait_calls = 0
+    wait = asyncio.wait
 
-    def counted_shield(awaitable: Any) -> Any:
-        nonlocal shield_calls
-        shield_calls += 1
-        return shield(awaitable)
+    def counted_wait(*args: Any, **kwargs: Any) -> Any:
+        nonlocal wait_calls
+        wait_calls += 1
+        return wait(*args, **kwargs)
 
     async def close() -> None:
         await asyncio.sleep(0.02)
@@ -320,13 +335,13 @@ async def test_anyio_cancelled_handler_waits_for_cleanup_without_spinning(
 
     store.aclose.side_effect = close
     monkeypatch.setattr(server, "handle_create", handle)
-    monkeypatch.setattr(asyncio, "shield", counted_shield)
+    monkeypatch.setattr(asyncio, "wait", counted_wait)
     async with create_task_group() as group:
         group.start_soon(consume)
         await started.wait()
         group.cancel_scope.cancel()
     assert len(cancellations) == 1
-    assert shield_calls < 10, "Cleanup must wait instead of retrying level cancellation"
+    assert wait_calls < 10, "Cleanup must wait instead of retrying level cancellation"
     acquire.assert_awaited_once()
     store.aclose.assert_awaited_once()
     if close_fails:

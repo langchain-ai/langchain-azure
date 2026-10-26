@@ -381,15 +381,19 @@ async def test_failed_acquisition_closes_owned_session(
     assert transports[0].session.closed
 
 
+@pytest.mark.parametrize(
+    "close_error",
+    [RuntimeError("close failed"), asyncio.CancelledError("close cancelled")],
+)
 async def test_close_failure_still_closes_remaining_resources(
-    clients: list[Any],
+    clients: list[Any], close_error: BaseException
 ) -> None:
-    with pytest.raises(RuntimeError, match="close failed"):
+    with pytest.raises(type(close_error)):
         async with state_store_client_scope():
             for name in ("a", "b"):
                 async with get_state_store(object(), FoundryStateStore, name):
                     pass
-            clients[-1].aclose.side_effect = RuntimeError("close failed")
+            clients[-1].aclose.side_effect = close_error
     assert all(c.options["transport"].session.closed for c in clients)
     for client in clients:
         client.aclose.assert_awaited_once()
@@ -397,8 +401,13 @@ async def test_close_failure_still_closes_remaining_resources(
 
 @pytest.mark.parametrize("primary_kind", ["error", "recovery", "generator_exit"])
 @pytest.mark.parametrize("cancel_during_close", [False, True])
+@pytest.mark.parametrize("cancelled_close", [False, True])
 async def test_cleanup_preserves_primary_error_and_new_cancellation(
-    clients: list[Any], primary_kind: str, cancel_during_close: bool
+    clients: list[Any],
+    primary_kind: str,
+    cancel_during_close: bool,
+    cancelled_close: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from azure.ai.agentserver.responses import ResponseExitForRecovery
 
@@ -412,6 +421,10 @@ async def test_cleanup_preserves_primary_error_and_new_cancellation(
     async def close() -> None:
         closing.set()
         await release.wait()
+        if cancelled_close:
+            worker = asyncio.create_task(asyncio.sleep(0))
+            worker.cancel("close worker cancelled")
+            await worker
         raise RuntimeError("close failed")
 
     async def handler() -> None:
@@ -434,6 +447,8 @@ async def test_cleanup_preserves_primary_error_and_new_cancellation(
             assert caught.value.args == ("cancel during cleanup",)
         else:
             assert caught.value is primary
+        assert task.cancelling() == int(cancel_during_close)
+        assert "Hosting cleanup failed during handler exit" in caplog.text
         clients[0].aclose.assert_awaited_once()
         assert clients[0].options["transport"].session.closed
     finally:

@@ -91,7 +91,7 @@ timeout, then closes clients and the pool. Handler Tasks are protected from this
 cancellation. Iterator closes, borrower drain/cancellation waits and resource
 closes each have a five-second budget, with no shared total deadline or limit on
 graph runtime. Cleanup preserves primary errors, recovery signals and generator
-exit; cancellation takes precedence. Secondary cleanup errors are logged;
+exit; caller cancellation takes precedence. Secondary cleanup errors are logged;
 normal-exit cleanup failures propagate.
 
 A graph-close timeout leaves the conversation-chain checkpoint unchanged.

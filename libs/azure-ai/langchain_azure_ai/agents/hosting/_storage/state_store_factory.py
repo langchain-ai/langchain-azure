@@ -78,7 +78,7 @@ async def _close_resource(
 async def _finish_cleanup(close: Awaitable[None]) -> AsyncIterator[None]:
     """Close on exit without replacing a primary error or control signal.
 
-    New cancellation wins; repeated cancellation preserves the first exception.
+    Caller cancellation wins; repeated cancellation preserves the first exception.
     Secondary cleanup errors are logged. Normal exit propagates cleanup errors.
     """
     primary: BaseException | None = None
@@ -94,12 +94,13 @@ async def _finish_cleanup(close: Awaitable[None]) -> AsyncIterator[None]:
             with CancelScope(shield=True):
                 while not cleanup.done():
                     try:
-                        await asyncio.shield(cleanup)
+                        # Only caller cancellation interrupts this wait.
+                        await asyncio.wait({cleanup})
                     except asyncio.CancelledError as exc:
                         if not isinstance(primary, asyncio.CancelledError):
                             primary = exc
                 await cleanup
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             if primary is None:
                 raise
             logger.exception("Hosting cleanup failed during handler exit")
