@@ -38,6 +38,10 @@ from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
 )
+from langchain_azure_ai.agents.hosting._checkpoint_writes import (
+    _IndexedPendingWrites,
+    _IndexedWrite,
+)
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -567,7 +571,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         store: FoundryStateStore,
         checkpoint_ns: str,
         checkpoint_id: str,
-    ) -> list[tuple[str, str, Any]]:
+    ) -> _IndexedPendingWrites:
         records: list[_PendingWriteItemValue] = []
         after: str | None = None
         tags: _PendingWriteItemTags = {
@@ -591,14 +595,16 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             after = page.last_id
 
         records.sort(key=lambda item: (item["task_id"], item["index"]))
-        return [
-            (
+        return _IndexedPendingWrites(
+            _IndexedWrite(
                 item["task_id"],
+                item["index"],
                 item["channel"],
                 self._deserialize(item["value"]),
+                item["task_path"],
             )
             for item in records
-        ]
+        )
 
     def _serialize(self, value: Any) -> _SerializedValue:
         type_name, data = self.serde.dumps_typed(value)

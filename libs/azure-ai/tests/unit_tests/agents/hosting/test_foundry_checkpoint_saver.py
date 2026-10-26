@@ -14,7 +14,10 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from azure.ai.agentserver.core.storage import FoundryStorageNotFoundError
+from azure.ai.agentserver.core.storage import (
+    FoundryStorageConflictError,
+    FoundryStorageNotFoundError,
+)
 from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
@@ -80,7 +83,8 @@ class _FakeStateStore:
         *,
         tags: dict[str, str],
     ) -> None:
-        assert key not in self.items
+        if key in self.items:
+            raise FoundryStorageConflictError("Item already exists")
         await self.set_item(key, value, tags=tags)
 
     async def get_item(self, key: str) -> Any | None:
@@ -999,6 +1003,33 @@ async def test_transient_forked_integer_versions_preserve_current_checkpoint(
         == checkpoint.checkpoint
     )
     assert [saved async for saved in saver.alist(config)] == source_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preload", [False, True])
+async def test_transient_pending_writes_preserve_foundry_indices(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    preload: bool,
+) -> None:
+    saver, store = saver_and_store
+    config = await saver.aput(_config(), _checkpoint("001", "saved"), {}, {})
+    await saver.aput_writes(config, [("__interrupt__", ["question"])], "task")
+    writes = [("__resume__", ["yes"]), ("history", ["same"]), ("history", ["same"])]
+    await saver.aput_writes(config, writes, "task")
+    source_before = await saver.aget_tuple(config)
+    items_before = dict(store.items)
+    assert source_before is not None
+
+    branch = TransientCheckpointSaver(saver)
+    if preload:
+        assert await branch.aget_tuple(config) is not None
+    await branch.aput_writes(config, writes, "task")
+    local = await branch.aget_tuple(config)
+    assert local is not None
+    assert local.pending_writes == source_before.pending_writes
+    assert [saved async for saved in branch.alist(_config())] == [local]
+    assert store.items == items_before
+    assert await saver.aget_tuple(config) == source_before
 
 
 @pytest.mark.asyncio

@@ -5,13 +5,20 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import AsyncIterator, Collection, Iterable, Iterator, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from itertools import chain, islice
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
     BaseCheckpointSaver,
     ChannelVersions,
     Checkpoint,
@@ -21,13 +28,25 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.memory import InMemorySaver
 
+from langchain_azure_ai.agents.hosting._checkpoint_writes import (
+    _aget_indexed_writes,
+    _get_indexed_writes,
+    _IndexedPendingWrites,
+    _IndexedWrite,
+)
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.base import DeltaChannelHistory
+
 
 class TransientCheckpointSaver(BaseCheckpointSaver):
     """Isolate conversation writes in memory without providing crash recovery.
 
     Complete snapshots are cached by checkpoint ID, since source channel
     versions may repeat across forks. Reading historical snapshots does not
-    select them as the active branch.
+    select them as the active branch. Imported pending writes retain their
+    original indices; unsupported ordinary-write imports fail rather than
+    guessing indices omitted by the source's public checkpoint tuple.
     """
 
     def __init__(self, source: BaseCheckpointSaver) -> None:
@@ -51,8 +70,15 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         saved = self._get_local(config)
         if saved is not None:
             return saved
+        saved = self._source.get_tuple(config)
+        writes = (
+            _get_indexed_writes(self._source, saved)
+            if saved is not None and self._get_local(saved.config) is None
+            else _IndexedPendingWrites(())
+        )
         return self._import_checkpoint(
-            self._source.get_tuple(config),
+            saved,
+            writes,
             select_current=not get_checkpoint_id(config),
         )
 
@@ -61,8 +87,15 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         saved = self._get_local(config)
         if saved is not None:
             return saved
+        saved = await self._source.aget_tuple(config)
+        writes = (
+            await _aget_indexed_writes(self._source, saved)
+            if saved is not None and self._get_local(saved.config) is None
+            else _IndexedPendingWrites(())
+        )
         return self._import_checkpoint(
-            await self._source.aget_tuple(config),
+            saved,
+            writes,
             select_current=not get_checkpoint_id(config),
         )
 
@@ -80,7 +113,29 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
     @staticmethod
     def _unpack_checkpoint(saved: CheckpointTuple) -> CheckpointTuple:
         return saved._replace(
-            checkpoint=saved.checkpoint["channel_values"]["checkpoint"]
+            checkpoint=saved.checkpoint["channel_values"]["checkpoint"],
+            pending_writes=_IndexedPendingWrites(
+                _IndexedWrite(task_id, index, channel, value, task_path)
+                for _, channel, (task_id, index, value, task_path) in (
+                    saved.pending_writes or ()
+                )
+            ),
+        )
+
+    def get_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str]
+    ) -> Mapping[str, DeltaChannelHistory]:
+        """Rebuild Delta history in task/index order, not insertion order."""
+        return _DeltaHistoryReader(self).get_delta_channel_history(
+            config=config, channels=channels
+        )
+
+    async def aget_delta_channel_history(
+        self, *, config: RunnableConfig, channels: Sequence[str]
+    ) -> Mapping[str, DeltaChannelHistory]:
+        """Rebuild ordered Delta history without synchronous source reads."""
+        return await _DeltaHistoryReader(self).aget_delta_channel_history(
+            config=config, channels=channels
         )
 
     def _get_local(self, config: RunnableConfig) -> CheckpointTuple | None:
@@ -201,7 +256,11 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         )
 
     def _import_checkpoint(
-        self, saved: CheckpointTuple | None, *, select_current: bool = False
+        self,
+        saved: CheckpointTuple | None,
+        writes: _IndexedPendingWrites,
+        *,
+        select_current: bool = False,
     ) -> CheckpointTuple | None:
         if saved is None:
             return None
@@ -223,11 +282,8 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
             config = self._save_checkpoint(
                 parent_config, saved.checkpoint, saved.metadata
             )
-            writes: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-            for task_id, channel, value in saved.pending_writes or ():
-                writes[task_id].append((channel, value))
-            for task_id, task_writes in writes.items():
-                self.put_writes(config, task_writes, task_id)
+            for write in writes.indexed:
+                self._put_write(config, write)
             local = self._get_local(config)
         if select_current:
             self._set_active(saved.config, saved.checkpoint["id"])
@@ -281,7 +337,41 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         """Keep pending task writes within the request."""
-        self._memory.put_writes(config, writes, task_id, task_path)
+        self.get_tuple(config)
+        self._put_writes(config, writes, task_id, task_path)
+
+    def _put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str,
+    ) -> None:
+        for ordinal, (channel, value) in enumerate(writes):
+            self._put_write(
+                config,
+                _IndexedWrite(
+                    task_id,
+                    WRITES_IDX_MAP.get(channel, ordinal),
+                    channel,
+                    value,
+                    task_path,
+                ),
+            )
+
+    def _put_write(self, config: RunnableConfig, write: _IndexedWrite) -> None:
+        # Index-scoped task keys retain native first-write/overwrite semantics.
+        self._memory.put_writes(
+            config,
+            [
+                (
+                    write.channel,
+                    (write.task_id, write.write_index, write.value, write.task_path),
+                )
+            ],
+            f"{write.write_index}:{write.task_id}",
+            write.task_path,
+        )
 
     async def aput_writes(
         self,
@@ -291,10 +381,40 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         """Save pending writes without writing to the source saver."""
-        self.put_writes(config, writes, task_id, task_path)
+        await self.aget_tuple(config)
+        self._put_writes(config, writes, task_id, task_path)
 
     def get_next_version(
         self, current: str | int | float | None, channel: None
     ) -> str | int | float:
         """Retain the source saver's channel version format."""
         return self._source.get_next_version(current, channel)
+
+
+class _DeltaHistoryReader(BaseCheckpointSaver):
+    """Reuse LangGraph's parent walk without reordering ordinary state reads."""
+
+    def __init__(self, source: TransientCheckpointSaver) -> None:
+        super().__init__(serde=source.serde)
+        self._source = source
+
+    def _ordered(self, saved: CheckpointTuple | None) -> CheckpointTuple | None:
+        if saved is None:
+            return None
+        writes = _get_indexed_writes(self._source, saved)
+        return saved._replace(
+            pending_writes=_IndexedPendingWrites(
+                sorted(
+                    writes.indexed,
+                    key=lambda write: (write.task_id, write.write_index),
+                )
+            )
+        )
+
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Read a checkpoint with pending writes ordered for Delta replay."""
+        return self._ordered(self._source.get_tuple(config))
+
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Read ordered writes without requiring a synchronous source saver."""
+        return self._ordered(await self._source.aget_tuple(config))

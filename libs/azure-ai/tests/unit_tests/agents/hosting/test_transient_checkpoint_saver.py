@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from typing import Annotated
+import operator
+from collections.abc import AsyncIterator, Iterator, Sequence
+from typing import Annotated, Any
+from uuid import UUID
 
 import pytest
 
@@ -14,8 +16,14 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import BaseCheckpointSaver, empty_checkpoint
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    BaseCheckpointSaver,
+    CheckpointTuple,
+    empty_checkpoint,
+)
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -52,6 +60,344 @@ async def source_saver(
     else:
         async with AsyncSqliteSaver.from_conn_string(":memory:") as saver:
             yield saver
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def sync_source_saver(
+    request: pytest.FixtureRequest,
+) -> Iterator[BaseCheckpointSaver]:
+    if request.param == "memory":
+        yield InMemorySaver()
+    else:
+        with SqliteSaver.from_conn_string(":memory:") as saver:
+            yield saver
+
+
+@pytest.mark.parametrize("preload", [False, True])
+@pytest.mark.parametrize(
+    ("initial_batches", "retried"),
+    [
+        (
+            [[("__resume__", ["yes"])], [("history", ["answer"])]],
+            [("history", ["answer"])],
+        ),
+        (
+            [
+                [("__interrupt__", ["question"])],
+                [("__resume__", ["yes"]), ("history", ["answer"])],
+            ],
+            [("__resume__", ["yes"]), ("history", ["answer"])],
+        ),
+        (
+            [
+                [
+                    ("__resume__", ["first"]),
+                    ("__resume__", ["first", "second"]),
+                    ("history", ["same"]),
+                    ("history", ["same"]),
+                ]
+            ],
+            [("history", ["new-at-zero"])],
+        ),
+        (
+            [
+                [("__resume__", ["yes"]), ("history", ["one"])],
+                [("history", ["zero"])],
+            ],
+            [("history", ["zero"])],
+        ),
+        (
+            [[("history", ["same"]), ("history", ["same"])]],
+            [("history", ["same"]), ("history", ["same"])],
+        ),
+        (
+            [[("history", ["first"]), ("other", ["second"])]],
+            [("other", ["replacement-at-zero"])],
+        ),
+        (
+            [[(channel, ["old"]) for channel in WRITES_IDX_MAP]],
+            [(channel, ["new"]) for channel in WRITES_IDX_MAP],
+        ),
+    ],
+    ids=[
+        "separate-resume",
+        "interrupt-then-mixed-resume",
+        "multiple-resumes-and-equal-values",
+        "out-of-order-indices",
+        "equal-values-at-distinct-indices",
+        "first-write-wins-across-channels",
+        "control-writes-overwrite",
+    ],
+)
+async def test_transient_pending_writes_preserve_source_indices(
+    source_saver: BaseCheckpointSaver,
+    initial_batches: list[list[tuple[str, Any]]],
+    retried: list[tuple[str, Any]],
+    preload: bool,
+) -> None:
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": ""}
+    }
+    checkpoint = empty_checkpoint()
+    saved_config = await source_saver.aput(config, checkpoint, {}, {})
+    for batch in initial_batches:
+        await source_saver.aput_writes(saved_config, batch, "task")
+    source_before = await source_saver.aget_tuple(saved_config)
+    assert source_before is not None
+
+    branch = TransientCheckpointSaver(source_saver)
+    if preload:
+        assert await branch.aget_tuple(saved_config) is not None
+    await branch.aput_writes(saved_config, retried, "task")
+    local = await branch.aget_tuple(saved_config)
+    assert local is not None
+    assert await source_saver.aget_tuple(saved_config) == source_before
+
+    await source_saver.aput_writes(saved_config, retried, "task")
+    expected = await source_saver.aget_tuple(saved_config)
+    assert expected is not None
+    assert sorted(local.pending_writes or [], key=repr) == sorted(
+        expected.pending_writes or [], key=repr
+    )
+    history = [saved async for saved in branch.alist(config)]
+    assert history == [local]
+
+
+def test_transient_pending_writes_preserve_sync_indices(
+    sync_source_saver: BaseCheckpointSaver,
+) -> None:
+    checkpoint = empty_checkpoint()
+    config = sync_source_saver.put(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        {},
+    )
+    sync_source_saver.put_writes(config, [("__interrupt__", ["question"])], "task")
+    writes = [("__resume__", ["yes"]), ("history", ["answer"])]
+    sync_source_saver.put_writes(config, writes, "task")
+    source_before = sync_source_saver.get_tuple(config)
+    assert source_before is not None
+
+    branch = TransientCheckpointSaver(sync_source_saver)
+    branch.put_writes(config, writes, "task")
+    local = branch.get_tuple(config)
+    assert local is not None
+    assert sorted(local.pending_writes or [], key=repr) == sorted(
+        source_before.pending_writes or [], key=repr
+    )
+    assert list(branch.list(config)) == [local]
+    assert sync_source_saver.get_tuple(config) == source_before
+
+
+async def test_transient_mixed_resume_keeps_memory_overwrite_semantics(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    config = await source_saver.aput(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        empty_checkpoint(),
+        {},
+        {},
+    )
+    await source_saver.aput_writes(
+        config, [("__resume__", ["old"]), ("history", ["answer"])], "task"
+    )
+    source_before = await source_saver.aget_tuple(config)
+    branch = TransientCheckpointSaver(source_saver)
+
+    await branch.aput_writes(
+        config, [("__resume__", ["new"]), ("history", ["answer"])], "task"
+    )
+    saved = await branch.aget_tuple(config)
+
+    assert saved is not None
+    assert saved.pending_writes == [
+        ("task", "__resume__", ["new"]),
+        ("task", "history", ["answer"]),
+    ]
+    assert await source_saver.aget_tuple(config) == source_before
+
+
+async def test_transient_pending_writes_preserve_ordinary_reducer_order(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    class HistoryState(TypedDict):
+        history: Annotated[list[str], operator.add]
+
+    def writer(state: HistoryState) -> dict[str, list[str]]:
+        return {}
+
+    builder = StateGraph(HistoryState)
+    builder.add_node("writer", writer)
+    builder.add_edge(START, "writer")
+    builder.add_edge("writer", END)
+    graph = builder.compile(checkpointer=source_saver, interrupt_before=["writer"])
+    config: RunnableConfig = {"configurable": {"thread_id": "saved"}}
+    await graph.ainvoke({"history": ["seed"]}, config)
+    state = await graph.aget_state(config)
+    task_id = state.tasks[0].id
+    await source_saver.aput_writes(
+        state.config, [("__resume__", ["yes"]), ("history", ["one"])], task_id
+    )
+    await source_saver.aput_writes(state.config, [("history", ["zero"])], task_id)
+    expected = await graph.aget_state(config)
+    source_before = await source_saver.aget_tuple(state.config)
+
+    transient = TransientCheckpointSaver(source_saver)
+    branch = graph.copy(update={"checkpointer": transient})
+    assert (await branch.aget_state(config)).values == expected.values
+    assert (await transient.aget_tuple(state.config)) == source_before
+
+
+def _delta_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+    delta = pytest.importorskip("langgraph.channels.delta")
+    HistoryState = TypedDict(
+        "HistoryState",
+        {
+            "history": Annotated[
+                list[str], delta.DeltaChannel(_append_history, snapshot_frequency=1000)
+            ]
+        },
+    )
+    builder = StateGraph(HistoryState)
+    builder.add_edge(START, END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+async def test_transient_delta_pending_writes_follow_native_order(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = str(UUID(int=1))
+    checkpoint["channel_values"] = {"history": ["seed"]}
+    checkpoint["channel_versions"] = {"history": 1}
+    parent = await source_saver.aput(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        checkpoint["channel_versions"],
+    )
+    await source_saver.aput_writes(parent, [("history", ["z"])], "task-z")
+    await source_saver.aput_writes(parent, [("history", ["a"])], "task-a")
+    child = empty_checkpoint()
+    child["id"] = str(UUID(int=2))
+    child["channel_versions"] = {"history": 2}
+    config = await source_saver.aput(parent, child, {}, child["channel_versions"])
+    source_before = [saved async for saved in source_saver.alist(config)]
+    graph = _delta_graph(source_saver)
+    expected = await graph.aget_state(config)
+
+    branch = graph.copy(update={"checkpointer": TransientCheckpointSaver(source_saver)})
+    actual = await branch.aget_state(config)
+
+    assert expected.values == {"history": ["seed", "a", "z"]}
+    assert actual.values == expected.values
+    assert [saved async for saved in source_saver.alist(config)] == source_before
+
+
+def test_transient_delta_pending_writes_follow_sync_native_order(
+    sync_source_saver: BaseCheckpointSaver,
+) -> None:
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = str(UUID(int=1))
+    checkpoint["channel_values"] = {"history": ["seed"]}
+    checkpoint["channel_versions"] = {"history": 1}
+    parent = sync_source_saver.put(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        checkpoint["channel_versions"],
+    )
+    sync_source_saver.put_writes(parent, [("history", ["z"])], "task-z")
+    sync_source_saver.put_writes(parent, [("history", ["a"])], "task-a")
+    child = empty_checkpoint()
+    child["id"] = str(UUID(int=2))
+    child["channel_versions"] = {"history": 2}
+    config = sync_source_saver.put(parent, child, {}, child["channel_versions"])
+    graph = _delta_graph(sync_source_saver)
+    expected = graph.get_state(config)
+    branch = graph.copy(
+        update={"checkpointer": TransientCheckpointSaver(sync_source_saver)}
+    )
+
+    assert expected.values == {"history": ["seed", "a", "z"]}
+    assert branch.get_state(config).values == expected.values
+
+
+async def test_transient_delta_retry_does_not_duplicate_history(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = str(UUID(int=1))
+    checkpoint["channel_values"] = {"history": ["seed"]}
+    checkpoint["channel_versions"] = {"history": 1}
+    parent = await source_saver.aput(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        checkpoint["channel_versions"],
+    )
+    await source_saver.aput_writes(parent, [("__resume__", ["yes"])], "task")
+    await source_saver.aput_writes(parent, [("history", ["answer"])], "task")
+    child = empty_checkpoint()
+    child["id"] = str(UUID(int=2))
+    child["channel_versions"] = {"history": 2}
+    config = await source_saver.aput(parent, child, {}, child["channel_versions"])
+    source_before = [saved async for saved in source_saver.alist(config)]
+    graph = _delta_graph(source_saver)
+
+    transient = TransientCheckpointSaver(source_saver)
+    assert await transient.aget_tuple(parent) is not None
+    await transient.aput_writes(parent, [("history", ["answer"])], "task")
+    branch = graph.copy(update={"checkpointer": transient})
+    assert (await graph.aget_state(config)).values == {"history": ["seed", "answer"]}
+    assert (await branch.aget_state(config)).values == {"history": ["seed", "answer"]}
+    assert [saved async for saved in source_saver.alist(config)] == source_before
+
+
+class _UnindexedSaver(BaseCheckpointSaver):
+    def __init__(self, source: BaseCheckpointSaver) -> None:
+        super().__init__(serde=source.serde)
+        self.source = source
+
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        return self.source.get_tuple(config)
+
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        return await self.source.aget_tuple(config)
+
+
+@pytest.mark.parametrize("ordinary_write", [False, True])
+async def test_transient_unindexed_source_never_guesses_write_indices(
+    ordinary_write: bool,
+) -> None:
+    source = InMemorySaver()
+    config = source.put(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        empty_checkpoint(),
+        {},
+        {},
+    )
+    writes: list[tuple[str, Any]] = [("__resume__", ["yes"])]
+    if ordinary_write:
+        writes.append(("history", ["answer"]))
+    source.put_writes(config, writes, "task")
+    source_before = source.get_tuple(config)
+    branch = TransientCheckpointSaver(_UnindexedSaver(source))
+
+    if ordinary_write:
+        for _ in range(2):
+            with pytest.raises(NotImplementedError, match="original write indices"):
+                branch.get_tuple(config)
+            with pytest.raises(NotImplementedError, match="original write indices"):
+                await branch.aget_tuple(config)
+    else:
+        assert branch.get_tuple(config) == source_before
+        await branch.aput_writes(config, [("__resume__", ["local"])], "task")
+        saved = await branch.aget_tuple(config)
+        assert saved is not None
+        assert saved.pending_writes == [("task", "__resume__", ["local"])]
+    assert source.get_tuple(config) == source_before
 
 
 def _graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:

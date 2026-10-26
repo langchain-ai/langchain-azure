@@ -81,6 +81,10 @@ that branch; the configured LangGraph saver and the conversation checkpoint
 reference are not updated. The host does not emit SDK recovery checkpoint
 events for the turn. This applies to both streaming and non-streaming requests.
 
+Pending-write indices are preserved for Foundry, in-memory, and SQLite savers.
+Other savers must expose original indices to import ordinary pending writes;
+otherwise the request fails explicitly rather than risking duplicate outputs.
+
 Built-in Foundry conversation and checkpoint reads never create a state store.
 If a store does not exist, the read returns no saved state without creating an
 empty store or its metadata. Only write operations create missing stores.
