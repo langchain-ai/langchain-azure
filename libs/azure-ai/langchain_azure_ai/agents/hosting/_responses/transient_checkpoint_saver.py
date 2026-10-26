@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import AsyncIterator, Collection, Iterable, Iterator, Sequence
+from itertools import chain, islice
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -51,6 +52,103 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         if saved is not None:
             return saved
         return self._import_checkpoint(await self._source.aget_tuple(config))
+
+    def list(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
+        """Read saved and request-local history without importing checkpoints.
+
+        Args:
+            config: Thread, namespace, and checkpoint ID constraints, if any.
+            filter: Metadata values that returned checkpoints must match.
+            before: Exclusive upper bound for checkpoint IDs.
+            limit: Maximum number of merged checkpoints to return.
+
+        Yields:
+            Checkpoints newest first, preferring request-local copies.
+        """
+        # Some savers sort only within namespaces, so broader limits are global.
+        source_limit = (
+            limit
+            if config and config["configurable"].get("checkpoint_ns") is not None
+            else None
+        )
+        yield from self._merge_history(
+            self._source.list(config, filter=filter, before=before, limit=source_limit),
+            config,
+            filter=filter,
+            before=before,
+            limit=limit,
+        )
+
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        """Read merged history without requiring a synchronous source saver.
+
+        Args:
+            config: Thread, namespace, and checkpoint ID constraints, if any.
+            filter: Metadata values that returned checkpoints must match.
+            before: Exclusive upper bound for checkpoint IDs.
+            limit: Maximum number of merged checkpoints to return.
+
+        Yields:
+            Checkpoints newest first, preferring request-local copies.
+        """
+        source_limit = (
+            limit
+            if config and config["configurable"].get("checkpoint_ns") is not None
+            else None
+        )
+        saved = [
+            checkpoint
+            async for checkpoint in self._source.alist(
+                config, filter=filter, before=before, limit=source_limit
+            )
+        ]
+        for checkpoint in self._merge_history(
+            saved, config, filter=filter, before=before, limit=limit
+        ):
+            yield checkpoint
+
+    def _merge_history(
+        self,
+        source: Iterable[CheckpointTuple],
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None,
+        before: RunnableConfig | None,
+        limit: int | None,
+    ) -> Iterator[CheckpointTuple]:
+        history: dict[tuple[str, str, str], CheckpointTuple] = {}
+        local = self._memory.list(config, filter=filter, before=before)
+        for saved in chain(source, local):
+            configurable = saved.config["configurable"]
+            history[
+                (
+                    configurable["thread_id"],
+                    configurable.get("checkpoint_ns", ""),
+                    saved.checkpoint["id"],
+                )
+            ] = saved
+        yield from islice(
+            sorted(
+                history.values(),
+                key=lambda saved: saved.checkpoint["id"],
+                reverse=True,
+            ),
+            limit,
+        )
 
     def _import_checkpoint(
         self, saved: CheckpointTuple | None
