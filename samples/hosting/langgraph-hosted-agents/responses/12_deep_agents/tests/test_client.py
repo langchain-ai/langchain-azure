@@ -113,6 +113,22 @@ class ClientTests(unittest.TestCase):
             )
         )
         self.assertEqual(sessions, {"session-test"})
+        for request in requests:
+            for internal_name in (
+                "research-agent",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "publish_report",
+            ):
+                self.assertNotIn(internal_name, request["input"])
+        self.assertIn("primary sources", requests[0]["input"])
+        self.assertIn("report-v1.md", requests[0]["input"])
+        self.assertIn("download link", requests[0]["input"])
+        self.assertIn("Recovery limitations", requests[2]["input"])
+        self.assertIn("report-v2.md", requests[2]["input"])
+        self.assertIn("citations", requests[2]["input"])
+        self.assertIn("without changing", requests[2]["input"])
 
     def test_handled_failure_creates_no_local_download(self) -> None:
         result = response("failed-publication")

@@ -123,25 +123,24 @@ def run_demo(client: OpenAI, directory: Path, sessions: set[str]) -> None:
         return response
 
     original = ask(
-        "Research how LangGraph checkpoints support multi-turn agents. Use one "
-        "research-agent and cite primary sources. Save /report-v1.md, read it back, "
-        "and publish_report with report_name='report-v1.md'."
+        "Research how LangGraph checkpoints support multi-turn agents. Cite primary "
+        "sources, save the report as report-v1.md, and give me a download link."
     )
     download_report(original, "report-v1.md", directory)
     ask(
-        "Use read_file on all of /report-v1.md and return it verbatim. Do not research or publish again."
+        "Show me the full saved report-v1.md exactly as it is, without new research "
+        "or another download link."
     )
     revised = ask(
-        "Read /report-v1.md, write an unchanged copy to /report-v2.md, then use "
-        "edit_file on that copy to add a Recovery limitations section explaining "
-        "that saved checkpoints do not resume arbitrary in-flight work. Preserve "
-        "the original findings, citations and URLs in both files. Read the entire "
-        "revised file and publish_report(report_name='report-v2.md')."
+        "Add a Recovery limitations section explaining that saved checkpoints do "
+        "not resume arbitrary in-flight work. Keep the existing findings and "
+        "citations, save it as report-v2.md without changing report-v1.md, and "
+        "give me a download link."
     )
     download_report(revised, "report-v2.md", directory)
     ask(
-        "Use read_file on the entire /report-v2.md and return it verbatim. "
-        "Do not research, edit or publish another copy."
+        "Show me the full saved report-v2.md exactly as it is, without new research, "
+        "changes or another download link."
     )
 
 

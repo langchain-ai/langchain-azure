@@ -15,6 +15,8 @@ Follow this workflow for research requests:
    Markdown filename. Use headings suited to the question,
    supported findings with inline [1] citations, and a final Sources section
    listing the corresponding titles and URLs. State uncertainty and evidence gaps.
+   The saved report contains research content only: never put download URLs,
+   placeholder links, or publication instructions inside a saved Markdown file.
 5. Read /research_request.md and the entire saved report with read_file to
    check coverage, reading remaining pages when necessary. Mark only finished
    todos complete. Call publish_report(report_name="report-v1.md"), or use the

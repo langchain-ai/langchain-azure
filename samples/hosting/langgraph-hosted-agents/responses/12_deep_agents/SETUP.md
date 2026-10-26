@@ -20,9 +20,73 @@ Choose one Foundry setup path; both require the separate report Storage setup:
   and Toolbox through `azd up`. Skip manual Toolbox creation and follow
   [deployment](#deploying-the-agent-to-foundry) after setting up report Storage.
 
+### Execution identities and required roles
+
+Confirm these prerequisites **before running resource commands**. The examples
+can involve different people: the local **developer** calls Foundry and publishes
+reports, a **provisioner** creates resources, and an **RBAC administrator** grants
+access. A person may fill several roles, but permission to create a resource does
+not imply permission to grant roles or access its Blob data.
+
+| Identity / operation | Required role and scope | Who configures it |
+|---|---|---|
+| Local developer: project model calls and Toolbox use | **Foundry User** on the Foundry project; **Reader** on the parent Foundry account for discovery | Administrator; do not assume CLI/SDK project creation granted these |
+| Developer: deploy an agent and configure its project access | **Foundry Project Manager** on the Foundry project (covers Foundry User operations) | Administrator |
+| Provisioner: create resources/model deployment | **Contributor** on the target resource group, or equivalent narrower control-plane permissions | Administrator; creating the resource group itself also needs resource-group creation permission at subscription scope |
+| Administrator: manual role assignments | **Role Based Access Control Administrator** or **Owner** at each target scope | Administrator; Foundry Project Manager cannot assign Blob roles |
+| Project managed identity: proxy inference to account model deployments | **Foundry User** on the parent Foundry account | `azd`/platform setup when the creator has role-assignment permission; verify for existing projects |
+| Deployed agent instance identity: own-project model, Toolbox and session State Store | Platform-managed own-project access | Foundry creates the identity and supplies its default project/session access; advanced explicit project grants use Foundry User on the project |
+| Local developer **and**, separately, deployed agent instance identity: upload and sign report links | **Storage Blob Data Contributor** on the dedicated report Storage **account** | Manual; `azure.yaml` does not create this account or these grants |
+| Download recipient | No Azure role while holding a valid SAS URL | The read-only URL grants access to that one Blob until expiry |
+
+The project managed identity and the deployed agent's `instance_identity` are
+different principals. Do not grant the agent's external Blob access to the project
+identity or blueprint instead. Foundry roles were formerly called Azure AI User /
+Azure AI Project Manager; their IDs are unchanged. See the official
+[hosted agent permissions](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
+
+Authenticate the CLI identities with `az login` and `azd auth login` if needed,
+then set shared, non-secret values. The examples use an interactive user as the
+developer; use the actual service-principal object ID and `ServicePrincipal`
+instead of `User` for automation or a different `DefaultAzureCredential` source.
+
+```bash
+export SUBSCRIPTION_ID="<subscription-id>"
+export LOCATION="<region>"
+export DEVELOPER_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
+```
+
+If an administrator is executing grants in a different login, carry forward the
+**developer's** object ID; do not replace it with the administrator's. Stop if the
+role-assignment commands below are denied and ask that administrator to run them.
+
 ### Toolbox for an existing project
 
-Authenticate with `az login` and `azd auth login` if needed. From this directory:
+Before creating or using the Toolbox, have the RBAC administrator grant project
+access to the developer. Set the existing account/project resource IDs:
+
+```bash
+export FOUNDRY_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<account>"
+export FOUNDRY_PROJECT_ID="$FOUNDRY_ACCOUNT_ID/projects/<project>"
+```
+
+**RBAC administrator:** grant the developer account discovery and project use:
+
+```bash
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role Reader --scope "$FOUNDRY_ACCOUNT_ID"
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role 53ca6127-db72-4b80-b1b0-d745d6d5456d --scope "$FOUNDRY_PROJECT_ID"
+```
+
+The existing project's managed identity also needs its account inference grant.
+If it is missing, the administrator retrieves and grants that distinct principal:
+
+```bash
+export PROJECT_PRINCIPAL_ID="$(az resource show --ids "$FOUNDRY_PROJECT_ID" --api-version 2025-06-01 --query identity.principalId -o tsv)"
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$PROJECT_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role 53ca6127-db72-4b80-b1b0-d745d6d5456d --scope "$FOUNDRY_ACCOUNT_ID"
+```
+
+**Developer:** wait for the grants to propagate, then create/configure the Toolbox
+from this directory. Existing model deployments are not created by this path:
 
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<project>"
@@ -49,61 +113,41 @@ Tavily key or separate project connection. See the official
 
 ### Private report Storage
 
-Use a dedicated Storage account/container for this sample. Set a globally unique
-lowercase account name (3–24 letters/digits). These Bash commands create it with
-anonymous Blob access and shared-key authentication disabled:
+Use a dedicated Storage account/container. The **provisioner** needs Contributor
+on the target resource group before these create commands; an administrator must
+arrange that access on an existing group. If creating a new resource group, run
+the first command with an identity allowed to create groups at subscription scope,
+or ask the platform administrator to create the group instead. Set a globally
+unique lowercase account name (3–24 letters/digits):
 
 ```bash
-export SUBSCRIPTION_ID="<subscription-id>"
 export REPORT_RESOURCE_GROUP="<report-resource-group>"
-export LOCATION="<region>"
 export REPORT_STORAGE_ACCOUNT="<unique-storage-account>"
 export REPORT_STORAGE_CONTAINER="reports"
 az group create --subscription "$SUBSCRIPTION_ID" --name "$REPORT_RESOURCE_GROUP" --location "$LOCATION"
+```
+
+**Provisioner:** create the account and private container with anonymous Blob
+access and shared-key authentication disabled:
+
+```bash
 az storage account create --subscription "$SUBSCRIPTION_ID" --resource-group "$REPORT_RESOURCE_GROUP" --name "$REPORT_STORAGE_ACCOUNT" --location "$LOCATION" --sku Standard_LRS --kind StorageV2 --https-only true --min-tls-version TLS1_2 --allow-blob-public-access false --allow-shared-key-access false
 az storage container-rm create --subscription "$SUBSCRIPTION_ID" --resource-group "$REPORT_RESOURCE_GROUP" --storage-account "$REPORT_STORAGE_ACCOUNT" --name "$REPORT_STORAGE_CONTAINER" --public-access off
 export REPORT_STORAGE_ACCOUNT_URL="$(az storage account show --subscription "$SUBSCRIPTION_ID" --resource-group "$REPORT_RESOURCE_GROUP" --name "$REPORT_STORAGE_ACCOUNT" --query primaryEndpoints.blob -o tsv)"
 export REPORT_STORAGE_ID="$(az storage account show --subscription "$SUBSCRIPTION_ID" --resource-group "$REPORT_RESOURCE_GROUP" --name "$REPORT_STORAGE_ACCOUNT" --query id -o tsv)"
-export DEVELOPER_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv)"
-az role assignment create --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role "Storage Blob Data Contributor" --scope "$REPORT_STORAGE_ID"
 ```
 
-The last command needs an RBAC administrator; resource Contributor alone cannot
-grant Blob access. Wait for role propagation before running. Use an equivalent
-service-principal assignment when `DefaultAzureCredential` uses a service principal.
-
-### Required roles and scopes
-
-| Identity / operation | Required role and scope | Who configures it |
-|---|---|---|
-| Local developer: project model calls and Toolbox use | **Foundry User** on the Foundry project; **Reader** on the parent Foundry account for discovery | Administrator; do not assume CLI/SDK project creation granted these |
-| Developer: deploy an agent and configure its project access | **Foundry Project Manager** on the Foundry project (covers Foundry User operations) | Administrator |
-| Provisioner: create resources/model deployment | **Contributor** on the target resource group, or equivalent narrower control-plane permissions | Administrator |
-| Administrator: manual role assignments | **Role Based Access Control Administrator** or **Owner** at each target scope | Administrator; Foundry Project Manager cannot assign Blob roles |
-| Project managed identity: proxy inference to account model deployments | **Foundry User** on the parent Foundry account | `azd`/platform setup when the creator has role-assignment permission; verify for existing projects |
-| Deployed agent instance identity: own-project model, Toolbox and session State Store | Platform-managed own-project access | Foundry creates the agent identity and supplies its default project/session access; advanced explicit project grants use Foundry User on the project |
-| Local developer **and**, separately, deployed agent instance identity: upload and sign report links | **Storage Blob Data Contributor** on the dedicated report Storage **account** | Manual; `azure.yaml` does not create this account or these grants |
-| Download recipient | No Azure role while holding a valid SAS URL | The read-only URL grants access to that one Blob until expiry |
-
-Foundry roles were formerly named Azure AI User / Azure AI Project Manager;
-their IDs are unchanged. To assign project access, set the actual resource IDs
-and have an administrator run:
+**RBAC administrator:** resource creation does not grant Blob data access. Before
+the developer runs the host or client, grant upload and SAS-signing access to
+the actual developer credential:
 
 ```bash
-export FOUNDRY_ACCOUNT_ID="/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<account>"
-export FOUNDRY_PROJECT_ID="$FOUNDRY_ACCOUNT_ID/projects/<project>"
-az role assignment create --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role Reader --scope "$FOUNDRY_ACCOUNT_ID"
-az role assignment create --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role 53ca6127-db72-4b80-b1b0-d745d6d5456d --scope "$FOUNDRY_PROJECT_ID"
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role "Storage Blob Data Contributor" --scope "$REPORT_STORAGE_ID"
 ```
 
-For a deployer, use role `eadc314b-1a2d-4efa-be10-5d325db5065e` (Foundry Project
-Manager) instead of the Foundry User grant. If the project managed identity lacks
-its account grant, retrieve its principal and assign it separately:
-
-```bash
-export PROJECT_PRINCIPAL_ID="$(az resource show --ids "$FOUNDRY_PROJECT_ID" --api-version 2025-06-01 --query identity.principalId -o tsv)"
-az role assignment create --assignee-object-id "$PROJECT_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role 53ca6127-db72-4b80-b1b0-d745d6d5456d --scope "$FOUNDRY_ACCOUNT_ID"
-```
+Wait for propagation; resource Contributor alone cannot make this assignment or
+upload Blob data. The hosted agent needs a separate grant after its identity is
+created in the [deployment](#deploying-the-agent-to-foundry) step.
 
 Storage's user-delegation-key operation requires **account**, resource-group or
 subscription scope. Container-only Blob Data Contributor is insufficient to sign
@@ -116,10 +160,27 @@ and [user-delegation SAS permissions](https://learn.microsoft.com/rest/api/stora
 
 [azure.yaml](azure.yaml) declares a model, a web-search-only Toolbox, and a
 Python 3.13 hosted agent. It does **not** provision report Storage. Complete
-the Storage setup first, review resources/costs, and deploy from this directory:
+the Storage setup first and review resources/costs.
+
+**Provisioner/deployer:** before `azd up`, confirm Contributor on the intended
+resource group (and subscription-level resource-group creation permission if
+needed). For a new project, the provisioning identity also needs role-assignment
+authority so the project/model grants can be configured. If you only have
+Contributor, have an administrator provision/configure access first rather than
+expecting Contributor to assign roles. Deployment to an existing project needs
+Foundry Project Manager on that project; the RBAC administrator can grant it with
+the existing-project IDs from above:
 
 ```bash
-azd env new deep-research --subscription <subscription-id> --location <region>
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$DEVELOPER_OBJECT_ID" --assignee-principal-type User --role eadc314b-1a2d-4efa-be10-5d325db5065e --scope "$FOUNDRY_PROJECT_ID"
+```
+
+This grant covers Foundry User operations too. For the new-project route, the
+administrator arranges the equivalent access as the project is provisioned.
+**Provisioner/deployer:** only after those prerequisites are in place, run:
+
+```bash
+azd env new deep-research --subscription "$SUBSCRIPTION_ID" --location "$LOCATION"
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME gpt-4.1-mini
 azd env set REPORT_STORAGE_ACCOUNT_URL "$REPORT_STORAGE_ACCOUNT_URL"
 azd env set REPORT_STORAGE_CONTAINER "$REPORT_STORAGE_CONTAINER"
@@ -128,12 +189,18 @@ azd up
 
 `azd up` provisions the model and creates/promotes the Toolbox before deploying
 the agent. Foundry creates an **agent instance identity**, separate from the
-project managed identity. After deployment, retrieve it and ask your Storage
-RBAC administrator to grant access before generating a report:
+project managed identity. **Deployer:** retrieve the instance principal after
+deployment (this grant cannot be made before the identity exists):
 
 ```bash
 export AGENT_PRINCIPAL_ID="$(azd ai agent show deep-research --output json | python -c 'import json,sys; print(json.load(sys.stdin)["instance_identity"]["principal_id"])')"
-az role assignment create --assignee-object-id "$AGENT_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope "$REPORT_STORAGE_ID"
+```
+
+**Storage RBAC administrator:** grant the instance identity's external Blob
+access before the developer runs the deployed client or generates a report:
+
+```bash
+az role assignment create --subscription "$SUBSCRIPTION_ID" --assignee-object-id "$AGENT_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope "$REPORT_STORAGE_ID"
 az role assignment list --scope "$REPORT_STORAGE_ID" --include-inherited --query "[?principalId=='$AGENT_PRINCIPAL_ID'].{role:roleDefinitionName,scope:scope}" -o table
 ```
 
