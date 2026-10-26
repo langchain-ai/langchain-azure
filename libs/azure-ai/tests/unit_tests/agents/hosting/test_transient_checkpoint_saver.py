@@ -74,10 +74,12 @@ def sync_source_saver(
             yield saver
 
 
+@pytest.mark.parametrize("write_count", [1, 12])
 @pytest.mark.parametrize("imported", [False, True], ids=["local", "imported"])
 async def test_transient_pending_writes_do_not_reload_cached_checkpoints(
     source_saver: BaseCheckpointSaver,
     imported: bool,
+    write_count: int,
     mocker: MockerFixture,
 ) -> None:
     branch = TransientCheckpointSaver(source_saver)
@@ -93,22 +95,29 @@ async def test_transient_pending_writes_do_not_reload_cached_checkpoints(
     decode = mocker.spy(branch.serde, "loads_typed")
 
     for number in range(32):
-        await branch.aput_writes(config, [("history", [str(number)])], f"task-{number}")
+        await branch.aput_writes(
+            config,
+            [("history", [str(number), str(index)]) for index in range(write_count)],
+            f"task-{number}",
+        )
 
     assert decode.call_count == 0
     saved = await branch.aget_tuple(config)
     assert saved is not None
-    assert sorted(saved.pending_writes or [], key=repr) == sorted(
-        [(f"task-{number}", "history", [str(number)]) for number in range(32)],
-        key=repr,
-    )
+    assert saved.pending_writes == [
+        (f"task-{number}", "history", [str(number), str(index)])
+        for number in sorted(range(32), key=lambda number: f"task-{number}")
+        for index in range(write_count)
+    ]
     assert [saved async for saved in source_saver.alist(config)] == source_before
 
 
+@pytest.mark.parametrize("write_count", [1, 12])
 @pytest.mark.parametrize("imported", [False, True], ids=["local", "imported"])
 def test_transient_sync_pending_writes_do_not_reload_cached_checkpoints(
     sync_source_saver: BaseCheckpointSaver,
     imported: bool,
+    write_count: int,
     mocker: MockerFixture,
 ) -> None:
     branch = TransientCheckpointSaver(sync_source_saver)
@@ -124,15 +133,20 @@ def test_transient_sync_pending_writes_do_not_reload_cached_checkpoints(
     decode = mocker.spy(branch.serde, "loads_typed")
 
     for number in range(32):
-        branch.put_writes(config, [("history", [str(number)])], f"task-{number}")
+        branch.put_writes(
+            config,
+            [("history", [str(number), str(index)]) for index in range(write_count)],
+            f"task-{number}",
+        )
 
     assert decode.call_count == 0
     saved = branch.get_tuple(config)
     assert saved is not None
-    assert sorted(saved.pending_writes or [], key=repr) == sorted(
-        [(f"task-{number}", "history", [str(number)]) for number in range(32)],
-        key=repr,
-    )
+    assert saved.pending_writes == [
+        (f"task-{number}", "history", [str(number), str(index)])
+        for number in sorted(range(32), key=lambda number: f"task-{number}")
+        for index in range(write_count)
+    ]
     assert list(sync_source_saver.list(config)) == source_before
 
 
@@ -219,9 +233,7 @@ async def test_transient_pending_writes_preserve_source_indices(
     await source_saver.aput_writes(saved_config, retried, "task")
     expected = await source_saver.aget_tuple(saved_config)
     assert expected is not None
-    assert sorted(local.pending_writes or [], key=repr) == sorted(
-        expected.pending_writes or [], key=repr
-    )
+    assert local.pending_writes == expected.pending_writes
     history = [saved async for saved in branch.alist(config)]
     assert history == [local]
 
@@ -246,9 +258,7 @@ def test_transient_pending_writes_preserve_sync_indices(
     branch.put_writes(config, writes, "task")
     local = branch.get_tuple(config)
     assert local is not None
-    assert sorted(local.pending_writes or [], key=repr) == sorted(
-        source_before.pending_writes or [], key=repr
-    )
+    assert local.pending_writes == source_before.pending_writes
     assert list(branch.list(config)) == [local]
     assert sync_source_saver.get_tuple(config) == source_before
 
@@ -281,8 +291,10 @@ async def test_transient_mixed_resume_keeps_memory_overwrite_semantics(
     assert await source_saver.aget_tuple(config) == source_before
 
 
+@pytest.mark.parametrize("write_count", [1, 12])
 async def test_transient_pending_writes_preserve_ordinary_reducer_order(
     source_saver: BaseCheckpointSaver,
+    write_count: int,
 ) -> None:
     class HistoryState(TypedDict):
         history: Annotated[list[str], operator.add]
@@ -300,7 +312,10 @@ async def test_transient_pending_writes_preserve_ordinary_reducer_order(
     state = await graph.aget_state(config)
     task_id = state.tasks[0].id
     await source_saver.aput_writes(
-        state.config, [("__resume__", ["yes"]), ("history", ["one"])], task_id
+        state.config,
+        [("__resume__", ["yes"])]
+        + [("history", [str(number)]) for number in range(1, write_count + 1)],
+        task_id,
     )
     await source_saver.aput_writes(state.config, [("history", ["zero"])], task_id)
     expected = await graph.aget_state(config)
@@ -327,8 +342,19 @@ def _delta_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
     return builder.compile(checkpointer=checkpointer)
 
 
+@pytest.mark.parametrize(
+    ("source_saver", "task_paths", "expected_order"),
+    [
+        ("memory", ("", ""), ["a", "z"]),
+        ("sqlite", ("", ""), ["a", "z"]),
+        ("memory", ("node-a", "node-z"), ["z", "a"]),
+    ],
+    indirect=["source_saver"],
+)
 async def test_transient_delta_pending_writes_follow_native_order(
     source_saver: BaseCheckpointSaver,
+    task_paths: tuple[str, str],
+    expected_order: list[str],
 ) -> None:
     checkpoint = empty_checkpoint()
     checkpoint["id"] = str(UUID(int=1))
@@ -340,8 +366,12 @@ async def test_transient_delta_pending_writes_follow_native_order(
         {},
         checkpoint["channel_versions"],
     )
-    await source_saver.aput_writes(parent, [("history", ["z"])], "task-z")
-    await source_saver.aput_writes(parent, [("history", ["a"])], "task-a")
+    await source_saver.aput_writes(
+        parent, [("history", ["z"])], "task-z", task_paths[0]
+    )
+    await source_saver.aput_writes(
+        parent, [("history", ["a"])], "task-a", task_paths[1]
+    )
     child = empty_checkpoint()
     child["id"] = str(UUID(int=2))
     child["channel_versions"] = {"history": 2}
@@ -353,13 +383,24 @@ async def test_transient_delta_pending_writes_follow_native_order(
     branch = graph.copy(update={"checkpointer": TransientCheckpointSaver(source_saver)})
     actual = await branch.aget_state(config)
 
-    assert expected.values == {"history": ["seed", "a", "z"]}
+    assert expected.values == {"history": ["seed", *expected_order]}
     assert actual.values == expected.values
     assert [saved async for saved in source_saver.alist(config)] == source_before
 
 
+@pytest.mark.parametrize(
+    ("sync_source_saver", "task_paths", "expected_order"),
+    [
+        ("memory", ("", ""), ["a", "z"]),
+        ("sqlite", ("", ""), ["a", "z"]),
+        ("memory", ("node-a", "node-z"), ["z", "a"]),
+    ],
+    indirect=["sync_source_saver"],
+)
 def test_transient_delta_pending_writes_follow_sync_native_order(
     sync_source_saver: BaseCheckpointSaver,
+    task_paths: tuple[str, str],
+    expected_order: list[str],
 ) -> None:
     checkpoint = empty_checkpoint()
     checkpoint["id"] = str(UUID(int=1))
@@ -371,8 +412,8 @@ def test_transient_delta_pending_writes_follow_sync_native_order(
         {},
         checkpoint["channel_versions"],
     )
-    sync_source_saver.put_writes(parent, [("history", ["z"])], "task-z")
-    sync_source_saver.put_writes(parent, [("history", ["a"])], "task-a")
+    sync_source_saver.put_writes(parent, [("history", ["z"])], "task-z", task_paths[0])
+    sync_source_saver.put_writes(parent, [("history", ["a"])], "task-a", task_paths[1])
     child = empty_checkpoint()
     child["id"] = str(UUID(int=2))
     child["channel_versions"] = {"history": 2}
@@ -383,7 +424,7 @@ def test_transient_delta_pending_writes_follow_sync_native_order(
         update={"checkpointer": TransientCheckpointSaver(sync_source_saver)}
     )
 
-    assert expected.values == {"history": ["seed", "a", "z"]}
+    assert expected.values == {"history": ["seed", *expected_order]}
     assert branch.get_state(config).values == expected.values
 
 

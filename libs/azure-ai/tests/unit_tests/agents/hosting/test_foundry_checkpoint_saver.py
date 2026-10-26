@@ -1026,9 +1026,7 @@ async def test_transient_pending_writes_preserve_foundry_indices(
     await branch.aput_writes(config, writes, "task")
     local = await branch.aget_tuple(config)
     assert local is not None
-    assert sorted(local.pending_writes or [], key=repr) == sorted(
-        source_before.pending_writes or [], key=repr
-    )
+    assert local.pending_writes == source_before.pending_writes
     assert [saved async for saved in branch.alist(_config())] == [local]
     assert store.items == items_before
     assert await saver.aget_tuple(config) == source_before

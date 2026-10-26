@@ -10,11 +10,10 @@ from collections.abc import (
     Collection,
     Iterable,
     Iterator,
-    Mapping,
     Sequence,
 )
 from itertools import chain, islice
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -34,9 +33,6 @@ from langchain_azure_ai.agents.hosting._checkpoint_writes import (
     _IndexedPendingWrites,
     _IndexedWrite,
 )
-
-if TYPE_CHECKING:
-    from langgraph.checkpoint.base import DeltaChannelHistory
 
 
 class TransientCheckpointSaver(BaseCheckpointSaver):
@@ -114,30 +110,24 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
 
     @staticmethod
     def _unpack_checkpoint(saved: CheckpointTuple) -> CheckpointTuple:
+        writes = (
+            _IndexedWrite(task_id, index, channel, value, task_path)
+            for _, channel, (task_id, index, value, task_path) in (
+                saved.pending_writes or ()
+            )
+        )
         return saved._replace(
             checkpoint=saved.checkpoint["channel_values"]["checkpoint"],
             pending_writes=_IndexedPendingWrites(
-                _IndexedWrite(task_id, index, channel, value, task_path)
-                for _, channel, (task_id, index, value, task_path) in (
-                    saved.pending_writes or ()
+                sorted(
+                    writes,
+                    key=lambda write: (
+                        write.task_path,
+                        write.task_id,
+                        write.write_index,
+                    ),
                 )
             ),
-        )
-
-    def get_delta_channel_history(
-        self, *, config: RunnableConfig, channels: Sequence[str]
-    ) -> Mapping[str, DeltaChannelHistory]:
-        """Rebuild Delta history in task/index order, not insertion order."""
-        return _DeltaHistoryReader(self).get_delta_channel_history(
-            config=config, channels=channels
-        )
-
-    async def aget_delta_channel_history(
-        self, *, config: RunnableConfig, channels: Sequence[str]
-    ) -> Mapping[str, DeltaChannelHistory]:
-        """Rebuild ordered Delta history without synchronous source reads."""
-        return await _DeltaHistoryReader(self).aget_delta_channel_history(
-            config=config, channels=channels
         )
 
     def _get_local(self, config: RunnableConfig) -> CheckpointTuple | None:
@@ -401,32 +391,3 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
     ) -> str | int | float:
         """Retain the source saver's channel version format."""
         return self._source.get_next_version(current, channel)
-
-
-class _DeltaHistoryReader(BaseCheckpointSaver):
-    """Reuse LangGraph's parent walk without reordering ordinary state reads."""
-
-    def __init__(self, source: TransientCheckpointSaver) -> None:
-        super().__init__(serde=source.serde)
-        self._source = source
-
-    def _ordered(self, saved: CheckpointTuple | None) -> CheckpointTuple | None:
-        if saved is None:
-            return None
-        writes = _get_indexed_writes(self._source, saved)
-        return saved._replace(
-            pending_writes=_IndexedPendingWrites(
-                sorted(
-                    writes.indexed,
-                    key=lambda write: (write.task_id, write.write_index),
-                )
-            )
-        )
-
-    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read a checkpoint with pending writes ordered for Delta replay."""
-        return self._ordered(self._source.get_tuple(config))
-
-    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        """Read ordered writes without requiring a synchronous source saver."""
-        return self._ordered(await self._source.aget_tuple(config))
