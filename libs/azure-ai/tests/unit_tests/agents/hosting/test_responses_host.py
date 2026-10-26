@@ -115,6 +115,155 @@ async def test_handler_owns_clients_through_generator_exit(
     store.aclose.assert_awaited_once()
 
 
+@pytest.mark.parametrize("boundary", ["graph", "handler"])
+@pytest.mark.parametrize("recovery", [False, True])
+async def test_iterator_cleanup_preserves_primary_error(
+    monkeypatch: pytest.MonkeyPatch, boundary: str, recovery: bool
+) -> None:
+    from azure.ai.agentserver.responses import ResponseExitForRecovery
+
+    from langchain_azure_ai.agents.hosting._responses_host import _closing_stream
+
+    primary = ResponseExitForRecovery() if recovery else ValueError("execution failed")
+
+    class Iterator:
+        aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise primary
+
+    iterator = Iterator()
+    with pytest.raises(type(primary)) as caught:
+        if boundary == "graph":
+            async with _closing_stream(iterator):
+                raise primary
+        else:
+            server = ResponsesHostServer(make_echo_graph())
+            monkeypatch.setattr(server, "handle_create", lambda *args: iterator)
+            await anext(
+                server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+            )
+    assert caught.value is primary
+    iterator.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("custom_handler", [False, True])
+@pytest.mark.parametrize("file_provider", [False, True])
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_background_recovery_survives_client_close_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    custom_handler: bool,
+    file_provider: bool,
+    close_fails: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from azure.ai.agentserver.responses import (
+        FileResponseStore,
+        InMemoryResponseProvider,
+        PlatformContext,
+        ResponseContext,
+        ResponseExitForRecovery,
+    )
+    from azure.ai.agentserver.responses.hosting._orchestrator import (
+        ResponseExecution,
+        ResponseModeFlags,
+        _run_background_non_stream,
+    )
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    provider = (
+        FileResponseStore(storage_dir=str(tmp_path))
+        if file_provider
+        else InMemoryResponseProvider()
+    )
+    request = _request(background=True, store=True, stream=False)
+    modes = ResponseModeFlags(stream=False, store=True, background=True)
+    context = ResponseContext(
+        response_id="resp-recovery",
+        mode_flags=modes,
+        request=request,
+        provider=provider,
+        input_items=[],
+        platform_context=PlatformContext(),
+    )
+    context._task_context = cast(Any, SimpleNamespace())
+    recovery = AsyncMock(wraps=context.exit_for_recovery)
+    monkeypatch.setattr(context, "exit_for_recovery", recovery)
+    options = ResponsesServerOptions(resilient_background=True)
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        store=provider,
+        options=ResponsesServerOptions(resilient_background=file_provider),
+    )
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    if close_fails:
+        store.aclose.side_effect = RuntimeError("client close failed")
+    monkeypatch.setattr(
+        FoundryStateStore, "get_or_create", AsyncMock(return_value=store)
+    )
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "checkpoint"):
+            pass
+        yield "messages", (AIMessage(content="partial"), {})
+        context.shutdown.set()
+        yield "updates", {}
+
+    async def handler(*args: Any) -> AsyncGenerator[Any, None]:
+        stream = server._new_stream(request, context)
+        yield stream.emit_created()
+        yield stream.emit_in_progress()
+        async with get_state_store(server, FoundryStateStore, "checkpoint"):
+            pass
+        yield stream.checkpoint()
+        context.shutdown.set()
+        await context.exit_for_recovery()
+
+    if custom_handler:
+        monkeypatch.setattr(server, "handle_create", handler)
+    else:
+        monkeypatch.setattr(server, "build_runnable_config", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            server, "build_input", AsyncMock(return_value={"messages": []})
+        )
+        monkeypatch.setattr(server.graph, "astream", graph_stream)
+    signal = asyncio.Event()
+    record = ResponseExecution(
+        response_id=context.response_id,
+        mode_flags=modes,
+        response_context=context,
+        cancel_signal=signal,
+    )
+    with pytest.raises(ResponseExitForRecovery):
+        await _run_background_non_stream(
+            create_fn=server._handle_create_async_gen,
+            parsed=request,
+            context=context,
+            cancellation_signal=signal,
+            record=record,
+            response_id=context.response_id,
+            agent_reference={"type": "agent_reference", "name": "test"},
+            model="test",
+            provider=provider,
+            runtime_options=options,
+        )
+    recovery.assert_awaited_once_with()
+    store.aclose.assert_awaited_once()
+    assert record.status == "in_progress"
+    if file_provider:
+        provider = FileResponseStore(storage_dir=str(tmp_path))
+    assert (await provider.get_response(context.response_id))["status"] == "in_progress"
+    if close_fails:
+        assert "client close failed" in caplog.text
+
+
 @pytest.mark.parametrize("close_fails", [False, True])
 async def test_anyio_cancelled_handler_waits_for_cleanup_without_spinning(
     monkeypatch: pytest.MonkeyPatch,

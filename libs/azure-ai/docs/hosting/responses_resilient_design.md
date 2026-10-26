@@ -91,9 +91,13 @@ runs if a ContextVar reset fails or iterator shutdown times out. The handler
 then waits up to five seconds for active storage
 operations. On timeout it cancels the borrowers and allows five seconds for them
 to release their clients. It then closes clients and the connection pool in LIFO
-order, allowing five seconds per resource. Timeouts are logged; a resource close
-timeout raises `TimeoutError` unless the handler is already being cancelled.
-Cancellation retains the original exception, and cleanup failures are logged.
+order, allowing five seconds per resource. One shared exit guard preserves an
+already-propagating execution error, recovery signal or cancellation, logging
+secondary cleanup failures while attempting the remaining resource closes.
+Cancellation during cleanup takes precedence over execution/recovery errors;
+repeated cancellation retains the first cancellation exception. On normal exit
+or explicit generator close, cleanup failures still propagate, including
+`TimeoutError` when a close exceeds its budget.
 If graph close times out, the handler does not advance the conversation-chain
 checkpoint. Shutdown still exits for recovery, and explicit client cancellation
 still reports `cancelled`. Steering reports `cleanup_timeout` instead of completing

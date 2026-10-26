@@ -73,27 +73,37 @@ async def _close_resource(
     await task
 
 
-async def _finish_cleanup(
-    close: Awaitable[None], cancellation: asyncio.CancelledError | None = None
-) -> None:
-    cleanup = asyncio.ensure_future(close)
+@asynccontextmanager
+async def _finish_cleanup(close: Awaitable[None]) -> AsyncIterator[None]:
+    """Finish cleanup on exit, preserving primary errors and cancellation."""
+    primary: BaseException | None = None
     try:
-        # Asyncio shielding alone cannot stop repeated AnyIO level cancellation.
-        with CancelScope(shield=True):
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError as exc:
-                    if cancellation is None:
-                        cancellation = exc
-            await cleanup
-    except Exception:
-        if cancellation is None:
-            raise
-        logger.exception("Hosting cleanup failed during cancellation")
+        yield
+    except GeneratorExit:
+        # Explicit generator close must still report cleanup failures.
+        raise
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        if cancellation is not None:
-            raise cancellation
+        cleanup = asyncio.ensure_future(close)
+        try:
+            # Shield only finalization; the body may be resumed in another Task.
+            with CancelScope(shield=True):
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError as exc:
+                        if not isinstance(primary, asyncio.CancelledError):
+                            primary = exc
+                await cleanup
+        except Exception:
+            if primary is None:
+                raise
+            logger.exception("Hosting cleanup failed during handler exit")
+        finally:
+            if primary is not None:
+                raise primary
 
 
 class StateStoreClientFactory:
@@ -194,50 +204,44 @@ async def state_store_client_scope(
     """Own reusable clients and bound cleanup after the handler exits."""
     factory = StateStoreClientFactory()
     token = _current_factory.set(factory) if bind else None
-    cancellation: asyncio.CancelledError | None = None
-    try:
-        yield factory
-    except asyncio.CancelledError as exc:
-        cancellation = exc
-        raise
-    finally:
-        factory.closing = True
 
-        async def close() -> None:
-            started = perf_counter()
-            try:
-                await asyncio.wait_for(factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS)
-            except TimeoutError:
-                logger.warning(
-                    "Hosting cleanup timed out: resource=borrower_drain "
-                    "elapsed_seconds=%.3f borrowers=%d",
-                    perf_counter() - started,
-                    len(factory.borrowers),
-                )
-                borrowers = set(factory.borrowers)
-                for borrower in borrowers:
-                    borrower.cancel()
-                if borrowers:
-                    try:
-                        await asyncio.wait_for(
-                            factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS
-                        )
-                    except TimeoutError:
-                        logger.warning(
-                            "Hosting cleanup timed out: resource=borrower_cancel "
-                            "elapsed_seconds=%.3f borrowers=%d",
-                            perf_counter() - started,
-                            len(factory.borrowers),
-                        )
-            finally:
-                factory.closed = True
-                await factory.stack.aclose()
-
+    async def close() -> None:
+        started = perf_counter()
         try:
+            await asyncio.wait_for(factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS)
+        except TimeoutError:
+            logger.warning(
+                "Hosting cleanup timed out: resource=borrower_drain "
+                "elapsed_seconds=%.3f borrowers=%d",
+                perf_counter() - started,
+                len(factory.borrowers),
+            )
+            borrowers = set(factory.borrowers)
+            for borrower in borrowers:
+                borrower.cancel()
+            if borrowers:
+                try:
+                    await asyncio.wait_for(
+                        factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "Hosting cleanup timed out: resource=borrower_cancel "
+                        "elapsed_seconds=%.3f borrowers=%d",
+                        perf_counter() - started,
+                        len(factory.borrowers),
+                    )
+        finally:
+            factory.closed = True
+            await factory.stack.aclose()
+
+    async with _finish_cleanup(close()):
+        try:
+            yield factory
+        finally:
+            factory.closing = True
             if token is not None:
                 _current_factory.reset(token)
-        finally:
-            await _finish_cleanup(close(), cancellation)
 
 
 @asynccontextmanager

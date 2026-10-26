@@ -394,6 +394,48 @@ async def test_close_failure_still_closes_remaining_resources(
         client.aclose.assert_awaited_once()
 
 
+@pytest.mark.parametrize("recovery", [False, True])
+@pytest.mark.parametrize("cancel_during_close", [False, True])
+async def test_cleanup_preserves_primary_error_and_new_cancellation(
+    clients: list[Any], recovery: bool, cancel_during_close: bool
+) -> None:
+    from azure.ai.agentserver.responses import ResponseExitForRecovery
+
+    primary = ResponseExitForRecovery() if recovery else ValueError("execution failed")
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def close() -> None:
+        closing.set()
+        await release.wait()
+        raise RuntimeError("close failed")
+
+    async def handler() -> None:
+        async with state_store_client_scope():
+            async with get_state_store(object(), FoundryStateStore, "store"):
+                pass
+            clients[0].aclose.side_effect = close
+            raise primary
+
+    task = asyncio.create_task(handler())
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        if cancel_during_close:
+            task.cancel("cancel during cleanup")
+        release.set()
+        expected = asyncio.CancelledError if cancel_during_close else type(primary)
+        with pytest.raises(expected) as caught:
+            await task
+        if cancel_during_close:
+            assert caught.value.args == ("cancel during cleanup",)
+        else:
+            assert caught.value is primary
+        clients[0].aclose.assert_awaited_once()
+        assert clients[0].options["transport"].session.closed
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize(
     "option", ["transport", "pipeline", "session", "use_env_settings"]
 )
