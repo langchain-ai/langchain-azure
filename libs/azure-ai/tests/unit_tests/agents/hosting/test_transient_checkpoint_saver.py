@@ -30,6 +30,10 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
+from langchain_azure_ai.agents.hosting._checkpoint_writes import (
+    _aget_indexed_writes,
+    _get_indexed_writes,
+)
 from langchain_azure_ai.agents.hosting._responses.transient_checkpoint_saver import (
     TransientCheckpointSaver,
 )
@@ -263,6 +267,58 @@ def test_transient_pending_writes_preserve_sync_indices(
     assert sync_source_saver.get_tuple(config) == source_before
 
 
+@pytest.mark.parametrize("source_saver", ["sqlite"], indirect=True)
+async def test_transient_imports_legacy_async_sqlite_writes(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    assert isinstance(source_saver, AsyncSqliteSaver)
+    config = await source_saver.aput(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        empty_checkpoint(),
+        {},
+        {},
+    )
+    await source_saver.aput_writes(config, [("history", ["answer"])], "task", "node-a")
+    saved = await source_saver.aget_tuple(config)
+    assert saved is not None
+    async with source_saver.lock, source_saver.conn.cursor() as cursor:
+        await cursor.execute("PRAGMA table_info(writes)")
+        if any(column[1] == "task_path" for column in await cursor.fetchall()):
+            await cursor.execute("ALTER TABLE writes DROP COLUMN task_path")
+
+    imported = await _aget_indexed_writes(source_saver, saved)
+
+    assert imported == saved.pending_writes
+    assert imported.indexed[0].write_index == 0
+    assert imported.indexed[0].task_path == ""
+
+
+@pytest.mark.parametrize("sync_source_saver", ["sqlite"], indirect=True)
+def test_transient_imports_legacy_sync_sqlite_writes(
+    sync_source_saver: BaseCheckpointSaver,
+) -> None:
+    assert isinstance(sync_source_saver, SqliteSaver)
+    config = sync_source_saver.put(
+        {"configurable": {"thread_id": "saved", "checkpoint_ns": ""}},
+        empty_checkpoint(),
+        {},
+        {},
+    )
+    sync_source_saver.put_writes(config, [("history", ["answer"])], "task", "node-a")
+    saved = sync_source_saver.get_tuple(config)
+    assert saved is not None
+    with sync_source_saver.cursor() as cursor:
+        cursor.execute("PRAGMA table_info(writes)")
+        if any(column[1] == "task_path" for column in cursor.fetchall()):
+            cursor.execute("ALTER TABLE writes DROP COLUMN task_path")
+
+    imported = _get_indexed_writes(sync_source_saver, saved)
+
+    assert imported == saved.pending_writes
+    assert imported.indexed[0].write_index == 0
+    assert imported.indexed[0].task_path == ""
+
+
 async def test_transient_mixed_resume_keeps_memory_overwrite_semantics(
     source_saver: BaseCheckpointSaver,
 ) -> None:
@@ -348,6 +404,7 @@ def _delta_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
         ("memory", ("", ""), ["a", "z"]),
         ("sqlite", ("", ""), ["a", "z"]),
         ("memory", ("node-a", "node-z"), ["z", "a"]),
+        ("sqlite", ("node-a", "node-z"), ["z", "a"]),
     ],
     indirect=["source_saver"],
 )
@@ -394,6 +451,7 @@ async def test_transient_delta_pending_writes_follow_native_order(
         ("memory", ("", ""), ["a", "z"]),
         ("sqlite", ("", ""), ["a", "z"]),
         ("memory", ("node-a", "node-z"), ["z", "a"]),
+        ("sqlite", ("node-a", "node-z"), ["z", "a"]),
     ],
     indirect=["sync_source_saver"],
 )

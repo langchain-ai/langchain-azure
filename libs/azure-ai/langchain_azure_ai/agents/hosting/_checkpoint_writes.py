@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, NamedTuple
 
 from langgraph.checkpoint.base import (
@@ -17,7 +17,7 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.memory import InMemorySaver
 
 _SQLITE_WRITES_QUERY = """
-SELECT task_id, idx, channel, type, value FROM writes
+SELECT task_id, idx, channel, type, value, {task_path} FROM writes
 WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?
 ORDER BY task_id, idx
 """
@@ -81,13 +81,20 @@ def _sqlite_params(saved: CheckpointTuple) -> tuple[str, str, str]:
     )
 
 
+def _sqlite_writes_query(columns: Iterable[Sequence[Any]]) -> str:
+    has_task_path = any(column[1] == "task_path" for column in columns)
+    return _SQLITE_WRITES_QUERY.format(task_path="task_path" if has_task_path else "''")
+
+
 def _deserialize_sqlite_writes(
     source: BaseCheckpointSaver,
     rows: Iterable[Iterable[Any]],
 ) -> _IndexedPendingWrites:
     return _IndexedPendingWrites(
-        _IndexedWrite(task_id, index, channel, source.serde.loads_typed((kind, value)))
-        for task_id, index, channel, kind, value in rows
+        _IndexedWrite(
+            task_id, index, channel, source.serde.loads_typed((kind, value)), task_path
+        )
+        for task_id, index, channel, kind, value, task_path in rows
     )
 
 
@@ -105,7 +112,9 @@ def _get_indexed_writes(
     else:
         if isinstance(source, SqliteSaver):
             with source.cursor(transaction=False) as cursor:
-                cursor.execute(_SQLITE_WRITES_QUERY, _sqlite_params(saved))
+                cursor.execute("PRAGMA table_info(writes)")
+                query = _sqlite_writes_query(cursor.fetchall())
+                cursor.execute(query, _sqlite_params(saved))
                 return _deserialize_sqlite_writes(source, cursor.fetchall())
     try:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -137,11 +146,9 @@ async def _aget_indexed_writes(
             raise
     else:
         if isinstance(source, AsyncSqliteSaver):
-            async with (
-                source.lock,
-                source.conn.execute(
-                    _SQLITE_WRITES_QUERY, _sqlite_params(saved)
-                ) as cursor,
-            ):
+            async with source.lock, source.conn.cursor() as cursor:
+                await cursor.execute("PRAGMA table_info(writes)")
+                query = _sqlite_writes_query(await cursor.fetchall())
+                await cursor.execute(query, _sqlite_params(saved))
                 return _deserialize_sqlite_writes(source, await cursor.fetchall())
     return _get_indexed_writes(source, saved)
