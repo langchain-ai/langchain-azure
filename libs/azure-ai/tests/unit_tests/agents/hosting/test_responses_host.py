@@ -10,7 +10,7 @@ import errno
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +47,7 @@ from langchain_azure_ai.agents.hosting import (
     ResponsesHostServer,
     ResponsesServerOptions,
 )
+from langchain_azure_ai.agents.hosting._converters import detect_pending_interrupts
 from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
@@ -828,6 +829,76 @@ async def test_store_false_shutdown_fails_without_recovery(
     context.exit_for_recovery.assert_not_awaited()
     if shutdown_phase == "before_graph":
         context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "shutdown_phase", ["pending_lookup", "resume_parsing", "interrupt_output"]
+)
+async def test_store_false_pending_interrupt_shutdown_fails_without_recovery(
+    shutdown_phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    graph = _interrupt_graph(checkpointer)
+    server = ResponsesHostServer(graph)
+    context = _context()
+    config = await server.build_runnable_config(_request(), context)
+    await graph.ainvoke({"messages": [HumanMessage(content="hello")]}, config)
+    checkpoints_before = list(checkpointer.list(None))
+    chains_before = deepcopy(foundry_state_stores)
+    original_resume = server.build_resume_command
+
+    async def lookup_pending(
+        graph: CompiledStateGraph, config: RunnableConfig
+    ) -> tuple[Interrupt, ...]:
+        pending = await detect_pending_interrupts(graph, config)
+        assert pending
+        if shutdown_phase == "pending_lookup":
+            context.shutdown.set()
+        return pending
+
+    async def parse_resume(
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence[Interrupt],
+    ) -> tuple[Command | None, frozenset[str]]:
+        result = await original_resume(request, context, pending)
+        assert result[0] is None
+        if shutdown_phase == "resume_parsing":
+            context.shutdown.set()
+        return result
+
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses_host.detect_pending_interrupts",
+        lookup_pending,
+    )
+    monkeypatch.setattr(server, "build_resume_command", parse_resume)
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            shutdown_phase == "interrupt_output"
+            and isinstance(event, dict)
+            and event.get("type") == "response.output_item.added"
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["status"] == "failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert "response.completed" not in [event["type"] for event in lifecycle]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == checkpoints_before
+    assert foundry_state_stores == chains_before
+    context.exit_for_recovery.assert_not_awaited()
 
 
 @pytest.mark.parametrize("streaming", [False, True])

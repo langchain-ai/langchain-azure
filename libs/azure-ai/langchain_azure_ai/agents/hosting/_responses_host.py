@@ -979,6 +979,12 @@ class ResponsesHostServer:
                             CONVERSATION_CHECKPOINT_KEY,
                             ref.to_dict(),
                         )
+                    if not store_response and context.shutdown.is_set():
+                        yield stream.emit_failed(
+                            code="server_shutdown",
+                            message=_NON_STORED_SHUTDOWN_MESSAGE,
+                        )
+                        return
                     yield stream.emit_completed()
                     return
 
