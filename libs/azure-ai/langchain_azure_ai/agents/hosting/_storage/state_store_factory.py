@@ -190,9 +190,9 @@ class StateStoreClientFactory:
                         session=self.session,
                         session_owner=False,
                         **{
-                            key: options[key]
-                            for key in _CONNECTION_OPTIONS
-                            if key in options
+                            option: options[option]
+                            for option in _CONNECTION_OPTIONS
+                            if option in options
                         },
                     )
                 store = await store_type.get_or_create(name, *args, **options)

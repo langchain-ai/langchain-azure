@@ -94,11 +94,12 @@ graph runtime. Cleanup preserves primary errors, recovery signals and generator
 exit; caller cancellation takes precedence. Secondary cleanup errors are logged;
 normal-exit cleanup failures propagate.
 
-A graph-close timeout leaves the conversation-chain checkpoint unchanged.
-Shutdown exits for recovery, client cancellation reports `cancelled`, and
-steering reports `server_error`. Execution errors also report `server_error`.
-All `server_error` messages are `An internal error occurred.`; internal details
-stay in logs.
+A graph-close timeout during normal iteration leaves the conversation-chain
+checkpoint unchanged. Shutdown exits for recovery, client cancellation reports
+`cancelled`, and steering reports `server_error`. Explicit `aclose()` preserves
+generator exit and emits no terminal events, even if cleanup times out.
+Execution errors report `server_error`. All `server_error` messages are
+`An internal error occurred.`; internal details stay in logs.
 
 ### Assumptions
 
