@@ -1067,6 +1067,14 @@ class ResponsesHostServer:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
+            if not store_response and context.shutdown.is_set():
+                yield stream.emit_failed(
+                    code="server_shutdown",
+                    message=_NON_STORED_SHUTDOWN_MESSAGE,
+                    usage=usage.response_usage,
+                )
+                return
+
             yield stream.emit_completed(usage=usage.response_usage)
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")

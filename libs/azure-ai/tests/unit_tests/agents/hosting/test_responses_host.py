@@ -901,6 +901,57 @@ async def test_store_false_pending_interrupt_shutdown_fails_without_recovery(
     context.exit_for_recovery.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("shutdown_event_type", "shutdown_item_type"),
+    [
+        ("response.output_item.added", "function_call"),
+        ("response.output_item.done", "mcp_approval_request"),
+    ],
+)
+async def test_store_false_new_interrupt_shutdown_fails_without_recovery(
+    shutdown_event_type: str,
+    shutdown_item_type: str,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer))
+    context = _context()
+    context.exit_for_recovery.side_effect = RuntimeError(
+        "For store=false responses there is no task to defer for recovery."
+    )
+    chains_before = deepcopy(foundry_state_stores)
+    assert list(checkpointer.list(None)) == []
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            isinstance(event, dict)
+            and event.get("type") == shutdown_event_type
+            and event.get("item", {}).get("type") == shutdown_item_type
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["status"] == "failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert [
+        event["type"]
+        for event in lifecycle
+        if event["type"] in ("response.completed", "response.failed")
+    ] == ["response.failed"]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == []
+    assert foundry_state_stores == chains_before
+    context.exit_for_recovery.assert_not_awaited()
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_store_false_shutdown_returns_terminal_failure(streaming: bool) -> None:
     class ShuttingDownHost(ResponsesHostServer):
