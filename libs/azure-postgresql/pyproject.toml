@@ -72,8 +72,6 @@ langchain_azure_postgresql = [
 [tool.pytest.ini_options]
 addopts = [
   "--cov=langchain_azure_postgresql",            # Specify the package to measure coverage for
-  "--cov-report=html:htmlcov/pytest",            # Generate HTML coverage report under the htmlcov directory
-  "--cov-report=xml:cover/pytest/cobertura.xml", # Generate XML coverage report under the xmlcov directory
   "--cov-report=term",                           # Report coverage in the terminal
   "--doctest-continue-on-failure",               # Continue running doctests even if some fail
   "--doctest-modules",                           # Enable doctest modules

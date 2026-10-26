@@ -10,10 +10,14 @@ UV_RUN_TEST = uv run --frozen --group test
 UV_RUN_LINT = uv run --frozen --group lint
 
 test tests:
-	$(UV_RUN_TEST) pytest $(TEST_FILE)
+	$(UV_RUN_TEST) pytest $(TEST_FILE) \
+		--cov-report=html:htmlcov/unit \
+		--cov-report=xml:cover/unit/cobertura.xml
 
 integration_test integration_tests:
-	$(UV_RUN_TEST) pytest tests/integration_tests
+	$(UV_RUN_TEST) pytest tests/integration_tests \
+		--cov-report=html:htmlcov/integration \
+		--cov-report=xml:cover/integration/cobertura.xml
 
 
 ######################
