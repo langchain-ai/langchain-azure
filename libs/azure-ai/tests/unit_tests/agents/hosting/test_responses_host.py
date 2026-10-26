@@ -401,6 +401,88 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
         await factories[0].stack.aclose()
 
 
+@pytest.mark.parametrize("other_borrower", [False, True])
+async def test_cross_task_close_does_not_cancel_handler_tasks(
+    monkeypatch: pytest.MonkeyPatch, other_borrower: bool
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import (
+        get_state_store,
+        state_store_factory,
+    )
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    held = []
+    factories = []
+    children: list[asyncio.Task[None]] = []
+    started, advanced, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def values() -> AsyncGenerator[str, None]:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            yield "item"
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        factory = state_store_factory._current_factory.get()
+        assert factory is not None
+        factories.append(factory)
+        for _ in range(2):
+            iterator = values()
+            held.append(iterator)
+            yield await anext(iterator)
+
+    async def child() -> None:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(server, "handle_create", handle)
+
+    async def handler() -> None:
+        events = cast(
+            AsyncGenerator[Any, None],
+            server._handle_create_async_gen(_request(), _context(), asyncio.Event()),
+        )
+
+        async def advance() -> None:
+            assert await anext(events) == "item"
+            advanced.set()
+            await release.wait()
+
+        advancer = None
+        try:
+            assert await anext(events) == "item"
+            advancer = asyncio.create_task(advance())
+            await advanced.wait()
+            if other_borrower:
+                with factories[0].bind():
+                    children.append(asyncio.create_task(child()))
+                await started.wait()
+            await asyncio.create_task(events.aclose())
+            assert advancer.cancelling() == 0
+            store.aclose.assert_awaited_once()
+            session = factories[0].session
+            assert session is not None and session.closed
+        finally:
+            release.set()
+            for iterator in held:
+                await iterator.aclose()
+            await asyncio.gather(
+                *children, *([advancer] if advancer else []), return_exceptions=True
+            )
+            await events.aclose()
+
+    task = asyncio.create_task(handler())
+    await asyncio.wait_for(task, 1)
+    assert task.cancelling() == 0
+    assert all(child.cancelled() for child in children)
+
+
 @pytest.mark.parametrize("ignore_cancellation", [False, True])
 async def test_iterator_shutdown_timeout_still_closes_factory(
     monkeypatch: pytest.MonkeyPatch,
@@ -1135,7 +1217,10 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
 @pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
 @pytest.mark.parametrize("slow_close", [False, True])
 async def test_graph_close_budget_preserves_signal_finalization(
-    monkeypatch: pytest.MonkeyPatch, signal: str, slow_close: bool
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
+    slow_close: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
     from langchain_azure_ai.agents.hosting._storage import state_store_factory
@@ -1208,7 +1293,9 @@ async def test_graph_close_budget_preserves_signal_finalization(
 
                 error = ResponseError.model_validate(terminal["response"]["error"])
                 assert error.code == "server_error"
-                assert "cleanup timed out" in error.message
+                assert error.message == "An internal error occurred."
+                assert "graph_iterator" not in json.dumps(terminal)
+                assert "cleanup timed out: resource=graph_iterator" in caplog.text
             else:
                 assert terminal["type"] == "response.completed"
             context.exit_for_recovery.assert_not_awaited()
@@ -1227,8 +1314,18 @@ async def test_graph_close_budget_preserves_signal_finalization(
 
 
 @pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
-async def test_graph_execution_timeout_remains_an_internal_error(
-    monkeypatch: pytest.MonkeyPatch, signal: str
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("graph execution timed out"),
+        RuntimeError("private credential detail"),
+    ],
+)
+async def test_graph_execution_errors_are_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
+    error: Exception,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     server = ResponsesHostServer(make_echo_graph())
     context = _context()
@@ -1240,7 +1337,7 @@ async def test_graph_execution_timeout_remains_an_internal_error(
         else:
             context.client_cancelled = signal == "client_cancel"
             cancellation_signal.set()
-        raise TimeoutError("graph execution timed out")
+        raise error
         yield  # pragma: no cover
 
     monkeypatch.setattr(server.graph, "astream", graph_stream)
@@ -1251,9 +1348,15 @@ async def test_graph_execution_timeout_remains_an_internal_error(
         )
     ]
     assert events[-1]["response"]["error"] == {
-        "code": "internal_error",
-        "message": "graph execution timed out",
+        "code": "server_error",
+        "message": "An internal error occurred.",
     }
+    assert all(
+        str(error) not in json.dumps(event)
+        for event in events
+        if isinstance(event, dict)
+    )
+    assert str(error) in caplog.text
     context.exit_for_recovery.assert_not_awaited()
 
 

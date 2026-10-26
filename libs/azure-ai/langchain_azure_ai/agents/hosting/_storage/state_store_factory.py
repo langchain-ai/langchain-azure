@@ -13,6 +13,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from time import perf_counter
 from typing import Any, Literal
+from weakref import WeakSet
 
 import aiohttp
 from anyio import CancelScope
@@ -118,6 +119,9 @@ class StateStoreClientFactory:
 
     def __init__(self) -> None:
         self.loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        assert task is not None
+        self.handler_tasks: WeakSet[asyncio.Task[Any]] = WeakSet([task])
         self.stack = AsyncExitStack()
         self.clients: dict[tuple[object, str, str | None], FoundryStateStore] = {}
         self.locks: dict[tuple[object, str, str | None], asyncio.Lock] = {}
@@ -131,6 +135,9 @@ class StateStoreClientFactory:
     @contextmanager
     def bind(self) -> Iterator[None]:
         """Bind this factory only for the current iterator operation."""
+        task = asyncio.current_task()
+        assert task is not None
+        self.handler_tasks.add(task)
         token = _current_factory.set(self)
         try:
             yield
@@ -218,8 +225,12 @@ async def state_store_client_scope(
                 perf_counter() - started,
                 len(factory.borrowers),
             )
-            # Do not cancel the Task awaiting this cleanup.
-            borrowers = {task for task in factory.borrowers if task is not closing_task}
+            # Earlier handler Tasks may be awaiting this cross-Task cleanup.
+            borrowers = {
+                task
+                for task in factory.borrowers
+                if task not in factory.handler_tasks and task is not closing_task
+            }
             for borrower in borrowers:
                 borrower.cancel()
             if borrowers:

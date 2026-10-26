@@ -1026,7 +1026,7 @@ class ResponsesHostServer:
             yield stream.emit_completed(usage=usage.response_usage)
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
-            code, message = "internal_error", str(exc)
+            code, message = "server_error", "An internal error occurred."
             if (
                 isinstance(exc, _CleanupTimeoutError)
                 and exc.resource == "graph_iterator"
@@ -1034,7 +1034,6 @@ class ResponsesHostServer:
                 # Unsettled writes cannot advance the chain or complete steering.
                 if context.shutdown.is_set():
                     await context.exit_for_recovery()
-                code = "server_error"
                 if cancellation_signal.is_set() and context.client_cancelled:
                     code, message = "cancelled", "Request was cancelled."
             yield stream.emit_failed(

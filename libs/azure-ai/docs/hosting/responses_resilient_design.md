@@ -91,7 +91,9 @@ runs if a ContextVar reset fails or iterator shutdown times out. The handler
 then waits up to five seconds for active storage
 operations. On timeout it cancels other borrower tasks and allows five seconds
 for them to release their clients. It never cancels the task awaiting factory
-cleanup. It then closes clients and the connection pool in LIFO
+cleanup or any task that created or advanced the handler. These handler tasks
+are tracked with weak references so completed tasks are not retained.
+It then closes clients and the connection pool in LIFO
 order, allowing five seconds per resource. One shared exit guard preserves an
 already-propagating execution error, recovery signal, `GeneratorExit` or
 cancellation, logging secondary cleanup failures while attempting the remaining
@@ -104,10 +106,11 @@ overlap; signal-dependent terminal classification applies when advancing the
 handler, not when explicitly closing it.
 If graph close times out, the handler does not advance the conversation-chain
 checkpoint. Shutdown still exits for recovery, and explicit client cancellation
-still reports `cancelled`. Steering reports the standard `server_error` code,
-with a cleanup-timeout message, instead of completing while graph or checkpoint
-work may still be running. Graph execution errors remain
-`internal_error`, even if the subsequent close also exceeds its budget.
+still reports `cancelled`. Steering reports the standard `server_error` code
+instead of completing while graph or checkpoint work may still be running.
+Graph execution errors also report `server_error`, even if the subsequent close
+exceeds its budget or a shutdown/cancellation signal is set. All `server_error`
+messages are `An internal error occurred.`; internal details are logged only.
 Timeout logs identify the resource or borrower phase, elapsed seconds and active
 borrower count, without including store names, user IDs or request headers.
 Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation
