@@ -32,7 +32,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
 from pathlib import Path
@@ -83,7 +82,7 @@ from ._converters import (
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
-    METADATA_LANGGRAPH_THREAD_ID,
+    METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
     CheckpointRef,
     ConversationChainStoreProtocol,
     FoundryConversationChainStore,
@@ -620,7 +619,7 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         The logical thread is namespaced by the platform-provided user key.
-        For ``previous_response_id`` chains, a stored thread reference is reused
+        For ``previous_response_id`` chains, a cached root response ID is reused
         when available; otherwise the root response is resolved through the
         Responses provider when possible. Checkpointed graphs
         additionally restore the exact ``(thread_id, checkpoint_id)`` saved
@@ -635,9 +634,9 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        thread_id = await self._resolve_thread_id(request, context)
+        hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
+            return hosting_config.runnable_config
 
         previous_response_id = request.get("previous_response_id")
         conversation_id = get_conversation_id(request) or context.conversation_id
@@ -646,7 +645,7 @@ class ResponsesHostServer:
             and not (isinstance(previous_response_id, str) and previous_response_id)
             and not (isinstance(conversation_id, str) and conversation_id)
         ):
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
+            return hosting_config.runnable_config
 
         conversation_chain_id = _scope_thread_id(
             context.conversation_chain_id,
@@ -658,13 +657,9 @@ class ResponsesHostServer:
                 CONVERSATION_CHECKPOINT_KEY,
             )
         )
-        if checkpoint_ref is None:
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
-
-        return HostingRunnableConfig.create_from_checkpoint(
-            checkpoint_ref,
-            context,
-        ).runnable_config
+        if checkpoint_ref is not None:
+            hosting_config = hosting_config.with_checkpoint_ref(checkpoint_ref)
+        return hosting_config.runnable_config
 
     def build_runnable_config_sync(
         self,
@@ -689,41 +684,46 @@ class ResponsesHostServer:
             _scope_thread_id(thread_id, context), context
         ).runnable_config
 
-    async def _resolve_thread_id(
+    async def _resolve_thread_config(
         self,
         request: CreateResponse,
         context: ResponseContext,
-    ) -> str:
+    ) -> HostingRunnableConfig:
         previous_response_id = request.get("previous_response_id")
         conversation_id = get_conversation_id(request) or context.conversation_id
         thread_id: str
         if isinstance(conversation_id, str) and conversation_id:
             thread_id = conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            resolved_thread_id = await self._thread_id_from_response_chain(
+            resolved_config = await self._thread_config_from_response_chain(
                 previous_response_id,
                 context,
             )
-            if resolved_thread_id:
-                return resolved_thread_id
+            if resolved_config is not None:
+                return resolved_config
             thread_id = previous_response_id
         else:
-            thread_id = context.response_id
-        return _scope_thread_id(thread_id, context)
+            return HostingRunnableConfig.create(
+                _scope_thread_id(context.response_id, context), context
+            ).with_root_response_id(context.response_id)
+        return HostingRunnableConfig.create(
+            _scope_thread_id(thread_id, context), context
+        )
 
-    async def _thread_id_from_response_chain(
+    async def _thread_config_from_response_chain(
         self,
         previous_response_id: str,
         context: ResponseContext,
-    ) -> str | None:
-        """Resolve a final, user-scoped thread ID from stored responses."""
+    ) -> HostingRunnableConfig | None:
+        """Resolve a user-scoped thread and cache only a verified chain root."""
         provider = getattr(context, "_provider", None)
         if provider is None:
             return None
 
         response_id: str | None = previous_response_id
         seen: set[str] = set()
-        root_response_id = previous_response_id
+        last_response_id = previous_response_id
+        root_response_id: str | None = None
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
@@ -740,25 +740,33 @@ class ResponsesHostServer:
 
             conversation_id = _response_conversation_id(response)
             if conversation_id:
-                return _scope_thread_id(conversation_id, context)
+                return HostingRunnableConfig.create(
+                    _scope_thread_id(conversation_id, context), context
+                )
 
             try:
                 metadata = ResponseEventStream(
                     response_id=response_id, response=response
                 ).internal_metadata
-                thread_id = metadata.get(METADATA_LANGGRAPH_THREAD_ID)
+                cached_root_id = metadata.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
             except (TypeError, ValueError):
-                thread_id = None
-            if isinstance(thread_id, str) and thread_id:
-                namespace_match = re.match(r"user-[0-9a-f]{64}:", thread_id)
-                namespace = namespace_match.group() if namespace_match else ""
-                if namespace == _scope_thread_id("", context):
-                    return thread_id
+                cached_root_id = None
+            if isinstance(cached_root_id, str) and cached_root_id:
+                root_response_id = cached_root_id
+                break
 
-            root_response_id = response_id
+            last_response_id = response_id
             response_id = _response_field(response, "previous_response_id")
+            if response_id is None:
+                root_response_id = last_response_id
+                break
 
-        return _scope_thread_id(root_response_id, context)
+        hosting_config = HostingRunnableConfig.create(
+            _scope_thread_id(root_response_id or last_response_id, context), context
+        )
+        if root_response_id is not None:
+            hosting_config = hosting_config.with_root_response_id(root_response_id)
+        return hosting_config
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -889,6 +897,11 @@ class ResponsesHostServer:
         usage = UsageAccumulator()
         try:
             config = await self.build_runnable_config(request, context)
+            root_response_id = HostingRunnableConfig(config).root_response_id
+            if root_response_id is not None:
+                stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
+                    root_response_id
+                )
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's

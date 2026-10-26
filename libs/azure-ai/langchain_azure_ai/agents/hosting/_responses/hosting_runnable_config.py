@@ -77,6 +77,18 @@ class HostingRunnableConfig:
             return None
         return CheckpointRef(thread_id, checkpoint_id)
 
+    @property
+    def root_response_id(self) -> str | None:
+        """Return the verified, unscoped response-chain root, when available."""
+        value = (self._config.get("configurable") or {}).get("response_root_id")
+        return value if isinstance(value, str) and value else None
+
+    def with_root_response_id(self, root_response_id: str) -> HostingRunnableConfig:
+        """Return a copy carrying the verified, unscoped response-chain root."""
+        configurable = self._configurable_copy()
+        configurable["response_root_id"] = root_response_id
+        return self._with_configurable(configurable)
+
     def with_checkpoint_ref(
         self,
         checkpoint_ref: CheckpointRef,

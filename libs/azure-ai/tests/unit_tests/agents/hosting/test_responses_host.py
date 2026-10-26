@@ -42,6 +42,7 @@ from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
     METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
     FoundryConversationChainStore,
@@ -599,6 +600,65 @@ async def test_handle_create_persists_conversation_checkpoint(
     )
 
 
+@pytest.mark.parametrize("checkpointed", [False, True])
+async def test_handle_create_persists_root_response_id(checkpointed: bool) -> None:
+    responses: dict[str, ResponseObject] = {}
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=lambda response_id, **_: responses[response_id]
+        )
+    )
+    graph = make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+    server = ResponsesHostServer(graph)
+    for response_id, previous_id in [
+        ("resp-root", None),
+        ("resp-child", "resp-root"),
+        ("resp-grandchild", "resp-child"),
+    ]:
+        context = _context(
+            response_id=response_id,
+            conversation_id=None,
+            provider=provider,
+            user_id_key="user-a",
+        )
+        request = _request(previous_response_id=previous_id)
+        stream = server._new_stream(request, context)
+        with patch.object(server, "_new_stream", return_value=stream):
+            events = [
+                event
+                async for event in server.handle_create(
+                    request, context, asyncio.Event()
+                )
+            ]
+        assert events[-1]["type"] == "response.completed"
+        assert (
+            stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == "resp-root"
+        )
+        responses[response_id] = cast(ResponseObject, dict(stream.response))
+    assert provider.get_response.await_count == 2
+
+
+@pytest.mark.parametrize("failure", ["provider", "cycle"])
+async def test_unresolved_response_chain_does_not_cache_root(failure: str) -> None:
+    parent = _response_object("resp-parent", previous_response_id="resp-parent")
+    if failure == "provider":
+        parent = _response_object("resp-parent", previous_response_id="resp-missing")
+    provider = SimpleNamespace(
+        get_response=AsyncMock(side_effect=[parent, RuntimeError("unavailable")])
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+    request = _request(previous_response_id="resp-parent")
+    stream = server._new_stream(request, context)
+    with patch.object(server, "_new_stream", return_value=stream):
+        events = [
+            event
+            async for event in server.handle_create(request, context, asyncio.Event())
+        ]
+    assert events[-1]["type"] == "response.completed"
+    assert METADATA_LANGGRAPH_ROOT_RESPONSE_ID not in stream.internal_metadata
+
+
 async def test_custom_conversation_chain_store() -> None:
     class CustomStore:
         def __init__(self) -> None:
@@ -1086,7 +1146,7 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
 @pytest.mark.parametrize("as_json", [False, True])
 @pytest.mark.parametrize("user_id_key", [None, "user-a"])
 @pytest.mark.parametrize("include_checkpoint", [False, True])
-async def test_previous_response_thread_metadata_avoids_ancestor_reads(
+async def test_previous_response_root_metadata_avoids_ancestor_reads(
     as_json: bool, user_id_key: str | None, include_checkpoint: bool
 ) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
@@ -1099,7 +1159,10 @@ async def test_previous_response_thread_metadata_avoids_ancestor_reads(
         ),
     )
     thread_id = root_config["configurable"]["thread_id"]
-    metadata = {METADATA_LANGGRAPH_THREAD_ID: thread_id}
+    metadata: dict[str, object] = {
+        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+        METADATA_LANGGRAPH_THREAD_ID: "opaque-thread-for-another-user",
+    }
     if include_checkpoint:
         metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = "checkpoint-parent"
     parent = _response_object(
@@ -1125,7 +1188,7 @@ async def test_previous_response_thread_metadata_avoids_ancestor_reads(
     ("owner_key", "caller_key"),
     [("user-a", "user-b"), ("user-a", None), (None, "user-b")],
 )
-async def test_previous_response_thread_metadata_rejects_other_user(
+async def test_cached_root_scopes_thread_for_current_user(
     owner_key: str | None, caller_key: str | None
 ) -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
@@ -1144,6 +1207,7 @@ async def test_previous_response_thread_metadata_rejects_other_user(
                     "resp-parent",
                     previous_response_id="resp-root",
                     internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
                         METADATA_LANGGRAPH_THREAD_ID: owner_config["configurable"][
                             "thread_id"
                         ],
@@ -1166,10 +1230,9 @@ async def test_previous_response_thread_metadata_rejects_other_user(
     assert (
         config["configurable"]["thread_id"] != owner_config["configurable"]["thread_id"]
     )
-    assert provider.get_response.await_args_list == [
-        call("resp-parent", context=context.platform_context),
-        call("resp-root", context=context.platform_context),
-    ]
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
 
 
 @pytest.mark.parametrize(
@@ -1179,20 +1242,20 @@ async def test_previous_response_thread_metadata_rejects_other_user(
         "invalid-json",
         "[]",
         {
-            METADATA_LANGGRAPH_THREAD_ID: 7,
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: 7,
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
         },
         {
-            METADATA_LANGGRAPH_THREAD_ID: "",
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "",
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
         },
         {
-            METADATA_LANGGRAPH_THREAD_ID: "x" * 513,
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513,
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
         },
     ],
 )
-async def test_previous_response_thread_metadata_falls_back_to_root(
+async def test_previous_response_root_metadata_falls_back_to_root(
     metadata: dict[str, object] | str | None,
 ) -> None:
     provider = SimpleNamespace(
@@ -1210,11 +1273,15 @@ async def test_previous_response_thread_metadata_falls_back_to_root(
     server = ResponsesHostServer(make_checkpointed_echo_graph())
     context = _context(conversation_id=None, provider=provider)
 
-    config = await server.build_runnable_config(
-        _request(previous_response_id="resp-parent"), context
-    )
-
-    assert config["configurable"]["thread_id"] == "resp-root"
+    request = _request(previous_response_id="resp-parent")
+    stream = server._new_stream(request, context)
+    with patch.object(server, "_new_stream", return_value=stream):
+        events = [
+            event
+            async for event in server.handle_create(request, context, asyncio.Event())
+        ]
+    assert events[-1]["type"] == "response.completed"
+    assert stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == "resp-root"
     assert provider.get_response.await_args_list == [
         call("resp-parent", context=context.platform_context),
         call("resp-root", context=context.platform_context),
@@ -1228,6 +1295,7 @@ async def test_previous_response_conversation_takes_priority_over_metadata() -> 
                 "resp-parent",
                 conversation_id="conv-existing",
                 internal_metadata={
+                    METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
                     METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
                     METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
                 },
@@ -1242,6 +1310,7 @@ async def test_previous_response_conversation_takes_priority_over_metadata() -> 
     )
 
     assert config["configurable"]["thread_id"] == "conv-existing"
+    assert HostingRunnableConfig(config).root_response_id is None
 
 
 async def test_previous_response_uses_conversation_state_store(
@@ -1262,6 +1331,7 @@ async def test_previous_response_uses_conversation_state_store(
                 return_value=_response_object(
                     "resp-2",
                     internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
                         METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
                         METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
                     },
@@ -1278,6 +1348,7 @@ async def test_previous_response_uses_conversation_state_store(
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
     assert config["configurable"]["checkpoint_ns"] == ""
+    assert HostingRunnableConfig(config).root_response_id == "resp-root"
 
 
 async def test_explicit_conversation_uses_conversation_state_store(
@@ -1313,6 +1384,7 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
                 return_value=_response_object(
                     "resp-parent",
                     internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
                         METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
                         METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
                     },
