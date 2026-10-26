@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from deepagents import SubAgent, create_deep_agent
-from deepagents.backends import StateBackend
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -45,7 +44,6 @@ def build_agent(
         system_prompt=WORKFLOW_INSTRUCTIONS,
         subagents=[researcher],
         middleware=[TodoListMiddleware()],
-        backend=StateBackend(),
         checkpointer=checkpointer,
         name="foundry-deep-research-agent",
     )
