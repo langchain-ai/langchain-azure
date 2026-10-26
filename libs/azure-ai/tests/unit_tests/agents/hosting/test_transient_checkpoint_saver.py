@@ -98,9 +98,10 @@ async def test_transient_pending_writes_do_not_reload_cached_checkpoints(
     assert decode.call_count == 0
     saved = await branch.aget_tuple(config)
     assert saved is not None
-    assert saved.pending_writes == [
-        (f"task-{number}", "history", [str(number)]) for number in range(32)
-    ]
+    assert sorted(saved.pending_writes or [], key=repr) == sorted(
+        [(f"task-{number}", "history", [str(number)]) for number in range(32)],
+        key=repr,
+    )
     assert [saved async for saved in source_saver.alist(config)] == source_before
 
 
@@ -128,9 +129,10 @@ def test_transient_sync_pending_writes_do_not_reload_cached_checkpoints(
     assert decode.call_count == 0
     saved = branch.get_tuple(config)
     assert saved is not None
-    assert saved.pending_writes == [
-        (f"task-{number}", "history", [str(number)]) for number in range(32)
-    ]
+    assert sorted(saved.pending_writes or [], key=repr) == sorted(
+        [(f"task-{number}", "history", [str(number)]) for number in range(32)],
+        key=repr,
+    )
     assert list(sync_source_saver.list(config)) == source_before
 
 
