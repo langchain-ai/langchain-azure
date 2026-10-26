@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -22,6 +23,7 @@ pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
 from azure.ai.agentserver.core.streaming import streams
+from azure.ai.agentserver.responses import ResponseContext
 from azure.ai.agentserver.responses.models import (
     CreateResponse,
     ItemMessage,
@@ -53,6 +55,7 @@ from langchain_azure_ai.agents.hosting._responses_host import (
 
 from .conftest import (  # noqa: E402
     make_checkpointed_echo_graph,
+    make_checkpointed_retry_graph,
     make_checkpointed_two_node_graph,
     make_custom_state_graph,
     make_echo_graph,
@@ -644,6 +647,196 @@ async def test_custom_conversation_chain_store() -> None:
         _context(conversation_id=None, conversation_chain_id="custom-chain"),
     )
     assert config["configurable"]["checkpoint_id"] == checkpoint_ref.checkpoint_id
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("initial_success", [False, True])
+@pytest.mark.parametrize("conversation", ["conv-retry", {"id": "conv-retry"}])
+def test_failed_conversation_retry_uses_only_committed_state(
+    stream: bool,
+    initial_success: bool,
+    conversation: str | dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "azure.ai.agentserver.core._tracing._configure_tracing",
+        lambda *_, **__: None,
+    )
+    node_inputs: list[list[str]] = []
+    failures: list[str] = []
+    server = ResponsesHostServer(make_checkpointed_retry_graph(node_inputs, failures))
+
+    with _client(server) as client:
+
+        def post(text: str) -> dict[str, Any]:
+            response = client.post(
+                "/responses",
+                headers={"x-agent-user-id": "retry-user"},
+                json={"input": text, "conversation": conversation, "stream": stream},
+            )
+            assert response.status_code == 200, response.text
+            if not stream:
+                return response.json()
+            return next(
+                event["response"]
+                for kind, event in reversed(_parse_sse(response.text))
+                if kind in {"response.completed", "response.failed"}
+            )
+
+        if initial_success:
+            assert post("seed")["status"] == "completed"
+        committed_state = {
+            key: deepcopy(value) for key, value in foundry_state_stores.items() if value
+        }
+        expected_ledger = ["seed"] if initial_success else []
+        for _ in range(2):
+            failures.append("intentional failure after checkpoint")
+            failed = post("retry")
+            assert failed["status"] == "failed", failed
+            assert "intentional failure" in failed["error"]["message"]
+            assert {
+                key: value for key, value in foundry_state_stores.items() if value
+            } == committed_state
+            assert node_inputs[-1] == expected_ledger
+
+        retried = post("retry")
+        assert retried["status"] == "completed", retried
+        assert node_inputs[-1] == expected_ledger
+        continued = post("next")
+        assert continued["status"] == "completed", continued
+        assert node_inputs[-1] == [*expected_ledger, "retry"]
+        text = "".join(
+            part.get("text", "")
+            for item in continued["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert text == ",".join([*expected_ledger, "retry", "next"])
+
+
+@pytest.mark.parametrize("persisted_progress", [False, True])
+async def test_first_turn_recovery_uses_only_response_committed_progress(
+    persisted_progress: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    node_inputs: list[list[str]] = []
+    failures = ["intentional failure after checkpoint"]
+    server = ResponsesHostServer(make_checkpointed_retry_graph(node_inputs, failures))
+    request = _request(conversation="conv-recovery")
+    context = _context(conversation_id="conv-recovery", current_text="retry")
+    snapshots: list[ResponseObject] = []
+    events: list[dict[str, Any]] = []
+    async for event in server.handle_create(request, context, asyncio.Event()):
+        if type(event).__name__ == "ResponseCheckpointEvent":
+            snapshots.append(deepcopy(event.response))
+        elif isinstance(event, dict):
+            events.append(event)
+    assert events[-1]["type"] == "response.failed"
+    assert node_inputs == [[]]
+    assert all(
+        CONVERSATION_CHECKPOINT_KEY not in values
+        for values in foundry_state_stores.values()
+    )
+
+    recovery = _context(conversation_id="conv-recovery", current_text="retry")
+    recovery.is_recovery = True
+    recovery.persisted_response = snapshots[-1] if persisted_progress else snapshots[0]
+    server = ResponsesHostServer(server.graph)
+    recovered_events = [
+        event
+        async for event in server.handle_create(request, recovery, asyncio.Event())
+        if isinstance(event, dict)
+    ]
+
+    assert recovered_events[-1]["type"] == "response.completed"
+    assert node_inputs == ([[]] if persisted_progress else [[], []])
+    checkpoint = foundry_state_stores[_state_store_name("conv-recovery")][
+        CONVERSATION_CHECKPOINT_KEY
+    ]
+    snapshot = await server.graph.aget_state(
+        HostingRunnableConfig.create_from_checkpoint(
+            CheckpointRef(**checkpoint), recovery
+        ).runnable_config
+    )
+    assert snapshot.values["ledger"] == ["retry"]
+
+
+@pytest.mark.parametrize("application_thread", [None, "application-thread"])
+async def test_uncommitted_retry_preserves_application_config(
+    application_thread: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConfiguredHost(ResponsesHostServer):
+        async def build_runnable_config(
+            self, request: CreateResponse, context: ResponseContext
+        ) -> RunnableConfig:
+            config = await super().build_runnable_config(request, context)
+            configurable = config.setdefault("configurable", {})
+            configurable["application_setting"] = "retained"
+            if application_thread is not None:
+                configurable["thread_id"] = application_thread
+            config["tags"] = ["application-tag"]
+            return config
+
+    server = ConfiguredHost(make_checkpointed_retry_graph([], ["intentional failure"]))
+    request = _request(conversation="conv-config")
+    context = _context(
+        response_id="resp-first", conversation_id="conv-config", current_text="retry"
+    )
+    original = await server.build_runnable_config(request, context)
+    failed = [
+        event
+        async for event in server.handle_create(request, context, asyncio.Event())
+        if isinstance(event, dict)
+    ]
+    assert failed[-1]["type"] == "response.failed"
+
+    retry = _context(
+        response_id="resp-retry", conversation_id="conv-config", current_text="retry"
+    )
+    _, config = await _capture_graph_call(server, request, retry, monkeypatch)
+
+    assert config["tags"] == ["application-tag"]
+    assert config["configurable"]["application_setting"] == "retained"
+    assert config["configurable"]["response_context"] is retry
+    assert isinstance(
+        config["configurable"]["response_cancellation_signal"], asyncio.Event
+    )
+    if application_thread is None:
+        assert (
+            config["configurable"]["thread_id"] != original["configurable"]["thread_id"]
+        )
+    else:
+        assert config["configurable"]["thread_id"] == application_thread
+
+
+async def test_uncommitted_conversation_state_read_failure_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    monkeypatch.setattr(
+        server.graph,
+        "aget_state",
+        AsyncMock(side_effect=RuntimeError("state read failed")),
+    )
+    graph_stream = MagicMock()
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(conversation="conv-read"),
+            _context(conversation_id="conv-read"),
+            asyncio.Event(),
+        )
+        if isinstance(event, dict)
+    ]
+
+    assert events[-1]["type"] == "response.failed"
+    assert events[-1]["response"]["error"]["message"] == "state read failed"
+    graph_stream.assert_not_called()
 
 
 async def test_recovery_replays_input_without_current_response_checkpoint(

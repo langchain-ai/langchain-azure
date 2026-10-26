@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import operator
 import threading
 from collections.abc import AsyncIterator
 from copy import deepcopy
@@ -208,6 +209,33 @@ def make_checkpointed_two_node_graph() -> CompiledStateGraph:
     return builder.compile(checkpointer=InMemorySaver())
 
 
+def make_checkpointed_retry_graph(
+    node_inputs: list[list[str]],
+    failures: list[str],
+) -> CompiledStateGraph:
+    """Return a graph that can fail after checkpointing an accumulated turn."""
+
+    class RetryState(_MessagesState):
+        ledger: Annotated[list[str], operator.add]
+
+    async def record(state: RetryState) -> dict[str, Any]:
+        node_inputs.append(list(state.get("ledger", [])))
+        return {"ledger": [_last_user_text(state["messages"])]}
+
+    async def finish(state: RetryState) -> dict[str, Any]:
+        if failures:
+            raise RuntimeError(failures.pop(0))
+        return {"messages": [AIMessage(content=",".join(state["ledger"]))]}
+
+    builder = StateGraph(RetryState)
+    builder.add_node("record", record)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "record")
+    builder.add_edge("record", "finish")
+    builder.add_edge("finish", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 def make_checkpointed_steering_graph(
     first_turn_started: threading.Event,
     cancellation_started: threading.Event | None = None,
@@ -284,9 +312,9 @@ def make_recovery_probe_graph(
         async def aget_state(self, config: dict[str, Any]) -> Any:
             captured["state_config"] = config
             if pending_interrupt is None:
-                return SimpleNamespace(tasks=())
+                return SimpleNamespace(tasks=(), created_at=None)
             task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
-            return SimpleNamespace(tasks=(task,))
+            return SimpleNamespace(tasks=(task,), created_at=None)
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 
