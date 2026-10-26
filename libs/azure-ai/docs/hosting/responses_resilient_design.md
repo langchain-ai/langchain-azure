@@ -75,51 +75,30 @@ boundary, and a later turn would not know which checkpoint is authoritative.
 
 ### State Store client lifetime
 
-Each Responses handler owns a private `StateStoreClientFactory`. The Foundry
-checkpoint saver and conversation-chain store borrow clients from it, from config
-resolution through the final chain write. Each consumer, store name and platform
-user gets a separate client; hosted clients share a handler-owned connection pool.
-Each acquisition resolves the store metadata to detect missing stores. Isolation
-and TTL are creation options; existing stores retain their settings without
-revalidation. No checkpoint values or descriptors are cached.
-The factory and request feature flags are bound separately for each iterator
-advance or close. Tokens are restored before yielding an event to AgentServer,
-so a later iteration can run in another Task without reusing an old token.
+Each Responses handler owns a `StateStoreClientFactory` from config resolution
+through the final conversation-chain write. Clients are separate by consumer,
+store name and user; hosted clients share one connection pool. Every acquisition
+refreshes metadata. No checkpoint values or descriptors are cached; isolation and
+TTL remain creation options.
 
-Handler and graph iterator closes each have a five-second limit. Cleanup still
-runs if a ContextVar reset fails or iterator shutdown times out. The handler
-then waits up to five seconds for active storage
-operations. On timeout it cancels other borrower tasks and allows five seconds
-for them to release their clients. It never cancels the task awaiting factory
-cleanup or any task that created or advanced the handler. These handler tasks
-are tracked with weak references so completed tasks are not retained.
-It then closes clients and the connection pool in LIFO
-order, allowing five seconds per resource. One shared exit guard preserves an
-already-propagating execution error, recovery signal, `GeneratorExit` or
-cancellation, logging secondary cleanup failures while attempting the remaining
-resource closes. Cancellation during cleanup takes precedence over other outcomes;
-repeated cancellation retains the first cancellation exception. On normal exit,
-cleanup failures still propagate, including `TimeoutError` when a close exceeds
-its budget. Explicit generator close preserves `GeneratorExit` and logs cleanup
-failures without emitting response events. Handler and graph close budgets can
-overlap; signal-dependent terminal classification applies when advancing the
-handler, not when explicitly closing it.
-If graph close times out, the handler does not advance the conversation-chain
-checkpoint. Shutdown still exits for recovery, and explicit client cancellation
-still reports `cancelled`. Steering reports the standard `server_error` code
-instead of completing while graph or checkpoint work may still be running.
-Graph execution errors also report `server_error`, even if the subsequent close
-exceeds its budget or a shutdown/cancellation signal is set. All `server_error`
-messages are `An internal error occurred.`; internal details are logged only.
-Timeout logs identify the resource or borrower phase, elapsed seconds and active
-borrower count, without including store names, user IDs or request headers.
-Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation
-retry loops; native asyncio cancellation still preserves its original exception.
-These limits apply to finalization; they do not limit graph runtime.
-Standalone operations and caller-supplied transports, pipelines or sessions keep their
-existing client lifetime. Local file storage does not allocate an HTTP session.
-Recovery starts a new factory; reuse does not cross handler invocations.
-Borrowing from another event loop raises `RuntimeError` before accessing clients.
+The factory and request features are bound for each iterator advance or close,
+allowing iteration across Tasks. Reuse stays within one handler and event loop;
+recovery creates a new factory. Standalone operations and custom transports,
+pipelines or sessions retain their existing lifetime.
+
+Cleanup waits for active storage operations, cancels independent borrowers on
+timeout, then closes clients and the pool. Handler Tasks are protected from this
+cancellation. Iterator closes, borrower drain/cancellation waits and resource
+closes each have a five-second budget, with no shared total deadline or limit on
+graph runtime. Cleanup preserves primary errors, recovery signals and generator
+exit; cancellation takes precedence. Secondary cleanup errors are logged;
+normal-exit cleanup failures propagate.
+
+A graph-close timeout leaves the conversation-chain checkpoint unchanged.
+Shutdown exits for recovery, client cancellation reports `cancelled`, and
+steering reports `server_error`. Execution errors also report `server_error`.
+All `server_error` messages are `An internal error occurred.`; internal details
+stay in logs.
 
 ### Assumptions
 
