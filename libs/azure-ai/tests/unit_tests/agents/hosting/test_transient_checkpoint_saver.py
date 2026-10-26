@@ -18,10 +18,20 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting._responses.transient_checkpoint_saver import (
     TransientCheckpointSaver,
 )
+
+
+class _ReplayState(TypedDict):
+    count: int
+    stop_at: int
+
+
+class _ReplaySubgraphState(_ReplayState, total=False):
+    private_value: int
 
 
 @pytest.fixture(params=["memory", "sqlite"])
@@ -153,6 +163,52 @@ async def test_transient_branch_isolates_subgraph_checkpoints(
     expected += ["transient", "echo"]
     assert [message.content for message in result["messages"]] == expected
     assert [saved async for saved in source_saver.alist(config)] == source_before
+
+
+async def test_transient_branch_preserves_unchanged_subgraph_state(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    observed: list[int | None] = []
+
+    def child_step(state: _ReplaySubgraphState) -> dict[str, int]:
+        observed.append(state.get("private_value"))
+        update = {"count": state["count"] + 1}
+        if "private_value" not in state:
+            update["private_value"] = 42
+        return update
+
+    child_builder = StateGraph(
+        _ReplaySubgraphState, input_schema=_ReplayState, output_schema=_ReplayState
+    )
+    child_builder.add_node("step", child_step)
+    child_builder.add_edge(START, "step")
+    child_builder.add_edge("step", END)
+    child = child_builder.compile(checkpointer=True)
+
+    def route(state: _ReplayState) -> str:
+        return "child" if state["count"] < state["stop_at"] else END
+
+    builder = StateGraph(_ReplayState)
+    builder.add_node("child", child)
+    builder.add_edge(START, "child")
+    builder.add_conditional_edges("child", route)
+    graph = builder.compile(checkpointer=source_saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "saved"}}
+    await graph.ainvoke({"count": 0, "stop_at": 1}, config)
+    saved = await source_saver.aget_tuple(config)
+    assert saved is not None
+    assert observed == [None]
+    source_before = [checkpoint async for checkpoint in source_saver.alist(config)]
+    observed.clear()
+
+    branch = graph.copy(update={"checkpointer": TransientCheckpointSaver(source_saver)})
+    result = await branch.ainvoke({"count": 1, "stop_at": 3}, saved.config)
+
+    assert observed == [42, 42]
+    assert result == {"count": 3, "stop_at": 3}
+    assert [
+        checkpoint async for checkpoint in source_saver.alist(config)
+    ] == source_before
 
 
 async def test_transient_branch_lists_history(

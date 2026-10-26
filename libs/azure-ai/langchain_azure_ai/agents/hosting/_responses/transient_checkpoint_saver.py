@@ -186,8 +186,10 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        """Save a checkpoint only in the request-local branch."""
-        return self._memory.put(config, checkpoint, metadata, new_versions)
+        """Save all channels locally, including unchanged replayed state."""
+        return self._memory.put(
+            config, checkpoint, metadata, checkpoint["channel_versions"]
+        )
 
     async def aput(
         self,
