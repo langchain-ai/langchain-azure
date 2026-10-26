@@ -13,6 +13,8 @@ from langchain_core.runnables import RunnableConfig
 
 from .checkpoint_ref import CheckpointRef
 
+_ROOT_RESPONSE_ID_CONFIG_KEY = "__langchain_azure_root_response_id"
+
 
 class HostingRunnableConfig:
     """Wrap hosting-owned data stored in a LangGraph runnable config."""
@@ -79,14 +81,16 @@ class HostingRunnableConfig:
 
     @property
     def root_response_id(self) -> str | None:
-        """Return the verified, unscoped response-chain root, when available."""
-        value = (self._config.get("configurable") or {}).get("response_root_id")
+        """Return the verified root carried in a host-private configurable entry."""
+        value = (self._config.get("configurable") or {}).get(
+            _ROOT_RESPONSE_ID_CONFIG_KEY
+        )
         return value if isinstance(value, str) and value else None
 
     def with_root_response_id(self, root_response_id: str) -> HostingRunnableConfig:
         """Return a copy carrying the verified, unscoped response-chain root."""
         configurable = self._configurable_copy()
-        configurable["response_root_id"] = root_response_id
+        configurable[_ROOT_RESPONSE_ID_CONFIG_KEY] = root_response_id
         return self._with_configurable(configurable)
 
     def with_checkpoint_ref(

@@ -1184,6 +1184,34 @@ async def test_previous_response_root_metadata_avoids_ancestor_reads(
     )
 
 
+@pytest.mark.parametrize("as_model", [False, True])
+async def test_cached_root_lookup_does_not_copy_response_payload(
+    as_model: bool,
+) -> None:
+    class UncopyablePayload:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+            raise AssertionError("Root lookup must not copy the response payload")
+
+    parent = _response_object(
+        "resp-parent",
+        internal_metadata={METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root"},
+    )
+    parent["output"] = cast(Any, [UncopyablePayload()])
+    response = SimpleNamespace(**parent) if as_model else parent
+    provider = SimpleNamespace(get_response=AsyncMock(return_value=response))
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == "resp-root"
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
+
+
 @pytest.mark.parametrize(
     ("owner_key", "caller_key"),
     [("user-a", "user-b"), ("user-a", None), (None, "user-b")],
@@ -1249,10 +1277,18 @@ async def test_cached_root_scopes_thread_for_current_user(
             METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "",
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
         },
-        {
-            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513,
-            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
-        },
+        # The SDK stores internal metadata in a JSON value limited to 512 characters.
+        pytest.param(
+            {
+                METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513,
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+            },
+            id="legacy_metadata_exceeds_512_characters",
+        ),
+        pytest.param(
+            json.dumps({METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "x" * 513}),
+            id="json_metadata_exceeds_512_characters",
+        ),
     ],
 )
 async def test_previous_response_root_metadata_falls_back_to_root(

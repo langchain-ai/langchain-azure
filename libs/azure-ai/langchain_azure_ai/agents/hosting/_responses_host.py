@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from functools import wraps
@@ -96,6 +97,9 @@ if TYPE_CHECKING:
     from langgraph.types import Command, Interrupt
 
 logger = logging.getLogger(__name__)
+
+# Responses metadata values, including the internal JSON bag, allow 512 characters.
+_MAX_INTERNAL_METADATA_CHARS = 512
 
 StreamMode = Literal[
     "values",
@@ -243,6 +247,36 @@ def _response_conversation_id(response: Any) -> str | None:
         value = conversation.get("id")
     else:
         value = getattr(conversation, "id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_root_id(response: Any) -> str | None:
+    """Read a cached root from JSON or legacy dictionary metadata."""
+    metadata = getattr(response, "metadata", None)
+    if metadata is None and hasattr(response, "get"):
+        metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    internal = metadata.get("_internal_metadata")
+    if not isinstance(internal, (str, dict)):
+        return None
+    try:
+        encoded = (
+            internal
+            if isinstance(internal, str)
+            else json.dumps(
+                internal, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
+        )
+        if len(encoded) > _MAX_INTERNAL_METADATA_CHARS:
+            return None
+        if isinstance(internal, str):
+            internal = json.loads(internal)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(internal, dict):
+        return None
+    value = internal.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
     return value if isinstance(value, str) and value else None
 
 
@@ -627,6 +661,11 @@ class ResponsesHostServer:
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
 
+        Configurable keys prefixed with ``__langchain_azure_`` are reserved for
+        host implementation details. Subclasses can preserve root caching by
+        calling ``await super().build_runnable_config(request, context)`` and
+        retaining the returned hosting-owned entries.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -744,14 +783,8 @@ class ResponsesHostServer:
                     _scope_thread_id(conversation_id, context), context
                 )
 
-            try:
-                metadata = ResponseEventStream(
-                    response_id=response_id, response=response
-                ).internal_metadata
-                cached_root_id = metadata.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
-            except (TypeError, ValueError):
-                cached_root_id = None
-            if isinstance(cached_root_id, str) and cached_root_id:
+            cached_root_id = _response_root_id(response)
+            if cached_root_id is not None:
                 root_response_id = cached_root_id
                 break
 
