@@ -26,6 +26,9 @@ from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver, HostingFea
 from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
     DEFAULT_STORE_NAME_PREFIX,
 )
+from langchain_azure_ai.agents.hosting._responses.transient_checkpoint_saver import (
+    TransientCheckpointSaver,
+)
 
 
 class _GraphState(TypedDict):
@@ -946,6 +949,56 @@ async def test_saver_runs_with_real_langgraph() -> None:
     assert result == {"value": 2}
     assert snapshot.values == {"value": 2}
     assert snapshot.config["configurable"]["checkpoint_id"]
+
+
+@pytest.mark.asyncio
+async def test_transient_forked_integer_versions_preserve_current_checkpoint(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, _ = saver_and_store
+
+    def increment(state: _GraphState) -> _GraphState:
+        return {"value": state["value"] + 1}
+
+    builder = StateGraph(_GraphState)
+    builder.add_node("increment", increment)
+    builder.add_edge(START, "increment")
+    builder.add_edge("increment", END)
+    graph = builder.compile(checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-1"}}
+    await graph.ainvoke({"value": 0}, config)
+    fork_point = (await graph.aget_state(config)).config
+    await graph.ainvoke({"value": 10}, config)
+    other = await saver.aget_tuple(config)
+    assert other is not None
+    source_before = [saved async for saved in saver.alist(config)]
+
+    transient = TransientCheckpointSaver(saver)
+    branch = graph.copy(update={"checkpointer": transient})
+    result = await branch.ainvoke({"value": 20}, fork_point)
+    current = await branch.aget_state(config)
+    checkpoint = await transient.aget_tuple(current.config)
+    assert checkpoint is not None
+    version = checkpoint.checkpoint["channel_versions"]["value"]
+    assert isinstance(version, int)
+    assert version == other.checkpoint["channel_versions"]["value"]
+
+    historical = await branch.aget_state(other.config)
+    after = await branch.aget_state(config)
+    assert result == current.values == {"value": 21}
+    assert historical.values == {"value": 11}
+    assert after.config == current.config
+    assert after.values == current.values
+    history = [saved async for saved in transient.alist(config)]
+    assert (
+        next(
+            saved
+            for saved in history
+            if saved.checkpoint["id"] == checkpoint.checkpoint["id"]
+        ).checkpoint
+        == checkpoint.checkpoint
+    )
+    assert [saved async for saved in saver.alist(config)] == source_before
 
 
 @pytest.mark.asyncio

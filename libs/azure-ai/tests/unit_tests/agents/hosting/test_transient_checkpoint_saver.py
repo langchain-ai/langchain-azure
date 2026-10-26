@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from typing import Annotated
 
 import pytest
 
@@ -32,6 +33,14 @@ class _ReplayState(TypedDict):
 
 class _ReplaySubgraphState(_ReplayState, total=False):
     private_value: int
+
+
+class _ReplayHistoryState(_ReplayState):
+    private_history: list[str]
+
+
+def _append_history(current: list[str], batches: Sequence[list[str]]) -> list[str]:
+    return current + [item for batch in batches for item in batch]
 
 
 @pytest.fixture(params=["memory", "sqlite"])
@@ -134,6 +143,57 @@ def test_transient_branch_supports_synchronous_execution() -> None:
     assert list(source.list(config)) == source_before
 
 
+def test_transient_latest_read_preserves_local_pending_writes() -> None:
+    source = InMemorySaver()
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": ""}
+    }
+    for checkpoint_id in ("001", "003"):
+        checkpoint = empty_checkpoint()
+        checkpoint["id"] = checkpoint_id
+        checkpoint["channel_values"] = {
+            "nullable": None,
+            "enabled": False,
+            "items": [],
+        }
+        checkpoint["channel_versions"] = {
+            name: 1 for name in ("nullable", "enabled", "items", "omitted")
+        }
+        source.put(
+            config,
+            checkpoint,
+            {"source": "update", "step": int(checkpoint_id)},
+            checkpoint["channel_versions"],
+        )
+    latest_config: RunnableConfig = {
+        "configurable": {**config["configurable"], "checkpoint_id": "003"}
+    }
+    source.put_writes(latest_config, [("__resume__", "source")], "task")
+    original = source.get_tuple(latest_config)
+    assert original is not None
+
+    branch = TransientCheckpointSaver(source)
+    older_config: RunnableConfig = {
+        "configurable": {**config["configurable"], "checkpoint_id": "001"}
+    }
+    assert branch.get_tuple(older_config) is not None
+    latest = branch.get_tuple(config)
+    assert latest is not None
+    assert latest.checkpoint == original.checkpoint
+    branch.put_writes(latest.config, [("__resume__", "local")], "task")
+
+    newer = empty_checkpoint()
+    newer["id"] = "004"
+    source.put(latest_config, newer, {"source": "update", "step": 4}, {})
+    current = branch.get_tuple(config)
+    assert current is not None
+    assert current.checkpoint == original.checkpoint
+    assert current.pending_writes == [("task", "__resume__", "local")]
+    assert source.get_tuple(latest_config) == original
+    history = list(branch.list(config))
+    assert history[1] == current
+
+
 @pytest.mark.parametrize("explicit_checkpoint", [False, True])
 async def test_transient_branch_isolates_subgraph_checkpoints(
     source_saver: BaseCheckpointSaver,
@@ -209,6 +269,159 @@ async def test_transient_branch_preserves_unchanged_subgraph_state(
     assert [
         checkpoint async for checkpoint in source_saver.alist(config)
     ] == source_before
+
+
+@pytest.mark.parametrize("explicit_checkpoint", [False, True])
+async def test_transient_branch_preserves_omitted_delta_snapshots(
+    source_saver: BaseCheckpointSaver,
+    explicit_checkpoint: bool,
+) -> None:
+    delta = pytest.importorskip("langgraph.channels.delta")
+
+    DeltaReplayState = TypedDict(
+        "DeltaReplayState",
+        {
+            "count": int,
+            "stop_at": int,
+            "private_history": Annotated[
+                list[str], delta.DeltaChannel(_append_history, snapshot_frequency=1)
+            ],
+        },
+    )
+    observed: list[list[str]] = []
+
+    def child_step(state: _ReplayHistoryState) -> dict[str, int]:
+        observed.append(list(state["private_history"]))
+        return {"count": state["count"] + 1}
+
+    child_builder = StateGraph(DeltaReplayState)
+    child_builder.add_node("step", child_step)
+    child_builder.add_edge(START, "step")
+    child_builder.add_edge("step", END)
+    child = child_builder.compile(checkpointer=True)
+
+    def route(state: _ReplayState) -> str:
+        return "child" if state["count"] < state["stop_at"] else END
+
+    builder = StateGraph(_ReplayState)
+    builder.add_node("child", child)
+    builder.add_edge(START, "child")
+    builder.add_conditional_edges("child", route)
+    graph = builder.compile(checkpointer=source_saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "saved"}}
+    child_config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": "child"}
+    }
+    await graph.aupdate_state(
+        child_config,
+        {"count": 0, "stop_at": 0, "private_history": ["saved"]},
+    )
+    assert (await graph.aget_state(child_config)).values["private_history"] == ["saved"]
+    await graph.aupdate_state(config, {"count": 0, "stop_at": 0})
+    saved = await source_saver.aget_tuple(config)
+    assert saved is not None
+    source_before = [checkpoint async for checkpoint in source_saver.alist(config)]
+
+    branch = graph.copy(update={"checkpointer": TransientCheckpointSaver(source_saver)})
+    result = await branch.ainvoke(
+        {"count": 0, "stop_at": 2},
+        saved.config if explicit_checkpoint else config,
+    )
+
+    assert observed == [["saved"], ["saved"]]
+    assert result == {"count": 2, "stop_at": 2}
+    assert (await branch.aget_state(child_config)).values["private_history"] == [
+        "saved"
+    ]
+    assert [
+        checkpoint async for checkpoint in source_saver.alist(config)
+    ] == source_before
+
+
+async def test_transient_delta_history_does_not_rewind_subgraph(
+    source_saver: BaseCheckpointSaver,
+) -> None:
+    delta = pytest.importorskip("langgraph.channels.delta")
+    DeltaReplayState = TypedDict(
+        "DeltaReplayState",
+        {
+            "count": int,
+            "stop_at": int,
+            "private_history": Annotated[
+                list[str], delta.DeltaChannel(_append_history, snapshot_frequency=1000)
+            ],
+        },
+    )
+    observed: list[list[str]] = []
+    inspect_history = False
+    before: RunnableConfig | None = None
+
+    def child_step(state: _ReplayHistoryState) -> dict[str, int | list[str]]:
+        observed.append(list(state["private_history"]))
+        return {
+            "count": state["count"] + 1,
+            "private_history": [f"child{state['count']}"],
+        }
+
+    child_builder = StateGraph(DeltaReplayState)
+    child_builder.add_node("step", child_step)
+    child_builder.add_edge(START, "step")
+    child_builder.add_edge("step", END)
+    child = child_builder.compile(checkpointer=True)
+
+    async def inspect(state: _ReplayState, config: RunnableConfig) -> dict[str, int]:
+        if inspect_history:
+            configurable = {**config["configurable"], "checkpoint_ns": "child"}
+            configurable.pop("checkpoint_id", None)
+            history = [
+                saved
+                async for saved in child.aget_state_history(
+                    {"configurable": configurable}, before=before, limit=1
+                )
+            ]
+            assert len(history) == 1
+            assert history[0].values["private_history"] == ["saved", "child0"]
+        return {}
+
+    def route(state: _ReplayState) -> str:
+        return "child" if state["count"] < state["stop_at"] else END
+
+    builder = StateGraph(_ReplayState)
+    builder.add_node("inspect", inspect)
+    builder.add_node("child", child)
+    builder.add_edge(START, "inspect")
+    builder.add_edge("inspect", "child")
+    builder.add_conditional_edges("child", route)
+    graph = builder.compile(checkpointer=source_saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "saved"}}
+    child_config: RunnableConfig = {
+        "configurable": {"thread_id": "saved", "checkpoint_ns": "child"}
+    }
+    await graph.aupdate_state(
+        child_config,
+        {"count": 0, "stop_at": 0, "private_history": ["saved"]},
+    )
+    await graph.ainvoke({"count": 0, "stop_at": 2}, config)
+    child_state = await graph.aget_state(child_config)
+    assert child_state.values["private_history"] == ["saved", "child0", "child1"]
+    before = child_state.config
+    source_before = [saved async for saved in source_saver.alist(config)]
+
+    branch = graph.copy(update={"checkpointer": TransientCheckpointSaver(source_saver)})
+    assert (await branch.aget_state(config)).values == {"count": 2, "stop_at": 2}
+    observed.clear()
+    inspect_history = True
+    result = await branch.ainvoke({"count": 0, "stop_at": 1}, config)
+
+    assert observed == [["saved", "child0", "child1"]]
+    assert result == {"count": 1, "stop_at": 1}
+    assert (await branch.aget_state(child_config)).values["private_history"] == [
+        "saved",
+        "child0",
+        "child1",
+        "child0",
+    ]
+    assert [saved async for saved in source_saver.alist(config)] == source_before
 
 
 async def test_transient_branch_lists_history(

@@ -17,17 +17,24 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
+    get_checkpoint_id,
 )
 from langgraph.checkpoint.memory import InMemorySaver
 
 
 class TransientCheckpointSaver(BaseCheckpointSaver):
-    """Isolate conversation writes in memory without providing crash recovery."""
+    """Isolate conversation writes in memory without providing crash recovery.
+
+    Complete snapshots are cached by checkpoint ID, since source channel
+    versions may repeat across forks. Reading historical snapshots does not
+    select them as the active branch.
+    """
 
     def __init__(self, source: BaseCheckpointSaver) -> None:
         super().__init__(serde=source.serde)
         self._source: BaseCheckpointSaver = source
         self._memory: BaseCheckpointSaver[str] = InMemorySaver(serde=source.serde)
+        self._active_checkpoints: dict[tuple[str, str], str] = {}
 
     def with_allowlist(
         self, extra_allowlist: Collection[tuple[str, ...]]
@@ -41,17 +48,57 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read the local branch before importing an existing checkpoint."""
-        saved = self._memory.get_tuple(config)
+        saved = self._get_local(config)
         if saved is not None:
             return saved
-        return self._import_checkpoint(self._source.get_tuple(config))
+        return self._import_checkpoint(
+            self._source.get_tuple(config),
+            select_current=not get_checkpoint_id(config),
+        )
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Read saved state without requiring a synchronous source saver."""
-        saved = self._memory.get_tuple(config)
+        saved = self._get_local(config)
         if saved is not None:
             return saved
-        return self._import_checkpoint(await self._source.aget_tuple(config))
+        return self._import_checkpoint(
+            await self._source.aget_tuple(config),
+            select_current=not get_checkpoint_id(config),
+        )
+
+    @staticmethod
+    def _branch_key(config: RunnableConfig) -> tuple[str, str]:
+        configurable = config["configurable"]
+        return configurable["thread_id"], configurable.get("checkpoint_ns", "")
+
+    def _set_active(self, config: RunnableConfig, checkpoint_id: str) -> None:
+        key = self._branch_key(config)
+        self._active_checkpoints[key] = max(
+            self._active_checkpoints.get(key, checkpoint_id), checkpoint_id
+        )
+
+    @staticmethod
+    def _unpack_checkpoint(saved: CheckpointTuple) -> CheckpointTuple:
+        return saved._replace(
+            checkpoint=saved.checkpoint["channel_values"]["checkpoint"]
+        )
+
+    def _get_local(self, config: RunnableConfig) -> CheckpointTuple | None:
+        checkpoint_id = get_checkpoint_id(config) or self._active_checkpoints.get(
+            self._branch_key(config)
+        )
+        if checkpoint_id is None:
+            return None
+        saved = self._memory.get_tuple(
+            {
+                **config,
+                "configurable": {
+                    **config["configurable"],
+                    "checkpoint_id": checkpoint_id,
+                },
+            }
+        )
+        return self._unpack_checkpoint(saved) if saved is not None else None
 
     def list(
         self,
@@ -131,7 +178,10 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         limit: int | None,
     ) -> Iterator[CheckpointTuple]:
         history: dict[tuple[str, str, str], CheckpointTuple] = {}
-        local = self._memory.list(config, filter=filter, before=before)
+        local = (
+            self._unpack_checkpoint(saved)
+            for saved in self._memory.list(config, filter=filter, before=before)
+        )
         for saved in chain(source, local):
             configurable = saved.config["configurable"]
             history[
@@ -151,33 +201,55 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         )
 
     def _import_checkpoint(
-        self, saved: CheckpointTuple | None
+        self, saved: CheckpointTuple | None, *, select_current: bool = False
     ) -> CheckpointTuple | None:
         if saved is None:
             return None
-        parent_config: RunnableConfig = {
-            "configurable": {
-                **saved.config["configurable"],
-                "checkpoint_ns": saved.config["configurable"].get("checkpoint_ns", ""),
-                "checkpoint_id": (
-                    saved.parent_config["configurable"].get("checkpoint_id")
-                    if saved.parent_config is not None
-                    else None
-                ),
+        local = self._get_local(saved.config)
+        if local is None:
+            parent_config: RunnableConfig = {
+                "configurable": {
+                    **saved.config["configurable"],
+                    "checkpoint_ns": saved.config["configurable"].get(
+                        "checkpoint_ns", ""
+                    ),
+                    "checkpoint_id": (
+                        saved.parent_config["configurable"].get("checkpoint_id")
+                        if saved.parent_config is not None
+                        else None
+                    ),
+                }
             }
+            config = self._save_checkpoint(
+                parent_config, saved.checkpoint, saved.metadata
+            )
+            writes: dict[str, list[tuple[str, Any]]] = defaultdict(list)
+            for task_id, channel, value in saved.pending_writes or ():
+                writes[task_id].append((channel, value))
+            for task_id, task_writes in writes.items():
+                self.put_writes(config, task_writes, task_id)
+            local = self._get_local(config)
+        if select_current:
+            self._set_active(saved.config, saved.checkpoint["id"])
+        return local
+
+    def _save_checkpoint(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+    ) -> RunnableConfig:
+        local_checkpoint: Checkpoint = {
+            **checkpoint,
+            "channel_values": {"checkpoint": checkpoint},
+            "channel_versions": {"checkpoint": checkpoint["id"]},
         }
-        config = self.put(
-            parent_config,
-            saved.checkpoint,
-            saved.metadata,
-            saved.checkpoint["channel_versions"],
+        return self._memory.put(
+            config,
+            local_checkpoint,
+            metadata,
+            local_checkpoint["channel_versions"],
         )
-        writes: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-        for task_id, channel, value in saved.pending_writes or ():
-            writes[task_id].append((channel, value))
-        for task_id, task_writes in writes.items():
-            self.put_writes(config, task_writes, task_id)
-        return self._memory.get_tuple(config)
 
     def put(
         self,
@@ -186,10 +258,10 @@ class TransientCheckpointSaver(BaseCheckpointSaver):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        """Save all channels locally, including unchanged replayed state."""
-        return self._memory.put(
-            config, checkpoint, metadata, checkpoint["channel_versions"]
-        )
+        """Save a complete local checkpoint and advance the active branch."""
+        saved_config = self._save_checkpoint(config, checkpoint, metadata)
+        self._set_active(saved_config, checkpoint["id"])
+        return saved_config
 
     async def aput(
         self,
