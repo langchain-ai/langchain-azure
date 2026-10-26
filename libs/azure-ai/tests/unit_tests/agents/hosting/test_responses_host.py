@@ -116,15 +116,19 @@ async def test_handler_owns_clients_through_generator_exit(
 
 
 @pytest.mark.parametrize("boundary", ["graph", "handler"])
-@pytest.mark.parametrize("recovery", [False, True])
+@pytest.mark.parametrize("primary_kind", ["error", "recovery", "generator_exit"])
 async def test_iterator_cleanup_preserves_primary_error(
-    monkeypatch: pytest.MonkeyPatch, boundary: str, recovery: bool
+    monkeypatch: pytest.MonkeyPatch, boundary: str, primary_kind: str
 ) -> None:
     from azure.ai.agentserver.responses import ResponseExitForRecovery
 
     from langchain_azure_ai.agents.hosting._responses_host import _closing_stream
 
-    primary = ResponseExitForRecovery() if recovery else ValueError("execution failed")
+    primary = {
+        "error": ValueError("execution failed"),
+        "recovery": ResponseExitForRecovery(),
+        "generator_exit": GeneratorExit(),
+    }[primary_kind]
 
     class Iterator:
         aclose = AsyncMock(side_effect=RuntimeError("close failed"))
@@ -451,8 +455,7 @@ async def test_iterator_shutdown_timeout_still_closes_factory(
         await asyncio.wait_for(closing.wait(), 1)
         done, _ = await asyncio.wait({task}, timeout=1)
         assert task in done, "Iterator shutdown must not block factory cleanup"
-        with pytest.raises(TimeoutError):
-            await task
+        await task
         store.aclose.assert_awaited_once()
         assert acquire.call_args.kwargs["transport"].session.closed
         resources = {
@@ -465,6 +468,51 @@ async def test_iterator_shutdown_timeout_still_closes_factory(
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_graph_close_timeout_preserves_generator_exit(
+    monkeypatch: pytest.MonkeyPatch, shutdown: bool
+) -> None:
+    from contextlib import suppress
+
+    from azure.ai.agentserver.responses import ResponseExitForRecovery
+
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    context.exit_for_recovery.side_effect = ResponseExitForRecovery
+    release, closed = asyncio.Event(), asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        try:
+            yield "messages", (AIMessage(content="partial"), {})
+        finally:
+            try:
+                await release.wait()
+            finally:
+                closed.set()
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    iterator = server.handle_create(_request(), context, asyncio.Event())
+    try:
+        async for event in iterator:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+        if shutdown:
+            context.shutdown.set()
+        await asyncio.wait_for(cast(AsyncGenerator[Any, None], iterator).aclose(), 1)
+        context.exit_for_recovery.assert_not_awaited()
+    finally:
+        release.set()
+        with suppress(BaseException):
+            await cast(AsyncGenerator[Any, None], iterator).aclose()
+        await asyncio.wait_for(closed.wait(), 1)
 
 
 async def test_agentserver_cancel_winddown_preserves_handler_context(
@@ -1156,7 +1204,11 @@ async def test_graph_close_budget_preserves_signal_finalization(
             if signal == "client_cancel":
                 assert terminal["response"]["error"]["code"] == "cancelled"
             elif slow_close:
-                assert terminal["response"]["error"]["code"] == "cleanup_timeout"
+                from openai.types.responses import ResponseError
+
+                error = ResponseError.model_validate(terminal["response"]["error"])
+                assert error.code == "server_error"
+                assert "cleanup timed out" in error.message
             else:
                 assert terminal["type"] == "response.completed"
             context.exit_for_recovery.assert_not_awaited()

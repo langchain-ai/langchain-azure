@@ -75,13 +75,14 @@ async def _close_resource(
 
 @asynccontextmanager
 async def _finish_cleanup(close: Awaitable[None]) -> AsyncIterator[None]:
-    """Finish cleanup on exit, preserving primary errors and cancellation."""
+    """Close on exit without replacing a primary error or control signal.
+
+    New cancellation wins; repeated cancellation preserves the first exception.
+    Secondary cleanup errors are logged. Normal exit propagates cleanup errors.
+    """
     primary: BaseException | None = None
     try:
         yield
-    except GeneratorExit:
-        # Explicit generator close must still report cleanup failures.
-        raise
     except BaseException as exc:
         primary = exc
         raise
@@ -204,6 +205,7 @@ async def state_store_client_scope(
     """Own reusable clients and bound cleanup after the handler exits."""
     factory = StateStoreClientFactory()
     token = _current_factory.set(factory) if bind else None
+    closing_task: asyncio.Task[Any] | None = None
 
     async def close() -> None:
         started = perf_counter()
@@ -216,7 +218,8 @@ async def state_store_client_scope(
                 perf_counter() - started,
                 len(factory.borrowers),
             )
-            borrowers = set(factory.borrowers)
+            # Do not cancel the Task awaiting this cleanup.
+            borrowers = {task for task in factory.borrowers if task is not closing_task}
             for borrower in borrowers:
                 borrower.cancel()
             if borrowers:
@@ -239,6 +242,7 @@ async def state_store_client_scope(
         try:
             yield factory
         finally:
+            closing_task = asyncio.current_task()
             factory.closing = True
             if token is not None:
                 _current_factory.reset(token)

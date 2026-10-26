@@ -89,25 +89,30 @@ so a later iteration can run in another Task without reusing an old token.
 Handler and graph iterator closes each have a five-second limit. Cleanup still
 runs if a ContextVar reset fails or iterator shutdown times out. The handler
 then waits up to five seconds for active storage
-operations. On timeout it cancels the borrowers and allows five seconds for them
-to release their clients. It then closes clients and the connection pool in LIFO
+operations. On timeout it cancels other borrower tasks and allows five seconds
+for them to release their clients. It never cancels the task awaiting factory
+cleanup. It then closes clients and the connection pool in LIFO
 order, allowing five seconds per resource. One shared exit guard preserves an
-already-propagating execution error, recovery signal or cancellation, logging
-secondary cleanup failures while attempting the remaining resource closes.
-Cancellation during cleanup takes precedence over execution/recovery errors;
-repeated cancellation retains the first cancellation exception. On normal exit
-or explicit generator close, cleanup failures still propagate, including
-`TimeoutError` when a close exceeds its budget.
+already-propagating execution error, recovery signal, `GeneratorExit` or
+cancellation, logging secondary cleanup failures while attempting the remaining
+resource closes. Cancellation during cleanup takes precedence over other outcomes;
+repeated cancellation retains the first cancellation exception. On normal exit,
+cleanup failures still propagate, including `TimeoutError` when a close exceeds
+its budget. Explicit generator close preserves `GeneratorExit` and logs cleanup
+failures without emitting response events. Handler and graph close budgets can
+overlap; signal-dependent terminal classification applies when advancing the
+handler, not when explicitly closing it.
 If graph close times out, the handler does not advance the conversation-chain
 checkpoint. Shutdown still exits for recovery, and explicit client cancellation
-still reports `cancelled`. Steering reports `cleanup_timeout` instead of completing
-while graph or checkpoint work may still be running. Graph execution errors remain
+still reports `cancelled`. Steering reports the standard `server_error` code,
+with a cleanup-timeout message, instead of completing while graph or checkpoint
+work may still be running. Graph execution errors remain
 `internal_error`, even if the subsequent close also exceeds its budget.
 Timeout logs identify the resource or borrower phase, elapsed seconds and active
 borrower count, without including store names, user IDs or request headers.
 Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation
 retry loops; native asyncio cancellation still preserves its original exception.
-These limits apply only after handler exit; they do not limit graph runtime.
+These limits apply to finalization; they do not limit graph runtime.
 Standalone operations and caller-supplied transports, pipelines or sessions keep their
 existing client lifetime. Local file storage does not allocate an HTTP session.
 Recovery starts a new factory; reuse does not cross handler invocations.

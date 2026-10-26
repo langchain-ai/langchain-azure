@@ -107,6 +107,7 @@ if TYPE_CHECKING:
 async def _closing_stream(
     stream: AsyncIterator[Any],
 ) -> AsyncIterator[AsyncIterator[Any]]:
+    """Close before final writes; active errors and control signals take priority."""
     close = getattr(stream, "aclose", None)
     if close is None:
         yield stream
@@ -1033,7 +1034,7 @@ class ResponsesHostServer:
                 # Unsettled writes cannot advance the chain or complete steering.
                 if context.shutdown.is_set():
                     await context.exit_for_recovery()
-                code = "cleanup_timeout"
+                code = "server_error"
                 if cancellation_signal.is_set() and context.client_cancelled:
                     code, message = "cancelled", "Request was cancelled."
             yield stream.emit_failed(

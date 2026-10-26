@@ -4,6 +4,7 @@
 """Client ownership, identity isolation and real HTTP connection reuse."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -394,14 +395,18 @@ async def test_close_failure_still_closes_remaining_resources(
         client.aclose.assert_awaited_once()
 
 
-@pytest.mark.parametrize("recovery", [False, True])
+@pytest.mark.parametrize("primary_kind", ["error", "recovery", "generator_exit"])
 @pytest.mark.parametrize("cancel_during_close", [False, True])
 async def test_cleanup_preserves_primary_error_and_new_cancellation(
-    clients: list[Any], recovery: bool, cancel_during_close: bool
+    clients: list[Any], primary_kind: str, cancel_during_close: bool
 ) -> None:
     from azure.ai.agentserver.responses import ResponseExitForRecovery
 
-    primary = ResponseExitForRecovery() if recovery else ValueError("execution failed")
+    primary = {
+        "error": ValueError("execution failed"),
+        "recovery": ResponseExitForRecovery(),
+        "generator_exit": GeneratorExit(),
+    }[primary_kind]
     closing, release = asyncio.Event(), asyncio.Event()
 
     async def close() -> None:
@@ -585,6 +590,44 @@ async def test_cleanup_cancels_stuck_borrower_before_closing(
     finally:
         release.set()
         await asyncio.gather(owner, *children, return_exceptions=True)
+
+
+@pytest.mark.parametrize("other_borrower", [False, True])
+async def test_cleanup_does_not_cancel_finalizing_task_with_suspended_borrow(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], other_borrower: bool
+) -> None:
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    started = asyncio.Event()
+    children: list[asyncio.Task[None]] = []
+
+    async def values() -> AsyncGenerator[str, None]:
+        async with get_state_store(object(), FoundryStateStore, "owner"):
+            yield "item"
+
+    async def child() -> None:
+        async with get_state_store(object(), FoundryStateStore, "child"):
+            started.set()
+            await asyncio.Event().wait()
+
+    async def handler() -> None:
+        iterator = values()
+        try:
+            async with state_store_client_scope():
+                assert await anext(iterator) == "item"
+                if other_borrower:
+                    children.append(asyncio.create_task(child()))
+                    await started.wait()
+            for client in clients:
+                client.aclose.assert_awaited_once()
+                assert client.options["transport"].session.closed
+        finally:
+            await iterator.aclose()
+            await asyncio.gather(*children, return_exceptions=True)
+
+    task = asyncio.create_task(handler())
+    await asyncio.wait_for(task, 1)
+    assert task.cancelling() == 0
+    assert all(child.cancelled() for child in children)
 
 
 @pytest.mark.parametrize("close_fails", [False, True])
