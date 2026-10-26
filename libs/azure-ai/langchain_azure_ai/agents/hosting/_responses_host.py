@@ -82,6 +82,7 @@ from ._converters import (
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
+    METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
     ConversationChainStoreProtocol,
     FoundryConversationChainStore,
@@ -618,8 +619,9 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         The logical thread is namespaced by the platform-provided user key.
-        For ``previous_response_id`` chains, the root response is resolved
-        through the Responses provider when possible. Checkpointed graphs
+        For ``previous_response_id`` chains, a stored thread reference is reused
+        when available; otherwise the root response is resolved through the
+        Responses provider when possible. Checkpointed graphs
         additionally restore the exact ``(thread_id, checkpoint_id)`` saved
         for this user and conversation chain. The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
@@ -701,7 +703,9 @@ class ResponsesHostServer:
                 previous_response_id,
                 context,
             )
-            thread_id = resolved_thread_id or previous_response_id
+            if resolved_thread_id:
+                return resolved_thread_id
+            thread_id = previous_response_id
         else:
             thread_id = context.response_id
         return _scope_thread_id(thread_id, context)
@@ -711,13 +715,14 @@ class ResponsesHostServer:
         previous_response_id: str,
         context: ResponseContext,
     ) -> str | None:
+        """Resolve a final, user-scoped thread ID from stored responses."""
         provider = getattr(context, "_provider", None)
         if provider is None:
             return None
 
         response_id: str | None = previous_response_id
         seen: set[str] = set()
-        root_response_id: str | None = previous_response_id
+        root_response_id = previous_response_id
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
@@ -734,12 +739,22 @@ class ResponsesHostServer:
 
             conversation_id = _response_conversation_id(response)
             if conversation_id:
-                return conversation_id
+                return _scope_thread_id(conversation_id, context)
+
+            try:
+                metadata = ResponseEventStream(
+                    response_id=response_id, response=response
+                ).internal_metadata
+                thread_id = metadata.get(METADATA_LANGGRAPH_THREAD_ID)
+            except (TypeError, ValueError):
+                thread_id = None
+            if isinstance(thread_id, str) and thread_id:
+                return thread_id
 
             root_response_id = response_id
             response_id = _response_field(response, "previous_response_id")
 
-        return root_response_id
+        return _scope_thread_id(root_response_id, context)
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (

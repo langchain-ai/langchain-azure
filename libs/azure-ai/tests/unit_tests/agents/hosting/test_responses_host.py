@@ -14,7 +14,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -144,7 +144,7 @@ def _response_object(
     *,
     previous_response_id: str | None = None,
     conversation_id: str | None = None,
-    internal_metadata: dict[str, object] | None = None,
+    internal_metadata: dict[str, object] | str | None = None,
 ) -> ResponseObject:
     response: dict[str, object] = {"id": response_id, "output": []}
     if previous_response_id is not None:
@@ -1083,6 +1083,116 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     assert config["configurable"]["thread_id"] == "resp-1"
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("user_id_key", [None, "user-a"])
+@pytest.mark.parametrize("include_checkpoint", [False, True])
+async def test_previous_response_thread_metadata_avoids_ancestor_reads(
+    as_json: bool, user_id_key: str | None, include_checkpoint: bool
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    root_config = await server.build_runnable_config(
+        _request(),
+        _context(
+            response_id="resp-root",
+            conversation_id=None,
+            user_id_key=user_id_key,
+        ),
+    )
+    thread_id = root_config["configurable"]["thread_id"]
+    metadata = {METADATA_LANGGRAPH_THREAD_ID: thread_id}
+    if include_checkpoint:
+        metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = "checkpoint-parent"
+    parent = _response_object(
+        "resp-parent",
+        previous_response_id="resp-root",
+        internal_metadata=json.dumps(metadata) if as_json else metadata,
+    )
+    provider = SimpleNamespace(get_response=AsyncMock(return_value=parent))
+    context = _context(conversation_id=None, provider=provider, user_id_key=user_id_key)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == thread_id
+    assert "checkpoint_id" not in config["configurable"]
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "invalid-json",
+        "[]",
+        {
+            METADATA_LANGGRAPH_THREAD_ID: 7,
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+        },
+        {
+            METADATA_LANGGRAPH_THREAD_ID: "",
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+        },
+        {
+            METADATA_LANGGRAPH_THREAD_ID: "x" * 513,
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+        },
+    ],
+)
+async def test_previous_response_thread_metadata_falls_back_to_root(
+    metadata: dict[str, object] | str | None,
+) -> None:
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=[
+                _response_object(
+                    "resp-parent",
+                    previous_response_id="resp-root",
+                    internal_metadata=metadata,
+                ),
+                _response_object("resp-root"),
+            ]
+        )
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == "resp-root"
+    assert provider.get_response.await_args_list == [
+        call("resp-parent", context=context.platform_context),
+        call("resp-root", context=context.platform_context),
+    ]
+
+
+async def test_previous_response_conversation_takes_priority_over_metadata() -> None:
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            return_value=_response_object(
+                "resp-parent",
+                conversation_id="conv-existing",
+                internal_metadata={
+                    METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                    METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                },
+            )
+        )
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == "conv-existing"
+
+
 async def test_previous_response_uses_conversation_state_store(
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:
@@ -1096,6 +1206,17 @@ async def test_previous_response_uses_conversation_state_store(
     context = _context(
         conversation_id=None,
         conversation_chain_id="chain-1",
+        provider=SimpleNamespace(
+            get_response=AsyncMock(
+                return_value=_response_object(
+                    "resp-2",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                    },
+                )
+            )
+        ),
     )
 
     config = await server.build_runnable_config(
@@ -1136,6 +1257,17 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     context = _context(
         response_id="resp-current",
         conversation_id=None,
+        provider=SimpleNamespace(
+            get_response=AsyncMock(
+                return_value=_response_object(
+                    "resp-parent",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                    },
+                )
+            )
+        ),
     )
     context.is_recovery = True
     context.persisted_response = _response_object(
