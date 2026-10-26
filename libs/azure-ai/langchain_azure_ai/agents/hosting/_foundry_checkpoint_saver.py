@@ -130,9 +130,11 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         endpoint: Foundry project or storage endpoint. When omitted, the SDK
             resolves ``FOUNDRY_PROJECT_ENDPOINT``.
         store_name_prefix: Prefix used for per-thread store names.
-        user_isolation: Partition items by the hosted request's end user.
+        user_isolation: Partition items by the hosted request's end user when
+            creating a store. Existing stores retain their isolation settings.
         item_ttl_seconds: Sliding item TTL configured when a thread store is
-            first created. ``-1`` disables expiration.
+            first created. Existing stores retain their TTL. ``-1`` disables
+            expiration.
         api_version: Foundry storage API version.
         serde: Optional LangGraph serializer.
     """
@@ -179,10 +181,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Fetch an exact checkpoint or the latest checkpoint in a namespace."""
         thread_id, checkpoint_ns = self._thread_and_namespace(config)
-        try:
-            store = await self._get_store(thread_id, create=False)
-        except FoundryStorageNotFoundError:
-            return None
+        store = await self._get_store(thread_id, create=False)
         try:
             checkpoint_id = get_checkpoint_id(config)
 
@@ -230,6 +229,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 thread_id,
                 cast(_CheckpointItemValue, item.value),
             )
+        except FoundryStorageNotFoundError:
+            return None
         finally:
             await store.aclose()
 
@@ -267,10 +268,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 if field in filter:
                     tags[field] = str(filter[field])
 
-        try:
-            store = await self._get_store(thread_id, create=False)
-        except FoundryStorageNotFoundError:
-            return
+        store = await self._get_store(thread_id, create=False)
         try:
             if checkpoint_id and before_id and checkpoint_id >= before_id:
                 return
@@ -319,6 +317,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 yielded += 1
                 if limit is not None and yielded >= limit:
                     return
+        except FoundryStorageNotFoundError:
+            return
         finally:
             await store.aclose()
 
@@ -428,12 +428,24 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             await store.aclose()
 
     async def adelete_thread(self, thread_id: str) -> None:
-        """Delete a thread's store and every checkpoint item in it."""
+        """Delete thread data according to the store's actual isolation setting.
+
+        Isolated stores retain the store and other users' partitions; only the
+        current user's items are deleted. Non-isolated stores are deleted in full.
+        A missing store is ignored.
+
+        Args:
+            thread_id: Identifier of the thread to delete.
+
+        Raises:
+            ValueError: ``thread_id`` is empty.
+        """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")
         store = self._bound_store(thread_id)
         try:
-            if self._user_isolation:
+            properties = await store.get()
+            if properties.user_isolation:
                 keys: list[str] = []
                 after: str | None = None
                 while True:
@@ -456,38 +468,21 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             await store.aclose()
 
     async def _get_store(self, thread_id: str, *, create: bool) -> FoundryStateStore:
-        if create:
-            store = await FoundryStateStore.get_or_create(
-                self._store_name(thread_id),
-                self._credential,
-                self._endpoint,
-                user_isolation=self._user_isolation,
-                item_ttl_seconds=self._item_ttl_seconds,
-                description="LangGraph checkpoints",
-                api_version=self._api_version,
-                # AgentServer evaluates this callback per request.
-                get_server_version=get_user_agent,
-            )
-        else:
-            store = self._bound_store(thread_id)
-        try:
-            properties = await store.get()
-            if properties.user_isolation != self._user_isolation:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"user_isolation={properties.user_isolation}; expected "
-                    f"{self._user_isolation}"
-                )
-            if properties.item_ttl_seconds != self._item_ttl_seconds:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"item_ttl_seconds={properties.item_ttl_seconds}; expected "
-                    f"{self._item_ttl_seconds}"
-                )
-        except BaseException:
-            await store.aclose()
-            raise
-        return store
+        if not create:
+            return self._bound_store(thread_id)
+        return await FoundryStateStore.get_or_create(
+            self._store_name(thread_id),
+            self._credential,
+            self._endpoint,
+            user_isolation=self._user_isolation,
+            item_ttl_seconds=self._item_ttl_seconds,
+            description="LangGraph checkpoints",
+            api_version=self._api_version,
+            # AgentServer uses this callback to build the outbound User-Agent
+            # header. Keep it lazy so registered prefixes and the telemetry
+            # opt-out are evaluated per request.
+            get_server_version=get_user_agent,
+        )
 
     def _bound_store(self, thread_id: str) -> FoundryStateStore:
         return FoundryStateStore(
