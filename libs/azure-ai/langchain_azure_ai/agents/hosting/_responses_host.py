@@ -33,9 +33,10 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Sequence
+from copy import copy
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -59,7 +60,7 @@ except ImportError as exc:
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableBinding, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_azure_ai._api.base import experimental
@@ -878,14 +879,16 @@ class ResponsesHostServer:
         try:
             config = await self.build_runnable_config(request, context)
             graph = self._graph
+            checkpointer = getattr(graph, "checkpointer", None)
             if not store_response and isinstance(
-                graph.checkpointer, BaseCheckpointSaver
+                checkpointer, BaseCheckpointSaver
             ):
-                graph = graph.copy(
-                    update={
-                        "checkpointer": TransientCheckpointSaver(graph.checkpointer)
-                    }
-                )
+                graph = copy(graph)
+                checkpoint_graph = graph
+                if isinstance(graph, RunnableBinding):
+                    checkpoint_graph = copy(cast("CompiledStateGraph", graph.bound))
+                    graph.bound = checkpoint_graph
+                checkpoint_graph.checkpointer = TransientCheckpointSaver(checkpointer)
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's

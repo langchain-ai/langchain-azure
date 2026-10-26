@@ -33,13 +33,16 @@ from azure.ai.agentserver.responses.models import (
 )
 from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableBinding, RunnableConfig, RunnableLambda
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_config
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
 from langgraph.types import Command, Interrupt, interrupt
 from starlette.testclient import TestClient
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import (
     FoundryCheckpointSaver,
@@ -412,6 +415,145 @@ def test_store_false_does_not_advance_conversation(
             for part in item.get("content", [])
         )
         assert following_text == ("saved | next" if existing_conversation else "next")
+
+
+class _BoundContext(TypedDict):
+    tenant: str
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+@pytest.mark.parametrize("with_config", [False, True])
+def test_store_false_preserves_bound_graph(
+    streaming: bool,
+    existing_conversation: bool,
+    with_config: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    async def echo(
+        state: MessagesState,
+        *,
+        runtime: Runtime[_BoundContext],
+    ) -> dict[str, list[AIMessage]]:
+        assert runtime.context == {"tenant": "bound-tenant"}
+        if with_config:
+            config = get_config()
+            assert "bound-config" in config["tags"]
+            assert config["configurable"]["bound_marker"] == "preserved"
+        history = " | ".join(
+            message.content
+            for message in state["messages"]
+            if isinstance(message, HumanMessage) and isinstance(message.content, str)
+        )
+        return {"messages": [AIMessage(content=history)]}
+
+    checkpointer = InMemorySaver()
+    builder = StateGraph(MessagesState, context_schema=_BoundContext)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    graph = builder.compile(checkpointer=checkpointer)
+    bound = graph.bind(context={"tenant": "bound-tenant"})
+    if with_config:
+        bound = bound.with_config(
+            tags=["bound-config"], configurable={"bound_marker": "preserved"}
+        )
+    assert isinstance(bound, RunnableBinding)
+    server = ResponsesHostServer(
+        cast(CompiledStateGraph, bound),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    routing = {"conversation": {"id": f"conv-bound-{uuid.uuid4().hex}"}}
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post("/responses", json={"input": "saved", **routing})
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+
+        checkpoints_before = list(checkpointer.list(None))
+        writes_before = deepcopy(checkpointer.writes)
+        blobs_before = deepcopy(checkpointer.blobs)
+        chains_before = deepcopy(foundry_state_stores)
+        response = client.post(
+            "/responses",
+            json={
+                "input": "transient",
+                "store": False,
+                "stream": streaming,
+                **routing,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = (
+            next(
+                event["response"]
+                for event_type, event in _parse_sse(response.text)
+                if event_type in {"response.completed", "response.failed"}
+            )
+            if streaming
+            else response.json()
+        )
+        assert payload["status"] == "completed", payload
+        text = "".join(
+            part.get("text", "")
+            for item in payload["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert text == ("saved | transient" if existing_conversation else "transient")
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert checkpointer.writes == writes_before
+        assert checkpointer.blobs == blobs_before
+        assert foundry_state_stores == chains_before
+        assert bound.bound is graph
+        assert graph.checkpointer is checkpointer
+
+        following = client.post("/responses", json={"input": "next", **routing})
+        assert following.status_code == 200, following.text
+        following_payload = following.json()
+        assert following_payload["status"] == "completed", following_payload
+        following_text = "".join(
+            part.get("text", "")
+            for item in following_payload["output"]
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
+        assert following_text == ("saved | next" if existing_conversation else "next")
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("store_response", [False, True])
+def test_graph_without_checkpointer_handles_store_flag(
+    streaming: bool,
+    store_response: bool,
+) -> None:
+    graph = make_echo_graph()
+
+    async def forward(
+        graph_input: Any, config: RunnableConfig, **kwargs: Any
+    ) -> AsyncGenerator[Any, None]:
+        async for chunk in graph.astream(graph_input, config=config, **kwargs):
+            yield chunk
+
+    server = ResponsesHostServer(cast(CompiledStateGraph, RunnableLambda(forward)))
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={"input": "hello", "store": store_response, "stream": streaming},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = (
+        next(
+            event["response"]
+            for event_type, event in _parse_sse(response.text)
+            if event_type in {"response.completed", "response.failed"}
+        )
+        if streaming
+        else response.json()
+    )
+    assert payload["status"] == "completed", payload
+    assert "Echo: hello" in json.dumps(payload["output"])
 
 
 @pytest.mark.parametrize("streaming", [False, True])
