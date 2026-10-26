@@ -663,29 +663,6 @@ class ResponsesHostServer:
             context,
         ).runnable_config
 
-    def build_runnable_config_sync(
-        self,
-        request: CreateResponse,
-        context: ResponseContext,
-    ) -> RunnableConfig:
-        """Build a sync best-effort runnable config.
-
-        Prefer :meth:`build_runnable_config` in async request handling so
-        ``previous_response_id`` chains can be resolved through the Responses
-        provider.
-        """
-        previous_response_id = request.get("previous_response_id")
-        thread_id: str
-        if isinstance(context.conversation_id, str) and context.conversation_id:
-            thread_id = context.conversation_id
-        elif isinstance(previous_response_id, str) and previous_response_id:
-            thread_id = previous_response_id
-        else:
-            thread_id = context.response_id
-        return HostingRunnableConfig.create(
-            _scope_thread_id(thread_id, context), context
-        ).runnable_config
-
     async def _resolve_thread_id(
         self,
         request: CreateResponse,
