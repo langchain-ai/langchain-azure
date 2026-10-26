@@ -94,6 +94,11 @@ to release their clients. It then closes clients and the connection pool in LIFO
 order, allowing five seconds per resource. Timeouts are logged; a resource close
 timeout raises `TimeoutError` unless the handler is already being cancelled.
 Cancellation retains the original exception, and cleanup failures are logged.
+If graph close times out, the handler does not advance the conversation-chain
+checkpoint. Shutdown still exits for recovery, and explicit client cancellation
+still reports `cancelled`. Steering reports `cleanup_timeout` instead of completing
+while graph or checkpoint work may still be running. Graph execution errors remain
+`internal_error`, even if the subsequent close also exceeds its budget.
 Timeout logs identify the resource or borrower phase, elapsed seconds and active
 borrower count, without including store names, user IDs or request headers.
 Finalization waits are shielded from AnyIO cancel scopes to avoid cancellation

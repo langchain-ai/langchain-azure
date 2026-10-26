@@ -935,6 +935,150 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
     context.exit_for_recovery.assert_awaited_once_with()
 
 
+@pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
+@pytest.mark.parametrize("slow_close", [False, True])
+async def test_graph_close_budget_preserves_signal_finalization(
+    monkeypatch: pytest.MonkeyPatch, signal: str, slow_close: bool
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    class ExitForRecovery(BaseException):
+        pass
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.02)
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    context.exit_for_recovery.side_effect = ExitForRecovery
+    cancellation_signal = asyncio.Event()
+    chain_set = AsyncMock()
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+    checkpoint_ref = CheckpointRef("thread-test", "checkpoint-test")
+    new_stream = server._new_stream
+
+    def stream_with_checkpoint(*args: Any) -> Any:
+        stream = new_stream(*args)
+        TaskStorageManager.from_stream(stream).store_checkpoint_ref(checkpoint_ref)
+        return stream
+
+    monkeypatch.setattr(server, "_new_stream", stream_with_checkpoint)
+    release_write = asyncio.Event()
+    if not slow_close:
+        release_write.set()
+    pending_write = asyncio.create_task(release_write.wait())
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        try:
+            yield "messages", (AIMessage(content="partial"), {})
+        finally:
+            await asyncio.shield(pending_write)
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = []
+
+    async def consume() -> None:
+        async for event in server._handle_create_async_gen(
+            _request(), context, cancellation_signal
+        ):
+            events.append(event)
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                if signal == "shutdown":
+                    context.shutdown.set()
+                else:
+                    context.client_cancelled = signal == "client_cancel"
+                    cancellation_signal.set()
+
+    try:
+        if signal == "shutdown":
+            with pytest.raises(ExitForRecovery):
+                await asyncio.wait_for(consume(), 1)
+            context.exit_for_recovery.assert_awaited_once_with()
+            assert not any(
+                event.get("type") in {"response.failed", "response.completed"}
+                for event in events
+                if isinstance(event, dict)
+            )
+        else:
+            await asyncio.wait_for(consume(), 1)
+            terminal = events[-1]
+            if signal == "client_cancel":
+                assert terminal["response"]["error"]["code"] == "cancelled"
+            elif slow_close:
+                assert terminal["response"]["error"]["code"] == "cleanup_timeout"
+            else:
+                assert terminal["type"] == "response.completed"
+            context.exit_for_recovery.assert_not_awaited()
+        if slow_close:
+            assert not pending_write.done()
+            chain_set.assert_not_awaited()
+        else:
+            chain_set.assert_awaited_once_with(
+                context.conversation_chain_id,
+                CONVERSATION_CHECKPOINT_KEY,
+                checkpoint_ref.to_dict(),
+            )
+    finally:
+        release_write.set()
+        await pending_write
+
+
+@pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
+async def test_graph_execution_timeout_remains_an_internal_error(
+    monkeypatch: pytest.MonkeyPatch, signal: str
+) -> None:
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    cancellation_signal = asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        if signal == "shutdown":
+            context.shutdown.set()
+        else:
+            context.client_cancelled = signal == "client_cancel"
+            cancellation_signal.set()
+        raise TimeoutError("graph execution timed out")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = [
+        event
+        async for event in server._handle_create_async_gen(
+            _request(), context, cancellation_signal
+        )
+    ]
+    assert events[-1]["response"]["error"] == {
+        "code": "internal_error",
+        "message": "graph execution timed out",
+    }
+    context.exit_for_recovery.assert_not_awaited()
+
+
+async def test_graph_close_timeout_preserves_execution_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses_host import _closing_stream
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+
+    async def graph_stream() -> AsyncGenerator[Any, None]:
+        try:
+            yield "ready"
+        finally:
+            await asyncio.Event().wait()
+
+    stream = graph_stream()
+    assert await anext(stream) == "ready"
+    original = TimeoutError("graph execution timed out")
+    with pytest.raises(TimeoutError) as caught:
+        async with _closing_stream(stream):
+            raise original
+    assert caught.value is original
+
+
 @pytest.mark.asyncio
 async def test_recovered_response_reclaims_stale_replay_stream_lock(
     monkeypatch: pytest.MonkeyPatch,

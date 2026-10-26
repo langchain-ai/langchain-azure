@@ -91,7 +91,11 @@ from ._responses import (
     TaskStorageManager,
 )
 from ._storage import state_store_client_scope
-from ._storage.state_store_factory import _close_resource, _finish_cleanup
+from ._storage.state_store_factory import (
+    _CleanupTimeoutError,
+    _close_resource,
+    _finish_cleanup,
+)
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
@@ -104,17 +108,25 @@ async def _closing_stream(
     stream: AsyncIterator[Any],
 ) -> AsyncIterator[AsyncIterator[Any]]:
     cancellation: asyncio.CancelledError | None = None
+    error: Exception | None = None
     try:
         yield stream
     except asyncio.CancelledError as exc:
         cancellation = exc
         raise
+    except Exception as exc:
+        error = exc
+        raise
     finally:
         close = getattr(stream, "aclose", None)
         if close is not None:
-            await _finish_cleanup(
-                _close_resource(close, "graph_iterator"), cancellation
-            )
+            try:
+                await _finish_cleanup(
+                    _close_resource(close, "graph_iterator"), cancellation
+                )
+            except _CleanupTimeoutError:
+                if error is None:
+                    raise
 
 
 logger = logging.getLogger(__name__)
@@ -1027,9 +1039,20 @@ class ResponsesHostServer:
             yield stream.emit_completed(usage=usage.response_usage)
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
+            code, message = "internal_error", str(exc)
+            if (
+                isinstance(exc, _CleanupTimeoutError)
+                and exc.resource == "graph_iterator"
+            ):
+                # Unsettled writes cannot advance the chain or complete steering.
+                if context.shutdown.is_set():
+                    await context.exit_for_recovery()
+                code = "cleanup_timeout"
+                if cancellation_signal.is_set() and context.client_cancelled:
+                    code, message = "cancelled", "Request was cancelled."
             yield stream.emit_failed(
-                code="internal_error",
-                message=str(exc),
+                code=code,
+                message=message,
                 usage=usage.response_usage,
             )
 

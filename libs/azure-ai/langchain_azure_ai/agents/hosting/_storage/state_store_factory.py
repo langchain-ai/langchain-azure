@@ -38,6 +38,14 @@ _current_factory: ContextVar[StateStoreClientFactory | None] = ContextVar(
 )
 
 
+class _CleanupTimeoutError(TimeoutError):
+    """A hosting cleanup budget expired, rather than the operation itself."""
+
+    def __init__(self, resource: str) -> None:
+        self.resource = resource
+        super().__init__(f"Hosting cleanup timed out: resource={resource}")
+
+
 async def _close_resource(
     close: Callable[[], Awaitable[None]],
     resource: Literal[
@@ -61,7 +69,7 @@ async def _close_resource(
             perf_counter() - started,
             len(factory.borrowers) if factory is not None else 0,
         )
-        raise TimeoutError(f"Hosting cleanup timed out: resource={resource}")
+        raise _CleanupTimeoutError(resource)
     await task
 
 
