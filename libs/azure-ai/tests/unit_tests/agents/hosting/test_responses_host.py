@@ -1060,7 +1060,19 @@ async def test_checkpoint_reference_is_isolated_by_user(
     assert second_config["configurable"]["checkpoint_id"] == "checkpoint-user-b"
 
 
-async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
+@pytest.mark.parametrize("checkpointed", [False, True])
+@pytest.mark.parametrize(
+    "saved_checkpoint",
+    [None, {"checkpoint_id": "incomplete"}],
+    ids=["missing", "invalid"],
+)
+async def test_previous_response_id_chain_resolves_root_thread_id(
+    checkpointed: bool,
+    saved_checkpoint: dict[str, str] | None,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    response_reads: list[str] = []
+
     class _Provider:
         async def get_response(
             self,
@@ -1069,22 +1081,37 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             context: object = None,
         ) -> dict[str, str | None]:
             del context
+            response_reads.append(response_id)
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
             }
             return responses[response_id]
 
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    if saved_checkpoint is not None:
+        foundry_state_stores[_state_store_name("chain-1")] = {
+            CONVERSATION_CHECKPOINT_KEY: saved_checkpoint
+        }
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+    )
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
-        _context(conversation_id=None, provider=_Provider()),
+        _context(
+            conversation_id=None,
+            conversation_chain_id="chain-1",
+            provider=_Provider(),
+        ),
     )
 
     assert config["configurable"]["thread_id"] == "resp-1"
+    assert "checkpoint_id" not in config["configurable"]
+    assert response_reads == ["resp-2", "resp-1"]
 
 
+@pytest.mark.parametrize("recovering", [False, True])
 async def test_previous_response_uses_conversation_state_store(
+    recovering: bool,
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:
     _seed_conversation_checkpoint(
@@ -1094,10 +1121,15 @@ async def test_previous_response_uses_conversation_state_store(
         checkpoint_id="checkpoint-2",
     )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
+    provider = SimpleNamespace(
+        get_response=AsyncMock(return_value={"previous_response_id": None})
+    )
     context = _context(
         conversation_id=None,
         conversation_chain_id="chain-1",
+        provider=provider,
     )
+    context.is_recovery = recovering
 
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
@@ -1107,6 +1139,8 @@ async def test_previous_response_uses_conversation_state_store(
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
     assert config["configurable"]["checkpoint_ns"] == ""
+    assert config["configurable"]["response_context"] is context
+    provider.get_response.assert_not_awaited()
 
 
 async def test_explicit_conversation_uses_conversation_state_store(

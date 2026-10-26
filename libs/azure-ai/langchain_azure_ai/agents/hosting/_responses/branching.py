@@ -155,7 +155,7 @@ async def select_branch_checkpoint(
     parent_id: str,
     context: ResponseContext,
 ) -> CheckpointRef:
-    """Select the stored completed parent's exact checkpoint for fresh input."""
+    """Select the stored, completed parent's exact checkpoint for execution."""
     if provider is None:
         provider = getattr(context, "_provider", None)
     selections = _branch_selections.get()

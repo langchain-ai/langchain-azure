@@ -756,12 +756,12 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         The logical thread is namespaced by the platform-provided user key.
-        For ``previous_response_id`` chains, the root response is resolved
-        through the Responses provider when possible. Checkpointed graphs
-        additionally restore the exact ``(thread_id, checkpoint_id)`` saved
-        for this user and conversation chain. The full :class:`ResponseContext`
-        is exposed under ``configurable.response_context`` for transient
-        execution facts such as recovery state.
+        Checkpointed graphs first restore the exact ``(thread_id, checkpoint_id)``
+        saved for this user and conversation chain. When no saved checkpoint is
+        selected, ``previous_response_id`` chains resolve their root response
+        through the Responses provider when possible. The full
+        :class:`ResponseContext` is exposed under ``configurable.response_context``
+        for transient execution facts such as recovery state.
 
         With response branching enabled, this hook selects the completed
         parent's exact root checkpoint instead of the conversation-chain head.
@@ -797,36 +797,32 @@ class ResponsesHostServer:
             return HostingRunnableConfig.create_from_checkpoint(
                 selected_ref, context
             ).runnable_config
+        if self._graph_has_checkpointer:
+            previous_response_id = request.get("previous_response_id")
+            conversation_id = get_conversation_id(request) or context.conversation_id
+            if (
+                context.is_recovery
+                or (isinstance(previous_response_id, str) and previous_response_id)
+                or (isinstance(conversation_id, str) and conversation_id)
+            ):
+                conversation_chain_id = _scope_thread_id(
+                    context.conversation_chain_id,
+                    context,
+                )
+                checkpoint_ref = CheckpointRef.from_dict(
+                    await self._conversation_chain_store.get(
+                        conversation_chain_id,
+                        CONVERSATION_CHECKPOINT_KEY,
+                    )
+                )
+                if checkpoint_ref is not None:
+                    return HostingRunnableConfig.create_from_checkpoint(
+                        checkpoint_ref,
+                        context,
+                    ).runnable_config
+
         thread_id = await self._resolve_thread_id(request, context)
-        if not self._graph_has_checkpointer:
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
-
-        previous_response_id = request.get("previous_response_id")
-        conversation_id = get_conversation_id(request) or context.conversation_id
-        if (
-            not context.is_recovery
-            and not (isinstance(previous_response_id, str) and previous_response_id)
-            and not (isinstance(conversation_id, str) and conversation_id)
-        ):
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
-
-        conversation_chain_id = _scope_thread_id(
-            context.conversation_chain_id,
-            context,
-        )
-        checkpoint_ref = CheckpointRef.from_dict(
-            await self._conversation_chain_store.get(
-                conversation_chain_id,
-                CONVERSATION_CHECKPOINT_KEY,
-            )
-        )
-        if checkpoint_ref is None:
-            return HostingRunnableConfig.create(thread_id, context).runnable_config
-
-        return HostingRunnableConfig.create_from_checkpoint(
-            checkpoint_ref,
-            context,
-        ).runnable_config
+        return HostingRunnableConfig.create(thread_id, context).runnable_config
 
     def build_runnable_config_sync(
         self,
