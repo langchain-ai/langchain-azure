@@ -10,7 +10,7 @@ import json
 import threading
 from collections.abc import AsyncIterator
 from contextlib import closing
-from copy import copy
+from copy import copy, deepcopy
 from types import SimpleNamespace
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -581,6 +581,62 @@ async def test_cache_hits_only_deserialize_and_use_current_config(
         assert encode.call_count == calls
         bare = await saver.aget_tuple(config)
         assert bare is not None and "marker" not in bare.config["configurable"]
+
+
+@pytest.mark.parametrize("reference_name", ["config", "parent_config"])
+@pytest.mark.parametrize(
+    "locator", [{"paths": ["west"]}, ["west"]], ids=["dict", "list"]
+)
+async def test_restored_locator_values_do_not_alias_cached_references(
+    monkeypatch: pytest.MonkeyPatch,
+    reference_name: str,
+    locator: dict[str, list[str]] | list[str],
+) -> None:
+    class LocatorSaver(InMemorySaver):
+        @property
+        def config_specs(self) -> list[ConfigurableFieldSpec]:
+            return [ConfigurableFieldSpec(id="locator", annotation=type(locator))]
+
+        async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+            result = await super().aget_tuple(config)
+            if result is not None and result.parent_config is not None:
+                result.parent_config["configurable"]["locator"] = deepcopy(
+                    config["configurable"]["locator"]
+                )
+            return result
+
+    backend = LocatorSaver()
+    config = _config()
+    for version in (1, 2):
+        checkpoint = _checkpoint(f"{version:04d}", "input")
+        checkpoint["channel_versions"]["messages"] = version
+        config = await backend.aput(
+            config, checkpoint, {}, checkpoint["channel_versions"]
+        )
+        config["configurable"]["locator"] = deepcopy(locator)
+    runtime = SimpleNamespace(lock=threading.Lock())
+    config["configurable"]["response_context"] = runtime
+    load = AsyncMock(wraps=backend.aget_tuple)
+    monkeypatch.setattr(backend, "aget_tuple", load)
+    saver = _RequestCheckpointSaver(backend)
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        await saver.aget_tuple(config)
+        first_hit = await saver.aget_tuple(config)
+        assert first_hit is not None
+        reference = getattr(first_hit, reference_name)
+        value = reference["configurable"]["locator"]
+        if isinstance(value, dict):
+            value["paths"].append("changed")
+        else:
+            value.append("changed")
+        second_hit = await saver.aget_tuple(config)
+        assert second_hit is not None
+        restored = getattr(second_hit, reference_name)
+        assert restored["configurable"]["locator"] == locator
+        assert config["configurable"]["locator"] == locator
+        assert second_hit.config["configurable"]["response_context"] is runtime
+        load.assert_awaited_once()
 
 
 @pytest.mark.parametrize("missing_first", [False, True])

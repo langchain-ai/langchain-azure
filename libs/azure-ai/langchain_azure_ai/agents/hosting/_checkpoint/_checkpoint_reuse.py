@@ -27,13 +27,6 @@ from langgraph.checkpoint.serde.base import SerializerProtocol
 from wrapt import ObjectProxy
 
 
-def _copy_config(config: RunnableConfig | None) -> RunnableConfig | None:
-    """Copy config mappings while preserving transient runtime objects."""
-    if config is None:
-        return None
-    return {**config, "configurable": dict(config.get("configurable") or {})}
-
-
 def _reference_config(
     config: RunnableConfig | None, keys: set[str]
 ) -> RunnableConfig | None:
@@ -93,12 +86,12 @@ class _SerializedCheckpoint(NamedTuple):
                 **config,
                 "configurable": {
                     **(config.get("configurable") or {}),
-                    **(self.config.get("configurable") or {}),
+                    **deepcopy(self.config.get("configurable") or {}),
                 },
             },
             checkpoint=checkpoint,
             metadata=serde.loads_typed(self.metadata),
-            parent_config=_copy_config(self.parent_config),
+            parent_config=deepcopy(self.parent_config),
             pending_writes=[
                 (task, channel, serde.loads_typed(item))
                 for task, channel, item in self.writes
