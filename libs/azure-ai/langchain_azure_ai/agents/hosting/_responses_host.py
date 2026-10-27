@@ -34,7 +34,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -62,6 +62,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -72,6 +73,11 @@ from langchain_azure_ai.agents.hosting import (
     _request_hosting_features,
 )
 
+from ._checkpoint._checkpoint_reuse import (
+    _checkpoint_reads,
+    _CheckpointReadContext,
+    _RequestCheckpointSaver,
+)
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
@@ -227,7 +233,8 @@ def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
 def _is_in_memory_checkpointer(checkpointer: Any) -> bool:
     if checkpointer is None:
         return False
-    cls = type(checkpointer)
+    # Proxies expose the wrapped saver's class through __class__.
+    cls = checkpointer.__class__
     return cls.__name__ in {"MemorySaver", "InMemorySaver"} or "memory" in (
         cls.__module__.lower()
     )
@@ -371,6 +378,11 @@ class ResponsesHostServer:
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        saver = getattr(graph, "checkpointer", None)
+        if isinstance(saver, BaseCheckpointSaver) and not isinstance(
+            saver, _RequestCheckpointSaver
+        ):
+            graph = graph.copy({"checkpointer": _RequestCheckpointSaver(saver)})
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._conversation_chain_store = (
@@ -665,7 +677,9 @@ class ResponsesHostServer:
         when available; otherwise the root response is resolved through the
         Responses provider when possible. Checkpointed graphs
         additionally restore the exact ``(thread_id, checkpoint_id)`` saved
-        for this user and conversation chain. The full :class:`ResponseContext`
+        for this user and conversation chain. With any checkpoint saver,
+        that reference fixes the request's input; execution does not reselect
+        a newer remote checkpoint. The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
 
@@ -934,6 +948,15 @@ class ResponsesHostServer:
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
             checkpoint_ref = task_storage.checkpoint_ref if recovering else None
+            if checkpoint_ref is not None:
+                config = (
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
+            checkpoint_reads = _checkpoint_reads.get()
+            if checkpoint_reads is not None:
+                checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -942,11 +965,6 @@ class ResponsesHostServer:
                 # response has no checkpoint yet, replay the request through
                 # the normal input / HITL parsing path below.
                 logger.debug("Recovery: resuming graph from persisted checkpoint")
-                config = (
-                    HostingRunnableConfig(config)
-                    .with_checkpoint_ref(checkpoint_ref)
-                    .runnable_config
-                )
                 graph_input = None
 
             else:
@@ -1118,26 +1136,35 @@ class ResponsesHostServer:
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
         features = self._hosting_features
-        async with state_store_client_scope(bind=False) as factory:
-            events = self.handle_create(request, context, cancellation_signal)
+        with closing(_CheckpointReadContext()) as checkpoint_reads:
+            async with state_store_client_scope(bind=False) as factory:
+                events = self.handle_create(request, context, cancellation_signal)
 
-            async def close() -> None:
-                close = getattr(events, "aclose", None)
-                if close is not None:
-                    with factory.bind(), _hosting_feature_scope(features):
-                        await _close_resource(close, "handler_iterator", factory)
+                async def close() -> None:
+                    close = getattr(events, "aclose", None)
+                    if close is not None:
+                        with (
+                            factory.bind(),
+                            checkpoint_reads.bind(),
+                            _hosting_feature_scope(features),
+                        ):
+                            await _close_resource(close, "handler_iterator", factory)
 
-            async with _finish_cleanup(close()):
-                while True:
-                    # AgentServer can resume this iterator in a different Task.
-                    with factory.bind(), _hosting_feature_scope(features):
-                        try:
-                            event = await anext(events)
-                        except StopAsyncIteration:
-                            return
-                        finally:
-                            features = _request_hosting_features.get()
-                    yield event
+                async with _finish_cleanup(close()):
+                    while True:
+                        # AgentServer can resume this iterator in a different Task.
+                        with (
+                            factory.bind(),
+                            checkpoint_reads.bind(),
+                            _hosting_feature_scope(features),
+                        ):
+                            try:
+                                event = await anext(events)
+                            except StopAsyncIteration:
+                                return
+                            finally:
+                                features = _request_hosting_features.get()
+                        yield event
 
     # ------------------------------------------------------------------
     # Validation

@@ -271,6 +271,17 @@ the latest LangGraph checkpoint through Agent Server's public
 `conversation_chain_metadata` API. Forking with only `previous_response_id`
 when steering is disabled is not supported for checkpointed graphs.
 
+For checkpointed graphs, each request fixes its input checkpoint reference
+once, including the saved task reference on recovery. Interrupt inspection and
+graph startup reuse that checkpoint and its pending writes. A newer remote
+checkpoint does not change the request's input. Checkpoints and pending writes
+are persisted at the graph's normal durability boundaries, including intermediate
+steps and any checkpoint saved at completion. After graph execution and its
+required writes finish, the host updates the conversation's checkpoint reference
+for the next turn.
+The host applies this behavior through a saver decorator, including for
+`FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
+
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 ### Durable graph state
