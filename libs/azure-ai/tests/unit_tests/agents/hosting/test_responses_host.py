@@ -936,6 +936,25 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
     return events
 
 
+def _response_payload(body: str, *, streaming: bool = False) -> dict[str, Any]:
+    if not streaming:
+        return json.loads(body)
+    return next(
+        event["response"]
+        for event_type, event in _parse_sse(body)
+        if event_type in {"response.completed", "response.failed"}
+    )
+
+
+def _response_text(payload: dict[str, Any]) -> str:
+    return "".join(
+        part.get("text", "")
+        for item in payload["output"]
+        if item.get("type") == "message"
+        for part in item.get("content", [])
+    )
+
+
 def _message_item(text: str) -> ItemMessage:
     return ItemMessage(
         type="message",
@@ -1173,23 +1192,9 @@ def test_store_false_does_not_advance_conversation(
                 },
             )
             assert response.status_code == 200, response.text
-            payload = (
-                next(
-                    event["response"]
-                    for event_type, event in _parse_sse(response.text)
-                    if event_type == "response.completed"
-                )
-                if streaming
-                else response.json()
-            )
+            payload = _response_payload(response.text, streaming=streaming)
             assert payload["status"] == "completed", payload
-            text = "".join(
-                part.get("text", "")
-                for item in payload["output"]
-                if item.get("type") == "message"
-                for part in item.get("content", [])
-            )
-            assert text == (
+            assert _response_text(payload) == (
                 "saved | transient" if existing_conversation else "transient"
             )
             put.assert_not_called()
@@ -1205,15 +1210,11 @@ def test_store_false_does_not_advance_conversation(
             json={"input": "next", **routing},
         )
         assert following.status_code == 200, following.text
-        following_payload = following.json()
+        following_payload = _response_payload(following.text)
         assert following_payload["status"] == "completed", following_payload
-        following_text = "".join(
-            part.get("text", "")
-            for item in following_payload["output"]
-            if item.get("type") == "message"
-            for part in item.get("content", [])
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
         )
-        assert following_text == ("saved | next" if existing_conversation else "next")
 
 
 class _BoundContext(TypedDict):
@@ -1283,23 +1284,11 @@ def test_store_false_preserves_bound_graph(
             },
         )
         assert response.status_code == 200, response.text
-        payload = (
-            next(
-                event["response"]
-                for event_type, event in _parse_sse(response.text)
-                if event_type in {"response.completed", "response.failed"}
-            )
-            if streaming
-            else response.json()
-        )
+        payload = _response_payload(response.text, streaming=streaming)
         assert payload["status"] == "completed", payload
-        text = "".join(
-            part.get("text", "")
-            for item in payload["output"]
-            if item.get("type") == "message"
-            for part in item.get("content", [])
+        assert _response_text(payload) == (
+            "saved | transient" if existing_conversation else "transient"
         )
-        assert text == ("saved | transient" if existing_conversation else "transient")
         assert list(checkpointer.list(None)) == checkpoints_before
         assert checkpointer.writes == writes_before
         assert checkpointer.blobs == blobs_before
@@ -1309,15 +1298,11 @@ def test_store_false_preserves_bound_graph(
 
         following = client.post("/responses", json={"input": "next", **routing})
         assert following.status_code == 200, following.text
-        following_payload = following.json()
+        following_payload = _response_payload(following.text)
         assert following_payload["status"] == "completed", following_payload
-        following_text = "".join(
-            part.get("text", "")
-            for item in following_payload["output"]
-            if item.get("type") == "message"
-            for part in item.get("content", [])
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
         )
-        assert following_text == ("saved | next" if existing_conversation else "next")
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -1342,15 +1327,7 @@ def test_graph_without_checkpointer_handles_store_flag(
         )
 
     assert response.status_code == 200, response.text
-    payload = (
-        next(
-            event["response"]
-            for event_type, event in _parse_sse(response.text)
-            if event_type in {"response.completed", "response.failed"}
-        )
-        if streaming
-        else response.json()
-    )
+    payload = _response_payload(response.text, streaming=streaming)
     assert payload["status"] == "completed", payload
     assert "Echo: hello" in json.dumps(payload["output"])
 
@@ -1395,38 +1372,23 @@ def test_store_false_does_not_create_foundry_stores(
             },
         )
         assert response.status_code == 200, response.text
-        payload = (
-            next(
-                event["response"]
-                for event_type, event in _parse_sse(response.text)
-                if event_type == "response.completed"
-            )
-            if streaming
-            else response.json()
-        )
+        payload = _response_payload(response.text, streaming=streaming)
         assert payload["status"] == "completed", payload
-        text = "".join(
-            part.get("text", "")
-            for item in payload["output"]
-            if item.get("type") == "message"
-            for part in item.get("content", [])
+        assert _response_text(payload) == (
+            "saved | transient" if existing_conversation else "transient"
         )
-        assert text == ("saved | transient" if existing_conversation else "transient")
         assert {
             path.name: path.read_bytes() for path in stores_path.glob("*.json")
         } == saved
 
         following = client.post("/responses", json={"input": "next", **routing})
         assert following.status_code == 200, following.text
-        assert following.json()["status"] == "completed", following.text
+        following_payload = _response_payload(following.text)
+        assert following_payload["status"] == "completed", following_payload
         assert list(stores_path.glob("*.json"))
-        following_text = "".join(
-            part.get("text", "")
-            for item in following.json()["output"]
-            if item.get("type") == "message"
-            for part in item.get("content", [])
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
         )
-        assert following_text == ("saved | next" if existing_conversation else "next")
 
 
 async def test_store_false_does_not_emit_recovery_checkpoints() -> None:
