@@ -40,8 +40,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
 )
 
-from .._storage import get_state_store
-from .._storage.state_store_factory import _state_store_deletion_scope
+from .._storage import _state_store_deletion_scope, get_state_store
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -424,6 +423,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
         Raises:
             ValueError: ``thread_id`` is empty.
+            RuntimeError: The handler's State Store scope is closing or belongs
+                to another event loop.
         """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")

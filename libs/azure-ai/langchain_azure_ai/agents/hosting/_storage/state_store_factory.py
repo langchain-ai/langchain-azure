@@ -18,7 +18,10 @@ from weakref import WeakSet
 import aiohttp
 from anyio import CancelScope
 from azure.ai.agentserver.core import get_request_context
-from azure.ai.agentserver.core.storage import FoundryStateStore
+from azure.ai.agentserver.core.storage import (
+    FoundryStateStore,
+    FoundryStorageNotFoundError,
+)
 from azure.core.pipeline.transport import AioHttpTransport
 
 logger = logging.getLogger(__name__)
@@ -111,7 +114,7 @@ class StateStoreClientFactory:
 
     A consumer instance supplies fixed credentials, endpoint and client options.
     Distinct consumers, store names and platform users never share a client.
-    Stores are resolved once per handler; explicit saver deletion resets reuse.
+    Stores are resolved on first use and after deletion or a NotFound error.
     All borrowers must run on the event loop that created the factory.
     """
 
@@ -150,7 +153,7 @@ class StateStoreClientFactory:
         *args: Any,
         **options: Any,
     ) -> FoundryStateStore:
-        """Resolve a store once and lend its client until handler exit or deletion."""
+        """Resolve a store on first use and lend its handler-owned client."""
         # Each consumer instance fixes endpoint, credential and pipeline options.
         key = (owner, name, get_request_context().user_id)
         if self.closed:
@@ -196,13 +199,24 @@ class StateStoreClientFactory:
 
 @asynccontextmanager
 async def _state_store_deletion_scope(owner: object, name: str) -> AsyncIterator[None]:
-    """Forget a handler client and defer reacquisition until deletion finishes."""
+    """Invalidate a handler binding and block reacquisition during deletion.
+
+    Existing borrowers may continue item operations during deletion.
+    """
     factory = _current_factory.get()
     if factory is None:
         yield
         return
+    if asyncio.get_running_loop() is not factory.loop:
+        raise RuntimeError(
+            "State Store client factory must use its original event loop"
+        )
+    if factory.closing:
+        raise RuntimeError("State Store client factory has already ended")
     key = (owner, name, get_request_context().user_id)
     async with factory.locks.setdefault(key, asyncio.Lock()):
+        if factory.closing:
+            raise RuntimeError("State Store client factory has already ended")
         # Existing borrowers keep their client until handler cleanup.
         factory.clients.pop(key, None)
         yield
@@ -270,7 +284,10 @@ async def get_state_store(
     *args: Any,
     **options: Any,
 ) -> AsyncIterator[FoundryStateStore]:
-    """Borrow a handler client or close an operation-owned standalone client."""
+    """Borrow a handler client or close an operation-owned standalone client.
+
+    Propagated NotFound errors evict only the binding for the borrowed client.
+    """
     factory = _current_factory.get()
     if factory is not None and asyncio.get_running_loop() is not factory.loop:
         raise RuntimeError(
@@ -293,6 +310,7 @@ async def get_state_store(
         async with store:
             yield store
         return
+    key = (owner, name, get_request_context().user_id)
     borrower = asyncio.current_task()
     assert borrower is not None
     factory.borrowers[borrower] = factory.borrowers.get(borrower, 0) + 1
@@ -301,7 +319,12 @@ async def get_state_store(
         store = await factory.acquire(owner, store_type, name, *args, **options)
         if factory.closed:
             raise RuntimeError("State Store client factory has already ended")
-        yield store
+        try:
+            yield store
+        except FoundryStorageNotFoundError:
+            if factory.clients.get(key) is store:
+                factory.clients.pop(key, None)
+            raise
     finally:
         factory.borrowers[borrower] -= 1
         if not factory.borrowers[borrower]:
