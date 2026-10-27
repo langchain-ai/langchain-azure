@@ -240,14 +240,13 @@ them, not just the latest checkpoint.
 
 With `enable_response_branching=True`, request routing is:
 
-| Request linkage                                      | Behavior                                                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Neither parent nor `conversation`                    | Start a new root response in a new thread.                                                  |
-| `previous_response_id` only                          | Start from the parent's exact checkpoint.                                                   |
-| Existing `conversation`, without a previous response | Start from its existing items and the new input. An empty conversation starts a fresh root. |
-| Existing `conversation`, with previous responses     | Load the conversation store's retained final checkpoint and run with the new input.         |
-| Unknown or unresolvable `conversation`               | Reject before graph execution; do not create a conversation or substitute a root response.  |
-| Both parent and `conversation`                       | Reject with HTTP 400.                                                                       |
+| Request linkage                   | Behavior                                                                                      |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| Neither parent nor `conversation` | Start a new root response in a new thread.                                                    |
+| `previous_response_id` only       | Start from the parent's exact checkpoint.                                                     |
+| Existing `conversation`           | Assume a previous response exists; load its retained final checkpoint and run with new input. |
+| Unknown `conversation`            | Start a new conversation and a root response in a new thread.                                 |
+| Both parent and `conversation`    | Reject with HTTP 400.                                                                         |
 
 Omitted or `null` linkage fields do not select a parent or conversation.
 Resolve references within the request's authorized storage scope; a resource ID
