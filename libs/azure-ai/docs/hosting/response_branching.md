@@ -70,13 +70,17 @@ The branches share a LangGraph thread, with separate checkpoint histories.
 For response-ID branching, the host restores graph state directly; it does not
 rebuild it from response message history.
 
-For internal state selection, a conversation can be treated as a **moving
-response reference**, while a response ID is a **fixed reference**:
+Both linkage forms resolve an exact starting checkpoint before entering the
+same graph execution path:
 
-| Reference                      | Starting state                                                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `previous_response_id=A.id`    | A's exact saved state, regardless of later responses.                                                                    |
-| `conversation=conversation.id` | The conversation's current retained state; in a sequential exchange, normally its latest retained response's checkpoint. |
+| Reference | Lookup | Starting checkpoint |
+| --- | --- | --- |
+| `previous_response_id=A.id` | Load A from the response store and read its checkpoint reference. | A's exact final checkpoint, regardless of later responses. |
+| `conversation=conversation.id` | Read the conversation's head reference from the conversation store. | The final checkpoint of its latest completed, retained turn. |
+
+A response ID is a **fixed checkpoint reference**. A conversation ID is a
+**moving checkpoint reference**, advanced only after a retained turn completes.
+Intermediate checkpoints are execution/recovery progress, not conversation heads.
 
 If a conversation advances through A, C, and D, its reference moves forward to D.
 Referencing A directly still starts from A. Both linkage forms can use the same
@@ -223,7 +227,7 @@ With `enable_response_branching=True`, request routing is:
 | Neither parent nor `conversation`                    | Start a new root response in a new thread.                                                                                          |
 | `previous_response_id` only                          | Start from the parent's exact checkpoint.                                                                                           |
 | Existing `conversation`, without a previous response | Start from its existing items and the new input. An empty conversation starts a fresh root.                                         |
-| Existing `conversation`, with previous responses     | Continue its retained context. For sequential turns, use the latest retained response's checkpoint when it represents that context. |
+| Existing `conversation`, with previous responses     | Load the conversation store's retained final checkpoint and run with the new input.                                                 |
 | Unknown or unresolvable `conversation`               | Reject before graph execution; do not create a conversation or substitute a root response.                                          |
 | Both parent and `conversation`                       | Reject with HTTP 400.                                                                                                               |
 
@@ -364,12 +368,14 @@ host lifecycle requirement, not a claim about OpenAI's internal storage design.
 
 ## What must be stored?
 
-Branching needs **both** response records and graph checkpoints:
+Branching needs **both** response records and graph checkpoints. Conversation
+continuation also needs a retained head mapping:
 
 | Data                                                               | Where it lives             | How to configure it                                |
 | ------------------------------------------------------------------ | -------------------------- | -------------------------------------------------- |
 | Response, status, input/output, and internal checkpoint references | SDK response provider      | Server: `ResponsesHostServer(..., store=provider)` |
 | Graph state, pending writes, and checkpoint history                | LangGraph checkpoint saver | Graph: `checkpointer=...`                          |
+| Conversation ID -> retained final checkpoint reference             | Conversation store         | Host: existing `conversation_chain_store`          |
 
 With branching enabled, the server's `store` is a required explicit provider;
 it configures storage capability and the backend. The client's `store` is a
@@ -484,9 +490,11 @@ root checkpoint namespace.
 ### Fresh request
 
 1. **Select.** Resolve the starting state using the platform's authorization
-   context. An explicit parent uses `select_branch_checkpoint`; a conversation
-   ID resolves to its existing response/checkpoint reference. An unknown or
-   unresolvable conversation fails before execution.
+  context. `previous_response_id` loads the stored response's exact checkpoint
+  reference through `select_branch_checkpoint`; a conversation ID reads its
+  retained final checkpoint reference from the conversation store. Both then
+  use the same checkpoint-based graph execution path. An unknown or unresolvable
+  conversation fails before execution.
    `branch_selection_scope` caches response-ID selections only for this request.
    For the target conversation behavior, persist the resolved starting reference
    for recovery before execution. Response-ID parent selection is request-local;
@@ -513,6 +521,8 @@ root checkpoint namespace.
    final checkpoint reference; no separate boundary is written. An unretained
    response must complete execution-owned checkpoint cleanup as specified under
    [Checkpointer isolation and cleanup](#checkpointer-isolation-and-cleanup).
+  Only successful finalization of a stored conversation turn updates its
+  conversation-store head, as described below.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
 checkpoint alone cannot make a reusable parent: its response must also be stored
@@ -522,25 +532,28 @@ approval is not a reusable parent within this scope.
 
 ### Conversation head references
 
-Conversation continuation needs a mapping from `conversation_id` to its current
-response/checkpoint reference. The existing `conversation_chain_store` may be
-reused for that mapping; a full conversation chain is not required for branching.
+The conversation store maps each authorized `conversation_id` to the exact final
+graph checkpoint of its latest completed, retained turn. The existing
+`conversation_chain_store` may be reused for this mapping; a full conversation
+chain is not required for branching.
 
 Response-ID branching selects the exact reference from the stored parent response
 without consulting the mutable conversation head. A conversation request resolves
 its head once and persists that starting reference for recovery. Later head
 updates must not redirect an in-flight or recovered request.
 
-For a completed conversation turn, advance the head to its confirmed final
-reference only when `store=True` and both its response record and checkpoint
-are persisted. With `store=False`, leave the head unchanged even if execution
-or recovery wrote newer graph checkpoints. A subsequent conversation request
-must resolve the retained head, not the saver's implicit latest checkpoint.
-Response-ID branches do not update the conversation head.
+Keep the previous conversation head unchanged while the graph runs. Intermediate
+checkpoints may be published as execution/recovery progress, but never as the
+retained head. At successful turn finalization, update the conversation store
+to that run's confirmed final checkpoint only when `store=True` and both the
+response record and checkpoint are persisted. The next conversation request
+starts from this final checkpoint, not the saver's implicit latest checkpoint.
+Response-ID branches do not update this head.
 
-Every conversation-head write path must enforce request `store`, including
-paths for pauses, shutdown, cancellation, and recovery finalization. Internal
-progress references remain separate from the retained conversation head.
+Streaming, pauses, shutdown, cancellation, and recovery must not bypass this
+finalization rule or promote an intermediate checkpoint. A failed, cancelled,
+or unretained turn leaves the prior head unchanged, even if it wrote newer
+checkpoints. Internal progress references remain separate from the retained head.
 If an existing conversation has no retained checkpoint yet, a `store=False`
 turn must leave that starting state empty. The next request must not discover
 and restore the unretained turn through a thread-level latest-checkpoint lookup.
@@ -651,7 +664,7 @@ behavior are distinguished below; neither indicates completed support.
 | --- | --- | --- |
 | Explicit response storage provider | Branching requires an explicitly supplied provider. | **Implementation required:** The constructor selects a default provider when `store` is omitted. |
 | Conversation lookup | Reject missing resources before graph execution; distinguish them from existing empty conversations. | **Implementation required:** Local providers do not enforce this distinction; see provider differences below. |
-| Conversation context and linkage | Resolve authorized context, select the correct checkpoint, and preserve public linkage fields and response-ID branch isolation. | **Verification required:** Explicit conversations use ordinary continuation and HITL routing, including when branching is enabled. |
+| Conversation context and linkage | Use shared checkpoint execution; write back only the completed, retained turn's final checkpoint, preserving public linkage fields and branch isolation. | **Implementation required:** Explicit conversations use ordinary continuation and HITL routing; the existing pointer can be updated before finalization. |
 | Request `store=False` | Preserve the retained conversation head and prior graph state; clean up finalized execution-owned checkpoints on every continuation and finalization path. | **Implementation required:** Ordinary continuation updates its checkpoint pointer without checking request `store`; isolation and cleanup must be completed. |
 | Request-scoped `instructions` | Do not inherit the parent's top-level instructions through its checkpoint. | **Verification required:** Check checkpoint restoration against this rule. |
 
@@ -717,7 +730,10 @@ Before claiming compatibility, cover these observable scenarios:
 - Resolve an existing conversation through the configured provider or platform,
   reuse both ID forms, and verify that stored turns advance its retained context.
   Also cover an existing empty conversation and recovery after the conversation
-  advances.
+  advances. During a multi-step graph run, the head must remain at the prior
+  final checkpoint. Only successful finalization advances it to that run's exact
+  final checkpoint; failure, cancellation, or terminal response-storage failure
+  must not advance it.
 - Unknown, malformed, or unresolvable conversation IDs, authorization errors,
   and storage lookup failures must not create conversations or start graph
   execution. Check valid but absent IDs with both `store=True` and `store=False`
