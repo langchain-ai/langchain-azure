@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <4.0"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1590,6 +1590,7 @@ wheels = [
 name = "langchain-azure-ai"
 version = "1.2.12"
 source = { editable = "." }
+default-groups = ["dev", "lint", "test"]
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
@@ -1610,6 +1611,7 @@ dependencies = [
 
 [package.optional-dependencies]
 hosting = [
+    { name = "anyio" },
     { name = "azure-ai-agentserver-core" },
     { name = "azure-ai-agentserver-invocations" },
     { name = "azure-ai-agentserver-responses" },
@@ -1672,6 +1674,7 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14" },
     { name = "anthropic", specifier = ">=0.111.0" },
+    { name = "anyio", marker = "extra == 'hosting'", specifier = ">=4,<5" },
     { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
     { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
     { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.1.0b1,<2.0" },
