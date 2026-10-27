@@ -68,6 +68,9 @@ if __name__ == "__main__":
                 example_dirs.add(docs_directory)
             else:
                 test_dirs.add(directory)
+                example_dirs.add("samples")
+                if docs_directory in DOCS_DIRS:
+                    example_dirs.add(docs_directory)
 
     example_dirs = {
         directory for directory in example_dirs if (REPO_ROOT / directory).is_dir()
