@@ -118,8 +118,9 @@ resolved by the provider or platform.
 
 ### 1. Enable branching on the server
 
-Start with the [basic hosting setup](../../README.md#hosting-langgraph-agents-on-microsoft-foundry)
-and an already configured `model`:
+Starting from the [basic hosting setup](../../README.md#hosting-langgraph-agents-on-microsoft-foundry)
+with a configured `model`, supply an explicit response provider and graph
+checkpointer:
 
 ```python
 from azure.ai.agentserver.responses import FileResponseStore
@@ -138,15 +139,8 @@ if __name__ == "__main__":
     ).run(port=8088)
 ```
 
-With branching enabled, `store` must be an explicitly supplied
-`ResponseProviderProtocol` implementation. Omitting it or passing `None` raises
-`ValueError` during initialization; the host must not silently select a default
-provider. This parameter is not a boolean: `store=True` and `store=False` are
-not supported constructor values.
-
-`InMemorySaver` is for this local demo only. Its checkpoints disappear on
-restart, even if response records survive. Use a durable, history-preserving
-saver when state must survive process recreation.
+  Server `store` is a response provider, not a boolean. `InMemorySaver` is for
+  local demos; use a durable, history-preserving saver for reuse after restart.
 
 ### 2. Create a parent and two branches
 
@@ -169,83 +163,16 @@ print(b.output_text)
 print(c.output_text)
 ```
 
-Requests default to `store=True`; A makes this explicit because it will be a
-parent. Do not set `store=False` on responses you want to reuse by response ID.
-The current response may use `store=False` even when it references a stored
-parent; that does not disable the server's provider or delete the parent.
-Here, B and C are independent branches from A. C can also start while B is
-still running, provided A has finished.
+A must be stored (`store=True`, the default) and its graph must finish.
+B and C each start from A's exact checkpoint, independently of one another.
 
 ### 3. Continue, regenerate, or rewind
 
 - **Continue B:** send new input with `previous_response_id=b.id`.
-- **Regenerate B:** resend B's original input with B's original parent:
-
-```python
-regenerated_b = client.responses.create(
-    input="Plan a busy itinerary.",
-    previous_response_id=b.previous_response_id,
-)
-```
-
-Every call creates a new response. Regeneration can produce different output.
-For client-side **undo/rewind**, select an earlier parent. This does not delete
-history, replay stored SSE events, or undo external effects.
-
-### 4. Start or continue a conversation
-
-**Current local host behavior:** The host temporarily accepts a previously
-unused, valid `conversation` ID to start a new conversation with empty history.
-With `InMemoryResponseProvider` or `FileResponseStore`, you can generate an ID
-and reuse it on successive `/responses` requests:
-
-```python
-from uuid import uuid4
-
-conversation_id = f"conv_{uuid4().hex}"
-
-first = client.responses.create(
-    conversation=conversation_id,
-    input="Suggest a destination.",
-)
-next_turn = client.responses.create(
-    conversation={"id": conversation_id},
-    input="Plan a relaxed itinerary.",
-)
-```
-
-**Difference from OpenAI:** OpenAI's `POST /responses` does not create a
-conversation from an unknown ID. First create the conversation through
-`POST /conversations` (`client.conversations.create()`), then pass its returned
-ID as `conversation` to `/responses` for subsequent turns. This separate creation
-step is required by OpenAI; the local first-use behavior above is temporary and
-does not imply that this host exposes `/conversations` management routes.
-
-`FoundryStorageProvider` and custom providers may reject unknown IDs; use an
-existing conversation in their authorized storage scope. See
-[Conversation lookup](#conversation-lookup-current-behavior-and-target) for the
-current provider differences and the target requirement to reject missing IDs.
-
-The string and object forms of `conversation` refer to the same resource.
-Conversation items precede the new input; the response's input and output items
-are added to that conversation after it completes with `store=True` (the
-default). In a sequential exchange, the next turn therefore includes the
-preceding retained turn. With `store=False`, the request can read that history,
-but its own turn is not added and the conversation's state does not advance.
-
-You can also branch from a stored response in that conversation, even after the
-conversation has advanced:
-
-```python
-branch = client.responses.create(
-    previous_response_id=first.id,
-    input="Plan a busy itinerary.",
-)
-```
-
-This starts from `first` rather than `next_turn` and does not move the
-conversation's head. A later request using `conversation_id` continues from
-`next_turn`, not from `branch`.
+- **Regenerate B:** resend B's input with its original parent,
+  `previous_response_id=a.id`, to create a new response.
+- **Rewind:** select an earlier parent to start a new response; this does not
+  delete history, replay stored SSE events, or undo external effects.
 
 ## Requirements and request rules
 
