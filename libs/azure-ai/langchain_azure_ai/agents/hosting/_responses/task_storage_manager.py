@@ -28,6 +28,7 @@ from .hosting_runnable_config import HostingRunnableConfig
 
 METADATA_LANGGRAPH_CHECKPOINT_ID = "langgraph_checkpoint_id"
 METADATA_LANGGRAPH_THREAD_ID = "langgraph_thread_id"
+METADATA_LANGGRAPH_ROOT_RESPONSE_ID = "langgraph_root_response_id"
 
 
 class CheckpointError(ValueError):

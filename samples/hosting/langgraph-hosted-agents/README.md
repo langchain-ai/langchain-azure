@@ -21,6 +21,9 @@ Each sample is a self-contained folder with its own `main.py`,
 and `agent.yaml` so it can be run locally with the command in its README
 or deployed to Foundry with `azd`.
 
+The [Deep Agents sample](responses/12_deep_agents/SETUP.md#deploying-the-agent-to-foundry)
+uses a unified `azure.yaml` instead of separate agent manifests.
+
 ## Start here
 
 **New to hosting? Start with [Responses Basic](responses/01_basic/README.md).**
@@ -58,6 +61,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 9 | [Run entrypoint](responses/09_run/) | The basic `create_agent` graph loaded from `langgraph.json` and hosted through `langchain_azure_ai.agents.hosting.run`. |
 | 10 | [Resilient](responses/10_resilient/) | Resilient background Responses with replayable SSE, crash recovery, durable checkpoints, HITL approval, cancellation, and optional active-turn steering. Includes a Textual recovery client. |
 | 11 | [LangChain middleware](responses/11_middleware/) | Native `HumanInTheLoopMiddleware` approve/edit/reject plus the official `@before_model` message-limit function. |
+| 12 | [Deep Agents](responses/12_deep_agents/) | Official Deep Research workflow with planning, research subagents, Foundry web search, checkpoint-backed virtual files, and Azure Blob Storage integration for downloadable reports. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the

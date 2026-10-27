@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, Literal, cast
 
 from azure.ai.agentserver.core.storage import (
@@ -38,6 +39,8 @@ from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
 )
+
+from ._storage import get_state_store
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -178,8 +181,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Fetch an exact checkpoint or the latest checkpoint in a namespace."""
         thread_id, checkpoint_ns = self._thread_and_namespace(config)
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             checkpoint_id = get_checkpoint_id(config)
 
             if checkpoint_id:
@@ -226,8 +228,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 thread_id,
                 cast(_CheckpointItemValue, item.value),
             )
-        finally:
-            await store.aclose()
 
     async def alist(
         self,
@@ -263,8 +263,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 if field in filter:
                     tags[field] = str(filter[field])
 
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             if checkpoint_id and before_id and checkpoint_id >= before_id:
                 return
             # Sort/filter by LangGraph checkpoint id from storage keys first.
@@ -312,8 +311,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 yielded += 1
                 if limit is not None and yielded >= limit:
                     return
-        finally:
-            await store.aclose()
 
     async def aput(
         self,
@@ -347,15 +344,12 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if step is not None:
             tags["step"] = str(step)
 
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             await store.set_item(
                 self._checkpoint_key(checkpoint_ns, checkpoint_id),
                 cast(JSONObject, value),
                 tags=cast(Mapping[str, str], tags),
             )
-        finally:
-            await store.aclose()
         return self._config(thread_id, checkpoint_ns, checkpoint_id)
 
     async def aput_writes(
@@ -378,8 +372,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if not task_id:
             raise ValueError("task_id must be a non-empty string")
 
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             for ordinal, (channel, value) in enumerate(writes):
                 index = WRITES_IDX_MAP.get(channel, ordinal)
                 item_value: _PendingWriteItemValue = {
@@ -417,8 +410,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                         )
                     except FoundryStorageConflictError:
                         pass
-        finally:
-            await store.aclose()
 
     async def adelete_thread(self, thread_id: str) -> None:
         """Delete thread data according to the store's actual isolation setting.
@@ -460,8 +451,13 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         finally:
             await store.aclose()
 
-    async def _get_or_create_store(self, thread_id: str) -> FoundryStateStore:
-        return await FoundryStateStore.get_or_create(
+    @asynccontextmanager
+    async def _get_or_create_store(
+        self, thread_id: str
+    ) -> AsyncIterator[FoundryStateStore]:
+        async with get_state_store(
+            self,
+            FoundryStateStore,
             self._store_name(thread_id),
             self._credential,
             self._endpoint,
@@ -473,7 +469,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             # header. Keep it lazy so registered prefixes and the telemetry
             # opt-out are evaluated per request.
             get_server_version=get_user_agent,
-        )
+        ) as store:
+            yield store
 
     def _bound_store(self, thread_id: str) -> FoundryStateStore:
         return FoundryStateStore(

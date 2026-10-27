@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from copy import copy
 from functools import wraps
 from pathlib import Path
@@ -75,6 +77,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
     _add_request_hosting_features,
     _hosting_feature_scope,
+    _request_hosting_features,
 )
 
 from ._converters import (
@@ -90,6 +93,7 @@ from ._converters import (
 )
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
+    METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
     CheckpointRef,
     ConversationChainStoreProtocol,
     FoundryConversationChainStore,
@@ -110,11 +114,31 @@ from ._responses.task_storage_manager import (
     ResponseCheckpointSaver,
     get_recovery_checkpoint,
 )
+from ._storage import state_store_client_scope
+from ._storage.state_store_factory import (
+    _CleanupTimeoutError,
+    _close_resource,
+    _finish_cleanup,
+)
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
+
+
+@asynccontextmanager
+async def _closing_stream(
+    stream: AsyncIterator[Any],
+) -> AsyncIterator[AsyncIterator[Any]]:
+    """Close before final writes; active errors and control signals take priority."""
+    close = getattr(stream, "aclose", None)
+    if close is None:
+        yield stream
+    else:
+        async with _finish_cleanup(_close_resource(close, "graph_iterator")):
+            yield stream
+
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +288,25 @@ def _response_conversation_id(response: Any) -> str | None:
         value = conversation.get("id")
     else:
         value = getattr(conversation, "id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _response_root_id(response: Any) -> str | None:
+    """Read a cached root from JSON or legacy dictionary metadata."""
+    metadata = getattr(response, "metadata", None)
+    if metadata is None and hasattr(response, "get"):
+        metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    internal = metadata.get("_internal_metadata")
+    if isinstance(internal, str):
+        try:
+            internal = json.loads(internal)
+        except ValueError:
+            return None
+    if not isinstance(internal, dict):
+        return None
+    value = internal.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
     return value if isinstance(value, str) and value else None
 
 
@@ -758,8 +801,9 @@ class ResponsesHostServer:
         The logical thread is namespaced by the platform-provided user key.
         Checkpointed graphs first restore the exact ``(thread_id, checkpoint_id)``
         saved for this user and conversation chain. When no saved checkpoint is
-        selected, ``previous_response_id`` chains resolve their root response
-        through the Responses provider when possible. The full
+        selected, ``previous_response_id`` chains reuse a cached root response ID
+        when available; otherwise they resolve the root through the Responses
+        provider when possible. The full
         :class:`ResponseContext` is exposed under ``configurable.response_context``
         for transient execution facts such as recovery state.
 
@@ -770,6 +814,11 @@ class ResponsesHostServer:
         parent again. Parent selection is reused within the request. Graph
         checkpoint validation finishes after subclass overrides return, so they
         can supply application-specific saver configuration.
+
+        Configurable keys prefixed with ``__langchain_azure_`` are reserved for
+        host implementation details. Subclasses can preserve root caching by
+        calling ``await super().build_runnable_config(request, context)`` and
+        retaining the returned hosting-owned entries.
 
         Args:
             request: The parsed create-response request.
@@ -821,41 +870,49 @@ class ResponsesHostServer:
                         context,
                     ).runnable_config
 
-        thread_id = await self._resolve_thread_id(request, context)
-        return HostingRunnableConfig.create(thread_id, context).runnable_config
+        hosting_config = await self._resolve_thread_config(request, context)
+        return hosting_config.runnable_config
 
-    async def _resolve_thread_id(
+    async def _resolve_thread_config(
         self,
         request: CreateResponse,
         context: ResponseContext,
-    ) -> str:
+    ) -> HostingRunnableConfig:
         previous_response_id = request.get("previous_response_id")
         conversation_id = get_conversation_id(request) or context.conversation_id
         thread_id: str
         if isinstance(conversation_id, str) and conversation_id:
             thread_id = conversation_id
         elif isinstance(previous_response_id, str) and previous_response_id:
-            resolved_thread_id = await self._thread_id_from_response_chain(
+            resolved_config = await self._thread_config_from_response_chain(
                 previous_response_id,
                 context,
             )
-            thread_id = resolved_thread_id or previous_response_id
+            if resolved_config is not None:
+                return resolved_config
+            thread_id = previous_response_id
         else:
-            thread_id = context.response_id
-        return _scope_thread_id(thread_id, context)
+            return HostingRunnableConfig.create(
+                _scope_thread_id(context.response_id, context), context
+            ).with_root_response_id(context.response_id)
+        return HostingRunnableConfig.create(
+            _scope_thread_id(thread_id, context), context
+        )
 
-    async def _thread_id_from_response_chain(
+    async def _thread_config_from_response_chain(
         self,
         previous_response_id: str,
         context: ResponseContext,
-    ) -> str | None:
+    ) -> HostingRunnableConfig | None:
+        """Resolve a user-scoped thread and cache only a verified chain root."""
         provider = getattr(context, "_provider", None)
         if provider is None:
             return None
 
         response_id: str | None = previous_response_id
         seen: set[str] = set()
-        root_response_id: str | None = previous_response_id
+        last_response_id = previous_response_id
+        root_response_id: str | None = None
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
@@ -872,12 +929,27 @@ class ResponsesHostServer:
 
             conversation_id = _response_conversation_id(response)
             if conversation_id:
-                return conversation_id
+                return HostingRunnableConfig.create(
+                    _scope_thread_id(conversation_id, context), context
+                )
 
-            root_response_id = response_id
+            cached_root_id = _response_root_id(response)
+            if cached_root_id is not None:
+                root_response_id = cached_root_id
+                break
+
+            last_response_id = response_id
             response_id = _response_field(response, "previous_response_id")
+            if response_id is None:
+                root_response_id = last_response_id
+                break
 
-        return root_response_id
+        hosting_config = HostingRunnableConfig.create(
+            _scope_thread_id(root_response_id or last_response_id, context), context
+        )
+        if root_response_id is not None:
+            hosting_config = hosting_config.with_root_response_id(root_response_id)
+        return hosting_config
 
     def _resolve_conversation_management(self) -> ResolvedConversationManagementMode:
         return (
@@ -1068,6 +1140,11 @@ class ResponsesHostServer:
                     graph = copy(graph)
                     graph.config = None
                     graph.checkpointer = request_saver
+                root_response_id = HostingRunnableConfig(config).root_response_id
+                if root_response_id is not None:
+                    stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
+                        root_response_id
+                    )
                 # Attach transient execution state after the overridable config
                 # hook without changing its signature or subclass overrides.
                 config = (
@@ -1173,28 +1250,28 @@ class ResponsesHostServer:
                     )
 
             active_interrupts: list["Interrupt"] = []
-            graph_stream = track_pending_interrupts(
+            async with _closing_stream(
                 graph.astream(
                     graph_input,
                     config=config,
                     stream_mode=self._stream_modes,
                     durability=self._durability,
-                ),
-                active_interrupts,
-            )
-            async for event in stream_graph_to_events(
-                graph_stream,
-                stream,
-                cancellation_signal=cancellation_signal,
-                shutdown_signal=context.shutdown,
-                usage=usage,
-                checkpoint_waiter=(
-                    request_saver.wait_for_checkpoint
-                    if request_saver is not None
-                    else None
-                ),
-            ):
-                yield event
+                )
+            ) as graph_stream:
+                graph_stream = track_pending_interrupts(graph_stream, active_interrupts)
+                async for event in stream_graph_to_events(
+                    graph_stream,
+                    stream,
+                    cancellation_signal=cancellation_signal,
+                    shutdown_signal=context.shutdown,
+                    usage=usage,
+                    checkpoint_waiter=(
+                        request_saver.wait_for_checkpoint
+                        if request_saver is not None
+                        else None
+                    ),
+                ):
+                    yield event
             checkpoint_ref = task_storage.checkpoint_ref
             if checkpoint_ref is not None and not branching_mode:
                 await self._conversation_chain_store.set(
@@ -1238,13 +1315,19 @@ class ResponsesHostServer:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
+            code, message = "server_error", "An internal error occurred."
+            if (
+                isinstance(exc, _CleanupTimeoutError)
+                and exc.resource == "graph_iterator"
+            ):
+                # Unsettled writes cannot advance the chain or complete steering.
+                if context.shutdown.is_set():
+                    await context.exit_for_recovery()
+                if cancellation_signal.is_set() and context.client_cancelled:
+                    code, message = "cancelled", "Request was cancelled."
             yield stream.emit_failed(
-                code="server_error" if branching_mode else "internal_error",
-                message=(
-                    "The response could not be executed."
-                    if branching_mode
-                    else str(exc)
-                ),
+                code=code,
+                message=message,
                 usage=usage.response_usage,
             )
 
@@ -1295,11 +1378,27 @@ class ResponsesHostServer:
         context: ResponseContext,
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
-        with _hosting_feature_scope(self._hosting_features):
-            async for event in self.handle_create(
-                request, context, cancellation_signal
-            ):
-                yield event
+        features = self._hosting_features
+        async with state_store_client_scope(bind=False) as factory:
+            events = self.handle_create(request, context, cancellation_signal)
+
+            async def close() -> None:
+                close = getattr(events, "aclose", None)
+                if close is not None:
+                    with factory.bind(), _hosting_feature_scope(features):
+                        await _close_resource(close, "handler_iterator", factory)
+
+            async with _finish_cleanup(close()):
+                while True:
+                    # AgentServer can resume this iterator in a different Task.
+                    with factory.bind(), _hosting_feature_scope(features):
+                        try:
+                            event = await anext(events)
+                        except StopAsyncIteration:
+                            return
+                        finally:
+                            features = _request_hosting_features.get()
+                    yield event
 
     # ------------------------------------------------------------------
     # Validation
