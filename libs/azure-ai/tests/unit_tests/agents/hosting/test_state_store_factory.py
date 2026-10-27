@@ -468,7 +468,7 @@ async def test_custom_pipeline_options_keep_operation_ownership(
     value = object()
     async with state_store_client_scope():
         async with get_state_store(
-            object(), FoundryStateStore, "store", **{option: value}
+            object(), FoundryStateStore, "store", create=True, **{option: value}
         ):
             pass
         store.__aexit__.assert_awaited_once()
@@ -546,6 +546,7 @@ async def test_transport_receives_only_connection_options(
             object(),
             FoundryStateStore,
             "store",
+            create=True,
             user_isolation=True,
             item_ttl_seconds=600,
             description="test",
