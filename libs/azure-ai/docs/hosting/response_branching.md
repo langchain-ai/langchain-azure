@@ -64,11 +64,10 @@ The host calls `context.get_history()`, converts the returned items to messages,
 and appends the current request input. It runs the graph from its entry point
 with this combined input, rather than resuming a saved execution.
 
-This supports message-history continuation and branching while the required
-history remains readable. It does not restore custom graph state, completed-node
+This is ordinary SDK-backed history continuation, outside this specification's
+branching guarantees. It does not restore custom graph state, completed-node
 progress, or pending interrupts. A `thread_id` alone does not provide persistence.
-No graph checkpoint or checkpoint-branching opt-in is required; SDK reference
-validation and request retention rules still apply.
+SDK reference handling and request retention behavior remain unchanged.
 
 ### With a checkpointer: checkpoint-based branching
 
@@ -197,6 +196,16 @@ B and C each start from A's exact checkpoint, independently of one another.
   delete history, replay stored SSE events, or undo external effects.
 
 ## Requirements and request rules
+
+With `enable_response_branching=True`, three requirements are mandatory:
+
+- The graph must have a checkpointer. Reject a graph without one with
+  `ValueError` during host initialization.
+- A response-ID branch must restore the selected parent's exact final checkpoint,
+  not the thread's or conversation's latest checkpoint.
+- If the required checkpoint reference or checkpoint is missing, mismatched, or
+  unreadable, fail before graph execution. Do not fall back to message-history
+  reconstruction, a latest checkpoint, or a new root response.
 
 The parent eligibility rules below cover finished-parent checkpoint branching.
 Parents with outstanding function calls or MCP approval requests remain ineligible
