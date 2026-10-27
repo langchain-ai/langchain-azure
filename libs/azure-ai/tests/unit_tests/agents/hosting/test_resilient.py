@@ -380,6 +380,16 @@ def test_hosting_runnable_config_creates_thread_without_checkpoint_ref() -> None
     }
 
 
+def test_root_response_id_does_not_replace_application_config() -> None:
+    config = cast(RunnableConfig, {"configurable": {"response_root_id": "application"}})
+    hosting_config = HostingRunnableConfig(config).with_root_response_id("resp-root")
+
+    assert hosting_config.root_response_id == "resp-root"
+    assert hosting_config.runnable_config["configurable"]["response_root_id"] == (
+        "application"
+    )
+
+
 def test_hosting_runnable_config_wraps_all_hosting_data() -> None:
     response_context = cast(ResponseContext, object())
     cancellation_signal = asyncio.Event()

@@ -192,6 +192,8 @@ For prerequisites, local requests, and Azure deployment, follow the
 [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
 or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
 
+For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
+
 You can also host the graph directly from Python, as shown below.
 For a Responses API host, install the hosting extra. It includes
 the Agent Server version that uses a local file-backed ``FoundryStateStore``

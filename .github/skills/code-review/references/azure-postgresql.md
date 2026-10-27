@@ -6,9 +6,8 @@ under `src/`. Built on `psycopg` and `pgvector`.
 
 Its `.github/copilot-instructions.md` asks for Sphinx-style docstrings, but
 `pyproject.toml` configures pydocstyle with `convention = "google"`. Follow the
-tooling. This package also uses `uv` and `tox` rather than the repository-wide
-`make` targets — check its `Makefile` and `tox.ini` before claiming a command
-is wrong.
+tooling. Use the package's `Makefile` targets: tests run in the selected `uv`
+environment, and CI manages Python-version selection.
 
 ## Connections, pools, and credentials
 

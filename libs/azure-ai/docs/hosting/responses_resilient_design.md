@@ -112,6 +112,35 @@ This flag does not roll back tool side effects or disable long-term store writes
 or tracing. `store=true` and the default behavior retain the durable flow below;
 Agent Server SDK 2.3.0 rejects `background=true` with `store=false`.
 
+### State Store client lifetime
+
+Each Responses handler owns a `StateStoreClientFactory` from config resolution
+through the final conversation-chain write. Clients are separate by consumer,
+store name and user; hosted clients share one connection pool. Store existence is
+refreshed on reuse. Reads never create missing stores. No checkpoint values or
+descriptors are cached; isolation and TTL remain creation options.
+
+The factory and request features are bound for each iterator advance or close,
+allowing iteration across Tasks. Reuse stays within one handler and event loop;
+recovery creates a new factory. Standalone operations and custom transports,
+pipelines or sessions retain their existing lifetime.
+
+Cleanup waits for active storage operations, cancels independent borrowers on
+timeout, then closes clients and the pool. Handler Tasks are protected from this
+cancellation. Iterator closes, borrower drain/cancellation waits and resource
+closes each have a five-second budget, with no shared total deadline or limit on
+graph runtime. Cleanup preserves primary errors, recovery signals and generator
+exit; caller cancellation takes precedence. Secondary cleanup errors are logged;
+normal-exit cleanup failures propagate.
+
+A graph-close timeout during normal iteration leaves the conversation-chain
+checkpoint unchanged. Shutdown exits for recovery for stored turns; non-stored
+turns fail with `server_shutdown`. Client cancellation reports `cancelled`, and
+steering reports `server_error`. Explicit `aclose()` preserves generator exit and
+emits no terminal events, even if cleanup times out.
+Execution errors report `server_error`. All `server_error` messages are
+`An internal error occurred.`; internal details stay in logs.
+
 ### Assumptions
 
 The recovery behavior depends on these assumptions to work properly:

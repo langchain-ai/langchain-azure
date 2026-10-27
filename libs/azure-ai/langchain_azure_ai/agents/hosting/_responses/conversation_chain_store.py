@@ -16,6 +16,8 @@ from azure.ai.agentserver.core.storage import (
 )
 from azure.core.credentials_async import AsyncTokenCredential
 
+from .._storage import get_state_store
+
 CONVERSATION_CHAIN_STORE_PREFIX = "langchain_azure_ai.agents.hosting/responses"
 
 
@@ -147,23 +149,25 @@ class FoundryConversationChainStore:
         Raises:
             TypeError: The stored value is not a string dictionary.
         """
-        state_store = FoundryStateStore(
-            self._store_name(conversation_chain_id),
-            self._credential,
-            self._endpoint,
-            user_isolation=self._user_isolation,
-            item_ttl_seconds=self._item_ttl_seconds,
-            description=self._description,
-            tags=self._tags,
-            user_id=self._user_id,
-            api_version=self._api_version,
-            **self._kwargs,
-        )
-        async with state_store:
-            try:
+        try:
+            async with get_state_store(
+                self,
+                FoundryStateStore,
+                self._store_name(conversation_chain_id),
+                self._credential,
+                self._endpoint,
+                create=False,
+                user_isolation=self._user_isolation,
+                item_ttl_seconds=self._item_ttl_seconds,
+                description=self._description,
+                tags=self._tags,
+                user_id=self._user_id,
+                api_version=self._api_version,
+                **self._kwargs,
+            ) as state_store:
                 item = await state_store.get_item(key)
-            except FoundryStorageNotFoundError:
-                return None
+        except FoundryStorageNotFoundError:
+            return None
         if item is None:
             return None
         if not isinstance(item.value, dict) or not all(
@@ -188,7 +192,9 @@ class FoundryConversationChainStore:
             key: Record key within the conversation chain.
             data: String dictionary to persist without alteration.
         """
-        state_store = await FoundryStateStore.get_or_create(
+        async with get_state_store(
+            self,
+            FoundryStateStore,
             self._store_name(conversation_chain_id),
             self._credential,
             self._endpoint,
@@ -199,6 +205,5 @@ class FoundryConversationChainStore:
             user_id=self._user_id,
             api_version=self._api_version,
             **self._kwargs,
-        )
-        async with state_store:
+        ) as state_store:
             await state_store.set_item(key, dict(data))

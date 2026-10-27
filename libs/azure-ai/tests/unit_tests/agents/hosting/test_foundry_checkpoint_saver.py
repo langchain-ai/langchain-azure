@@ -43,6 +43,12 @@ def _credential() -> AsyncTokenCredential:
 
 
 class _FakeStateStore:
+    async def __aenter__(self) -> _FakeStateStore:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.aclose()
+
     def __init__(self) -> None:
         self.name = "langGraphCheckpoints/thread-1"
         self.user_isolation = True
