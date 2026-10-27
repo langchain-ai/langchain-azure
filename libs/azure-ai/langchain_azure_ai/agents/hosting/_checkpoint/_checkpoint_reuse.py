@@ -178,7 +178,11 @@ _checkpoint_reads: ContextVar[_CheckpointReadContext | None] = ContextVar(
 
 
 class _RequestCheckpointSaver(ObjectProxy):
-    """Decorate a saver with request-local reads; forward its other capabilities."""
+    """Decorate a saver with request-local reads; forward its other capabilities.
+
+    Only the shallow copies used by LangGraph's allowlist clones are supported.
+    Deep copying and pickling this live runtime proxy are not supported.
+    """
 
     def __init__(
         self,
@@ -258,6 +262,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         )
         try:
             cached = reads.cache
+            # Matching allowlists share cache; changed allowlists reload for isolation.
             if (
                 cacheable
                 and cached is not None
