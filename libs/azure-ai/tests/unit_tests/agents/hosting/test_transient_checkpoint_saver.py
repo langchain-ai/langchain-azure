@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import operator
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 import pytest
@@ -15,6 +16,7 @@ from pytest_mock import MockerFixture
 
 pytest.importorskip("azure.ai.agentserver.responses")
 
+from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -30,6 +32,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
+from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
 from langchain_azure_ai.agents.hosting._checkpoint_writes import (
     _aget_indexed_writes,
     _get_indexed_writes,
@@ -59,9 +62,18 @@ def _append_history(current: list[str], batches: Sequence[list[str]]) -> list[st
 @pytest.fixture(params=["memory", "sqlite"])
 async def source_saver(
     request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[BaseCheckpointSaver]:
     if request.param == "memory":
         yield InMemorySaver()
+    elif request.param == "foundry":
+        monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+        monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+        async with FoundryCheckpointSaver(
+            cast(AsyncTokenCredential, object())
+        ) as saver:
+            yield saver
     else:
         async with AsyncSqliteSaver.from_conn_string(":memory:") as saver:
             yield saver
@@ -403,8 +415,10 @@ def _delta_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
     [
         ("memory", ("", ""), ["a", "z"]),
         ("sqlite", ("", ""), ["a", "z"]),
+        ("foundry", ("", ""), ["a", "z"]),
         ("memory", ("node-a", "node-z"), ["z", "a"]),
         ("sqlite", ("node-a", "node-z"), ["z", "a"]),
+        ("foundry", ("node-a", "node-z"), ["z", "a"]),
     ],
     indirect=["source_saver"],
 )

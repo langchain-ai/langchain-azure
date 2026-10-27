@@ -596,7 +596,9 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 break
             after = page.last_id
 
-        records.sort(key=lambda item: (item["task_id"], item["index"]))
+        records.sort(
+            key=lambda item: (item["task_path"], item["task_id"], item["index"])
+        )
         return _IndexedPendingWrites(
             _IndexedWrite(
                 item["task_id"],
