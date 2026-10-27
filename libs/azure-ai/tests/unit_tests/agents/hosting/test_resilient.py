@@ -4,10 +4,12 @@
 """Unit tests for Responses resilience storage."""
 
 import asyncio
+from pathlib import Path
 from typing import Any, Literal, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from azure.ai.agentserver.core.storage import FoundryStateStore
 from azure.ai.agentserver.responses import (
     ResponseContext,
     ResponseEventStream,
@@ -115,6 +117,33 @@ async def test_foundry_conversation_chain_store_preserves_512_characters(
     }
 
 
+@pytest.mark.parametrize("on_mismatch", ["fail", "ignore"])
+async def test_conversation_chain_store_missing_reads_do_not_create_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    on_mismatch: Literal["fail", "ignore"],
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        conversation_chain_store, "FoundryStateStore", FoundryStateStore
+    )
+    store = FoundryConversationChainStore(on_mismatch=on_mismatch)
+    stores_path = tmp_path / "state_stores"
+
+    assert await store.get("chain-1", "missing") is None
+    assert list(stores_path.glob("*.json")) == []
+
+    await store.set("chain-1", "key", {"value": "stored"})
+    saved = {path.name: path.read_bytes() for path in stores_path.glob("*.json")}
+    assert saved
+    assert await store.get("chain-1", "key") == {"value": "stored"}
+    assert await store.get("chain-1", "missing") is None
+    assert {
+        path.name: path.read_bytes() for path in stores_path.glob("*.json")
+    } == saved
+
+
 async def test_foundry_conversation_chain_store_rejects_non_string_dictionary(
     foundry_state_stores: dict[str, dict[str, object]],
 ) -> None:
@@ -137,23 +166,11 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
     monkeypatch: pytest.MonkeyPatch,
     on_mismatch: Literal["fail", "ignore"],
 ) -> None:
-    calls: list[tuple[str, object, object, dict[str, object]]] = []
-    get_or_create = conversation_chain_store.FoundryStateStore.get_or_create
-
-    async def capture_options(
-        name: str,
-        credential: Any = None,
-        endpoint: Any = None,
-        **kwargs: Any,
-    ) -> object:
-        calls.append((name, credential, endpoint, kwargs))
-        return await get_or_create(name, credential, endpoint, **kwargs)
-
-    monkeypatch.setattr(
-        conversation_chain_store.FoundryStateStore,
-        "get_or_create",
-        capture_options,
+    state_store = MagicMock(wraps=conversation_chain_store.FoundryStateStore)
+    state_store.get_or_create = AsyncMock(
+        wraps=conversation_chain_store.FoundryStateStore.get_or_create
     )
+    monkeypatch.setattr(conversation_chain_store, "FoundryStateStore", state_store)
     credential = cast(Any, object())
     store = FoundryConversationChainStore(
         credential,
@@ -171,21 +188,22 @@ async def test_foundry_conversation_chain_store_forwards_all_options(
     await store.set("chain-1", "key", {"value": "1"})
     await store.get("chain-1", "key")
 
-    expected = (
+    args = (
         f"{CONVERSATION_CHAIN_STORE_PREFIX}/chain-1",
         credential,
         "https://example.services.ai.azure.com/api/projects/test",
-        {
-            "user_isolation": True,
-            "item_ttl_seconds": 600,
-            "description": "Custom description",
-            "tags": {"environment": "test"},
-            "user_id": "user-1",
-            "api_version": "v2",
-            "retry_total": 3,
-        },
     )
-    assert calls == [expected, expected]
+    kwargs = {
+        "user_isolation": True,
+        "item_ttl_seconds": 600,
+        "description": "Custom description",
+        "tags": {"environment": "test"},
+        "user_id": "user-1",
+        "api_version": "v2",
+        "retry_total": 3,
+    }
+    state_store.get_or_create.assert_awaited_once_with(*args, **kwargs)
+    state_store.assert_called_once_with(*args, **kwargs)
 
 
 @pytest.mark.parametrize("policy", [None, "fail", "ignore"])
@@ -292,7 +310,8 @@ async def test_conversation_chain_store_propagates_backend_errors(
     write_item = AsyncMock(side_effect=error)
     exit_store = AsyncMock(return_value=None)
     if stage == "acquisition":
-        monkeypatch.setattr(store_type, "get_or_create", AsyncMock(side_effect=error))
+        acquire_method = "__aenter__" if operation == "get" else "get_or_create"
+        monkeypatch.setattr(store_type, acquire_method, AsyncMock(side_effect=error))
     monkeypatch.setattr(store_type, "get_item", read_item)
     monkeypatch.setattr(store_type, "set_item", write_item)
     monkeypatch.setattr(store_type, "__aexit__", exit_store)

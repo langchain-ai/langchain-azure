@@ -114,7 +114,7 @@ class StateStoreClientFactory:
 
     A consumer instance supplies fixed credentials, endpoint and client options.
     Distinct consumers, store names and platform users never share a client.
-    Only the connection pool is shared; descriptors are refreshed on every use.
+    Only the connection pool is shared; store existence is refreshed on reuse.
     All borrowers must run on the event loop that created the factory.
     """
 
@@ -151,9 +151,10 @@ class StateStoreClientFactory:
         store_type: type[FoundryStateStore],
         name: str,
         *args: Any,
+        create: bool = True,
         **options: Any,
     ) -> FoundryStateStore:
-        """Resolve a client while preserving get_or_create's metadata read."""
+        """Resolve a client without creating stores for read-only operations."""
         # Each consumer instance fixes endpoint, credential and pipeline options.
         key = (owner, name, get_request_context().user_id)
         while True:
@@ -166,7 +167,8 @@ class StateStoreClientFactory:
                     await store.get()
                     return store
                 except FoundryStorageNotFoundError:
-                    pass
+                    if not create:
+                        raise
             async with self.locks.setdefault(key, asyncio.Lock()):
                 if self.closed:
                     raise RuntimeError("State Store client factory has already ended")
@@ -195,7 +197,11 @@ class StateStoreClientFactory:
                             if option in options
                         },
                     )
-                store = await store_type.get_or_create(name, *args, **options)
+                store = (
+                    await store_type.get_or_create(name, *args, **options)
+                    if create
+                    else store_type(name, *args, **options)
+                )
                 if self.closed:
                     await _close_resource(store.aclose, "store_client", self)
                     raise RuntimeError("State Store client factory has already ended")
@@ -266,6 +272,7 @@ async def get_state_store(
     store_type: type[FoundryStateStore],
     name: str,
     *args: Any,
+    create: bool = True,
     **options: Any,
 ) -> AsyncIterator[FoundryStateStore]:
     """Borrow a handler client or close an operation-owned standalone client."""
@@ -287,7 +294,11 @@ async def get_state_store(
             "use_env_settings",
         )
     ):
-        store = await store_type.get_or_create(name, *args, **options)
+        store = (
+            await store_type.get_or_create(name, *args, **options)
+            if create
+            else store_type(name, *args, **options)
+        )
         async with store:
             yield store
         return
@@ -296,7 +307,9 @@ async def get_state_store(
     factory.borrowers[borrower] = factory.borrowers.get(borrower, 0) + 1
     factory.idle.clear()
     try:
-        store = await factory.acquire(owner, store_type, name, *args, **options)
+        store = await factory.acquire(
+            owner, store_type, name, *args, create=create, **options
+        )
         if factory.closed:
             raise RuntimeError("State Store client factory has already ended")
         yield store

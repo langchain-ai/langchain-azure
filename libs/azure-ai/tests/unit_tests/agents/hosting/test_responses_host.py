@@ -11,7 +11,8 @@ import json
 import logging
 import threading
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,24 +24,36 @@ from anyio import create_task_group
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.core.storage import FoundryStateStore
 from azure.ai.agentserver.core.streaming import streams
+from azure.ai.agentserver.responses import ResponseContext
 from azure.ai.agentserver.responses.models import (
     CreateResponse,
     ItemMessage,
     MessageContentInputTextContent,
     ResponseObject,
 )
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command, Interrupt
+from azure.core.credentials_async import AsyncTokenCredential
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableBinding, RunnableConfig, RunnableLambda
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_config
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
+from langgraph.types import Command, Interrupt, interrupt
 from starlette.testclient import TestClient
 from starlette.types import Message
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
     HostingFeature,
     ResponsesHostServer,
     ResponsesServerOptions,
 )
+from langchain_azure_ai.agents.hosting._converters import detect_pending_interrupts
 from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
@@ -693,7 +706,7 @@ async def test_early_handler_close_settles_graph_before_closing_clients(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_requests_reuse_two_clients_and_restore_checkpoint_state(
+def test_requests_reuse_read_only_clients_and_restore_checkpoint_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, streaming: bool
 ) -> None:
     from azure.ai.agentserver.core.storage import FoundryStateStore
@@ -709,13 +722,12 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
     )
     created: list[FoundryStateStore] = []
     closed: list[FoundryStateStore] = []
-    get_or_create = FoundryStateStore.get_or_create
+    constructor = FoundryStateStore.__init__
     aclose = FoundryStateStore.aclose
 
-    async def acquire(*args: Any, **kwargs: Any) -> FoundryStateStore:
-        store = await get_or_create(*args, **kwargs)
+    def bind(store: FoundryStateStore, *args: Any, **kwargs: Any) -> None:
+        constructor(store, *args, **kwargs)
         created.append(store)
-        return store
 
     async def close(store: FoundryStateStore) -> None:
         await aclose(store)
@@ -725,7 +737,7 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
         assert all(store not in closed for store in created[-2:])
         return {"messages": [AIMessage(content=f"messages={len(state['messages'])}")]}
 
-    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    monkeypatch.setattr(FoundryStateStore, "__init__", bind)
     monkeypatch.setattr(FoundryStateStore, "aclose", close)
     builder = StateGraph(MessagesState)
     builder.add_node("reply", reply)
@@ -750,8 +762,9 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
                 payload = response.json()
             assert payload["status"] == "completed", payload
             assert f"messages={2 * turn - 1}" in str(payload["output"])
-            assert len(created) == len(closed) == 2 * turn
-            assert len({id(store) for store in created}) == 2 * turn
+            assert len(created) == len(closed) == 2 * turn + 2
+            assert {id(store) for store in created} == {id(store) for store in closed}
+            assert len({id(store) for store in created}) == len(created)
             assert len({store.name for store in created}) == 2
 
 
@@ -923,12 +936,68 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
     return events
 
 
+def _response_payload(body: str, *, streaming: bool = False) -> dict[str, Any]:
+    if not streaming:
+        return json.loads(body)
+    return next(
+        event["response"]
+        for event_type, event in _parse_sse(body)
+        if event_type in {"response.completed", "response.failed"}
+    )
+
+
+def _response_text(payload: dict[str, Any]) -> str:
+    return "".join(
+        part.get("text", "")
+        for item in payload["output"]
+        if item.get("type") == "message"
+        for part in item.get("content", [])
+    )
+
+
 def _message_item(text: str) -> ItemMessage:
     return ItemMessage(
         type="message",
         role="user",
         content=[MessageContentInputTextContent({"type": "input_text", "text": text})],
     )
+
+
+def _history_graph(checkpointer: BaseCheckpointSaver | None) -> CompiledStateGraph:
+    async def echo(state: MessagesState) -> dict[str, list[AIMessage]]:
+        history = " | ".join(
+            message.content
+            for message in state["messages"]
+            if isinstance(message, HumanMessage) and isinstance(message.content, str)
+        )
+        return {"messages": [AIMessage(content=history)]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+def _interrupt_graph(
+    checkpointer: InMemorySaver, *, nested: bool = False
+) -> CompiledStateGraph:
+    def ask(state: MessagesState) -> dict[str, list[AIMessage]]:
+        answer = interrupt("Approve?")
+        return {"messages": [AIMessage(content=f"Approved: {answer}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("ask", ask)
+    builder.add_edge(START, "ask")
+    builder.add_edge("ask", END)
+    graph = builder.compile(checkpointer=checkpointer)
+    if nested:
+        parent = StateGraph(MessagesState)
+        parent.add_node("child", graph)
+        parent.add_edge(START, "child")
+        parent.add_edge("child", END)
+        return parent.compile(checkpointer=checkpointer)
+    return graph
 
 
 def _request(**kwargs: object) -> CreateResponse:
@@ -1069,6 +1138,355 @@ def test_streaming_request_emits_sse_lifecycle_events() -> None:
     assert "response.completed" in types
     deltas = [p["delta"] for t, p in events if t == "response.output_text.delta"]
     assert "".join(deltas) == "Hello, world!"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+@pytest.mark.parametrize("continuation", ["conversation", "previous_response_id"])
+@pytest.mark.parametrize("checkpointed", [False, True])
+def test_store_false_does_not_advance_conversation(
+    streaming: bool,
+    existing_conversation: bool,
+    continuation: str,
+    checkpointed: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(
+        _history_graph(checkpointer if checkpointed else None),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    routing: dict[str, Any] = (
+        {"conversation": {"id": f"conv-read-only-{uuid.uuid4().hex}"}}
+        if continuation == "conversation"
+        else {}
+    )
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post(
+                "/responses",
+                json={"input": "saved", "store": True, **routing},
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+            if continuation == "previous_response_id":
+                routing["previous_response_id"] = first.json()["id"]
+
+        checkpoints_before = list(checkpointer.list(None))
+        writes_before = deepcopy(checkpointer.writes)
+        blobs_before = deepcopy(checkpointer.blobs)
+        chains_before = deepcopy(foundry_state_stores)
+        with (
+            patch.object(checkpointer, "put", wraps=checkpointer.put) as put,
+            patch.object(
+                checkpointer, "put_writes", wraps=checkpointer.put_writes
+            ) as put_writes,
+        ):
+            response = client.post(
+                "/responses",
+                json={
+                    "input": "transient",
+                    "store": False,
+                    "stream": streaming,
+                    **routing,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = _response_payload(response.text, streaming=streaming)
+            assert payload["status"] == "completed", payload
+            assert _response_text(payload) == (
+                "saved | transient" if existing_conversation else "transient"
+            )
+            put.assert_not_called()
+            put_writes.assert_not_called()
+
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert checkpointer.writes == writes_before
+        assert checkpointer.blobs == blobs_before
+        assert foundry_state_stores == chains_before
+
+        following = client.post(
+            "/responses",
+            json={"input": "next", **routing},
+        )
+        assert following.status_code == 200, following.text
+        following_payload = _response_payload(following.text)
+        assert following_payload["status"] == "completed", following_payload
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
+        )
+
+
+class _BoundContext(TypedDict):
+    tenant: str
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+@pytest.mark.parametrize("with_config", [False, True])
+def test_store_false_preserves_bound_graph(
+    streaming: bool,
+    existing_conversation: bool,
+    with_config: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    async def echo(
+        state: MessagesState,
+        *,
+        runtime: Runtime[_BoundContext],
+    ) -> dict[str, list[AIMessage]]:
+        assert runtime.context == {"tenant": "bound-tenant"}
+        if with_config:
+            config = get_config()
+            assert "bound-config" in config["tags"]
+            assert config["configurable"]["bound_marker"] == "preserved"
+        history = " | ".join(
+            message.content
+            for message in state["messages"]
+            if isinstance(message, HumanMessage) and isinstance(message.content, str)
+        )
+        return {"messages": [AIMessage(content=history)]}
+
+    checkpointer = InMemorySaver()
+    builder = StateGraph(MessagesState, context_schema=_BoundContext)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    graph = builder.compile(checkpointer=checkpointer)
+    bound = graph.bind(context={"tenant": "bound-tenant"})
+    if with_config:
+        bound = bound.with_config(
+            tags=["bound-config"], configurable={"bound_marker": "preserved"}
+        )
+    assert isinstance(bound, RunnableBinding)
+    server = ResponsesHostServer(
+        cast(CompiledStateGraph, bound),
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    routing = {"conversation": {"id": f"conv-bound-{uuid.uuid4().hex}"}}
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post("/responses", json={"input": "saved", **routing})
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+
+        checkpoints_before = list(checkpointer.list(None))
+        writes_before = deepcopy(checkpointer.writes)
+        blobs_before = deepcopy(checkpointer.blobs)
+        chains_before = deepcopy(foundry_state_stores)
+        response = client.post(
+            "/responses",
+            json={
+                "input": "transient",
+                "store": False,
+                "stream": streaming,
+                **routing,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = _response_payload(response.text, streaming=streaming)
+        assert payload["status"] == "completed", payload
+        assert _response_text(payload) == (
+            "saved | transient" if existing_conversation else "transient"
+        )
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert checkpointer.writes == writes_before
+        assert checkpointer.blobs == blobs_before
+        assert foundry_state_stores == chains_before
+        assert bound.bound is graph
+        assert graph.checkpointer is checkpointer
+
+        following = client.post("/responses", json={"input": "next", **routing})
+        assert following.status_code == 200, following.text
+        following_payload = _response_payload(following.text)
+        assert following_payload["status"] == "completed", following_payload
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
+        )
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("store_response", [False, True])
+def test_graph_without_checkpointer_handles_store_flag(
+    streaming: bool,
+    store_response: bool,
+) -> None:
+    graph = make_echo_graph()
+
+    async def forward(
+        graph_input: Any, config: RunnableConfig, **kwargs: Any
+    ) -> AsyncGenerator[Any, None]:
+        async for chunk in graph.astream(graph_input, config=config, **kwargs):
+            yield chunk
+
+    server = ResponsesHostServer(cast(CompiledStateGraph, RunnableLambda(forward)))
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={"input": "hello", "store": store_response, "stream": streaming},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = _response_payload(response.text, streaming=streaming)
+    assert payload["status"] == "completed", payload
+    assert "Echo: hello" in json.dumps(payload["output"])
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("existing_conversation", [False, True])
+def test_store_false_does_not_create_foundry_stores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    existing_conversation: bool,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses."
+        "conversation_chain_store.FoundryStateStore",
+        FoundryStateStore,
+    )
+    saver = FoundryCheckpointSaver(cast(AsyncTokenCredential, object()))
+    server = ResponsesHostServer(_history_graph(saver))
+    routing = {"conversation": {"id": f"conv-read-only-{uuid.uuid4().hex}"}}
+    stores_path = tmp_path / "state_stores"
+
+    with _client(server) as client:
+        if existing_conversation:
+            first = client.post(
+                "/responses",
+                json={"input": "saved", "store": True, **routing},
+            )
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "completed", first.text
+
+        saved = {path.name: path.read_bytes() for path in stores_path.glob("*.json")}
+        response = client.post(
+            "/responses",
+            json={
+                "input": "transient",
+                "store": False,
+                "stream": streaming,
+                **routing,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = _response_payload(response.text, streaming=streaming)
+        assert payload["status"] == "completed", payload
+        assert _response_text(payload) == (
+            "saved | transient" if existing_conversation else "transient"
+        )
+        assert {
+            path.name: path.read_bytes() for path in stores_path.glob("*.json")
+        } == saved
+
+        following = client.post("/responses", json={"input": "next", **routing})
+        assert following.status_code == 200, following.text
+        following_payload = _response_payload(following.text)
+        assert following_payload["status"] == "completed", following_payload
+        assert list(stores_path.glob("*.json"))
+        assert _response_text(following_payload) == (
+            "saved | next" if existing_conversation else "next"
+        )
+
+
+async def test_store_false_does_not_emit_recovery_checkpoints() -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(store=False),
+            _context(),
+            asyncio.Event(),
+        )
+    ]
+
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    completed = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event.get("type") == "response.completed"
+    )
+    metadata = completed["response"]["metadata"]
+    internal_metadata = metadata.get("_internal_metadata", {})
+    assert METADATA_LANGGRAPH_THREAD_ID not in internal_metadata
+    assert METADATA_LANGGRAPH_CHECKPOINT_ID not in internal_metadata
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_store_false_preserves_pending_interrupt(
+    resume: bool,
+    nested: bool,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer, nested=nested))
+    routing = {"conversation": {"id": f"conv-interrupt-{uuid.uuid4().hex}"}}
+    with _client(server) as client:
+        first = client.post("/responses", json={"input": "hello", **routing})
+        assert first.status_code == 200, first.text
+        pending = next(
+            item
+            for item in first.json()["output"]
+            if item.get("type") == "function_call"
+        )
+        checkpoints_before = list(checkpointer.list(None))
+        chains_before = deepcopy(foundry_state_stores)
+        resume_item = {
+            "type": "function_call_output",
+            "call_id": pending["call_id"],
+            "output": json.dumps({"resume": "yes"}),
+        }
+        preview = client.post(
+            "/responses",
+            json={
+                "input": [resume_item] if resume else "still waiting",
+                "store": False,
+                **routing,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["status"] == "completed", preview.text
+        if resume:
+            assert "Approved: yes" in json.dumps(preview.json()["output"])
+        else:
+            assert any(
+                item.get("call_id") == pending["call_id"]
+                for item in preview.json()["output"]
+            )
+        assert list(checkpointer.list(None)) == checkpoints_before
+        assert foundry_state_stores == chains_before
+
+        committed = client.post("/responses", json={"input": [resume_item], **routing})
+        assert committed.status_code == 200, committed.text
+        assert committed.json()["status"] == "completed", committed.text
+        assert "Approved: yes" in json.dumps(committed.json()["output"])
+
+
+def test_store_false_new_interrupt_does_not_persist(
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer))
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={
+                "input": "hello",
+                "store": False,
+                "conversation": {"id": f"conv-preview-{uuid.uuid4().hex}"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed", response.text
+    assert any(
+        item.get("type") == "mcp_approval_request" for item in response.json()["output"]
+    )
+    assert list(checkpointer.list(None)) == []
+    assert foundry_state_stores == {}
 
 
 async def test_completed_response_includes_langchain_usage_metadata(
@@ -1230,12 +1648,276 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
     context.exit_for_recovery.assert_awaited_once_with()
 
 
+@pytest.mark.parametrize("has_snapshot", [False, True])
+async def test_store_false_recovery_entry_is_rejected(
+    has_snapshot: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None)
+    context.is_recovery = True
+    if has_snapshot:
+        context.persisted_response = _response_object(
+            context.response_id,
+            internal_metadata={
+                METADATA_LANGGRAPH_THREAD_ID: "thread-before-crash",
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-before-crash",
+            },
+        )
+    build_config = AsyncMock(wraps=server.build_runnable_config)
+    monkeypatch.setattr(server, "build_runnable_config", build_config)
+
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(store=False),
+            context,
+            asyncio.Event(),
+        )
+    ]
+    lifecycle = [event for event in events if isinstance(event, dict)]
+
+    assert [event["type"] for event in lifecycle] == [
+        "response.created",
+        "response.in_progress",
+        "response.failed",
+    ]
+    failed_response = lifecycle[-1]["response"]
+    assert failed_response["error"]["code"] == "unsupported_recovery"
+    assert "store=false" in failed_response["error"]["message"]
+    assert failed_response["output"] == []
+    assert "_internal_metadata" not in failed_response["metadata"]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    build_config.assert_not_awaited()
+    context.get_input_items.assert_not_awaited()
+    context.exit_for_recovery.assert_not_awaited()
+
+
+@pytest.mark.parametrize("shutdown_phase", ["before_graph", "after_output"])
+async def test_store_false_shutdown_fails_without_recovery(
+    shutdown_phase: str,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    checkpointer = graph.checkpointer
+    assert isinstance(checkpointer, InMemorySaver)
+    server = ResponsesHostServer(graph)
+    context = _context()
+    context.exit_for_recovery.side_effect = RuntimeError(
+        "For store=false responses there is no task to defer for recovery."
+    )
+    if shutdown_phase == "before_graph":
+        context.shutdown.set()
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            shutdown_phase == "after_output"
+            and isinstance(event, dict)
+            and event.get("type") == "response.output_text.delta"
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert "response.completed" not in [event["type"] for event in lifecycle]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == []
+    context.exit_for_recovery.assert_not_awaited()
+    if shutdown_phase == "before_graph":
+        context.get_input_items.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "shutdown_phase", ["pending_lookup", "resume_parsing", "interrupt_output"]
+)
+async def test_store_false_pending_interrupt_shutdown_fails_without_recovery(
+    shutdown_phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    graph = _interrupt_graph(checkpointer)
+    server = ResponsesHostServer(graph)
+    context = _context()
+    config = await server.build_runnable_config(_request(), context)
+    await graph.ainvoke({"messages": [HumanMessage(content="hello")]}, config)
+    checkpoints_before = list(checkpointer.list(None))
+    chains_before = deepcopy(foundry_state_stores)
+    original_resume = server.build_resume_command
+
+    async def lookup_pending(
+        graph: CompiledStateGraph, config: RunnableConfig
+    ) -> tuple[Interrupt, ...]:
+        pending = await detect_pending_interrupts(graph, config)
+        assert pending
+        if shutdown_phase == "pending_lookup":
+            context.shutdown.set()
+        return pending
+
+    async def parse_resume(
+        request: CreateResponse,
+        context: ResponseContext,
+        pending: Sequence[Interrupt],
+    ) -> tuple[Command | None, frozenset[str]]:
+        result = await original_resume(request, context, pending)
+        assert result[0] is None
+        if shutdown_phase == "resume_parsing":
+            context.shutdown.set()
+        return result
+
+    monkeypatch.setattr(
+        "langchain_azure_ai.agents.hosting._responses_host.detect_pending_interrupts",
+        lookup_pending,
+    )
+    monkeypatch.setattr(server, "build_resume_command", parse_resume)
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            shutdown_phase == "interrupt_output"
+            and isinstance(event, dict)
+            and event.get("type") == "response.output_item.added"
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["status"] == "failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert "response.completed" not in [event["type"] for event in lifecycle]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == checkpoints_before
+    assert foundry_state_stores == chains_before
+    context.exit_for_recovery.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("shutdown_event_type", "shutdown_item_type"),
+    [
+        ("response.output_item.added", "function_call"),
+        ("response.output_item.done", "mcp_approval_request"),
+    ],
+)
+async def test_store_false_new_interrupt_shutdown_fails_without_recovery(
+    shutdown_event_type: str,
+    shutdown_item_type: str,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    checkpointer = InMemorySaver()
+    server = ResponsesHostServer(_interrupt_graph(checkpointer))
+    context = _context()
+    context.exit_for_recovery.side_effect = RuntimeError(
+        "For store=false responses there is no task to defer for recovery."
+    )
+    chains_before = deepcopy(foundry_state_stores)
+    assert list(checkpointer.list(None)) == []
+
+    events = []
+    async for event in server.handle_create(
+        _request(store=False),
+        context,
+        asyncio.Event(),
+    ):
+        events.append(event)
+        if (
+            isinstance(event, dict)
+            and event.get("type") == shutdown_event_type
+            and event.get("item", {}).get("type") == shutdown_item_type
+        ):
+            context.shutdown.set()
+
+    lifecycle = [event for event in events if isinstance(event, dict)]
+    assert context.shutdown.is_set()
+    assert lifecycle[-1]["type"] == "response.failed"
+    assert lifecycle[-1]["response"]["status"] == "failed"
+    assert lifecycle[-1]["response"]["error"]["code"] == "server_shutdown"
+    assert [
+        event["type"]
+        for event in lifecycle
+        if event["type"] in ("response.completed", "response.failed")
+    ] == ["response.failed"]
+    assert all(type(event).__name__ != "ResponseCheckpointEvent" for event in events)
+    assert list(checkpointer.list(None)) == []
+    assert foundry_state_stores == chains_before
+    context.exit_for_recovery.assert_not_awaited()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_shutdown_returns_terminal_failure(streaming: bool) -> None:
+    class ShuttingDownHost(ResponsesHostServer):
+        async def build_input(
+            self,
+            request: CreateResponse,
+            context: ResponseContext,
+            *,
+            skip_call_ids: frozenset[str] | None = None,
+        ) -> dict[str, Any]:
+            graph_input = await super().build_input(
+                request, context, skip_call_ids=skip_call_ids
+            )
+            context.shutdown.set()
+            return graph_input
+
+    node_runs = 0
+
+    async def echo(state: MessagesState) -> dict[str, list[AIMessage]]:
+        nonlocal node_runs
+        node_runs += 1
+        return {"messages": [AIMessage(content="hello")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("echo", echo)
+    builder.add_edge(START, "echo")
+    builder.add_edge("echo", END)
+    checkpointer = InMemorySaver()
+    graph = builder.compile(checkpointer=checkpointer)
+    server = ShuttingDownHost(
+        graph, options=ResponsesServerOptions(resilient_background=True)
+    )
+    with _client(server) as client:
+        response = client.post(
+            "/responses",
+            json={"input": "hello", "store": False, "stream": streaming},
+        )
+
+    assert response.status_code == 200, response.text
+    if streaming:
+        events = _parse_sse(response.text)
+        assert all(event_type != "response.completed" for event_type, _ in events)
+        payload = next(
+            event["response"]
+            for event_type, event in events
+            if event_type == "response.failed"
+        )
+    else:
+        payload = response.json()
+    assert payload["status"] == "failed", payload
+    assert payload["error"]["code"] == "server_shutdown", payload
+    assert node_runs == 0
+    assert list(checkpointer.list(None)) == []
+
+
 @pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
 @pytest.mark.parametrize("slow_close", [False, True])
+@pytest.mark.parametrize("store_response", [False, True])
 async def test_graph_close_budget_preserves_signal_finalization(
     monkeypatch: pytest.MonkeyPatch,
     signal: str,
     slow_close: bool,
+    store_response: bool,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
@@ -1276,7 +1958,7 @@ async def test_graph_close_budget_preserves_signal_finalization(
 
     async def consume() -> None:
         async for event in server._handle_create_async_gen(
-            _request(), context, cancellation_signal
+            _request(store=store_response), context, cancellation_signal
         ):
             events.append(event)
             if (
@@ -1290,7 +1972,7 @@ async def test_graph_close_budget_preserves_signal_finalization(
                     cancellation_signal.set()
 
     try:
-        if signal == "shutdown":
+        if signal == "shutdown" and store_response:
             with pytest.raises(ExitForRecovery):
                 await asyncio.wait_for(consume(), 1)
             context.exit_for_recovery.assert_awaited_once_with()
@@ -1302,7 +1984,9 @@ async def test_graph_close_budget_preserves_signal_finalization(
         else:
             await asyncio.wait_for(consume(), 1)
             terminal = events[-1]
-            if signal == "client_cancel":
+            if signal == "shutdown":
+                assert terminal["response"]["error"]["code"] == "server_shutdown"
+            elif signal == "client_cancel":
                 assert terminal["response"]["error"]["code"] == "cancelled"
             elif slow_close:
                 from openai.types.responses import ResponseError
@@ -1317,6 +2001,7 @@ async def test_graph_close_budget_preserves_signal_finalization(
             context.exit_for_recovery.assert_not_awaited()
         if slow_close:
             assert not pending_write.done()
+        if slow_close or not store_response:
             chain_set.assert_not_awaited()
         else:
             chain_set.assert_awaited_once_with(

@@ -35,9 +35,10 @@ import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from copy import copy
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -61,7 +62,8 @@ except ImportError as exc:
         "`pip install langchain-azure-ai[hosting]`."
     ) from exc
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableBinding, RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -92,6 +94,7 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
+from ._responses.transient_checkpoint_saver import TransientCheckpointSaver
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
     _CleanupTimeoutError,
@@ -137,6 +140,9 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
+_NON_STORED_SHUTDOWN_MESSAGE = (
+    "Server is shutting down; store=false responses cannot be recovered."
+)
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -320,6 +326,14 @@ class ResponsesHostServer:
     - subclass and override :meth:`handle_create`, or
     - drop down to :class:`ResponsesAgentServerHost` directly and write
       their own ``@response_handler``.
+
+    Requests with ``store=False`` read existing conversation state but run
+    against a request-local in-memory checkpoint branch. They do not write
+    to the graph's configured checkpointer or advance the conversation's
+    checkpoint reference. New interrupts from these requests cannot be
+    resumed in a later request. Tool side effects, long-term store writes,
+    and tracing are not disabled by this flag. Crash recovery is not supported
+    for these requests; shutdown terminates them with ``server_shutdown``.
 
     Args:
         graph: The compiled LangGraph state graph to host. By default the
@@ -851,7 +865,7 @@ class ResponsesHostServer:
         the method:
 
              1. emits ``response.created`` / ``response.in_progress`` and durably
-                 checkpoints handler admission,
+                 checkpoints handler admission for stored requests,
                     2. resolves the LangGraph thread and checks for pending
                      ``interrupt()`` pauses on the checkpointed
            thread and:
@@ -873,6 +887,11 @@ class ResponsesHostServer:
           5. emits ``response.completed`` (or ``response.failed`` /
            ``response.cancelled`` on error).
 
+        Requests with ``store=False`` do not support crash recovery. A recovered
+        invocation fails with ``unsupported_recovery`` before graph I/O. On
+        shutdown, these requests fail with ``server_shutdown`` instead of being
+        deferred to a later process lifetime.
+
         Args:
             request: The parsed create-response request.
             context: The response context for the request.
@@ -882,6 +901,7 @@ class ResponsesHostServer:
             Responses API event payload dicts.
         """
         recovering = bool(context.is_recovery)
+        store_response = request.get("store") is not False
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
         conversation_chain_id = _scope_thread_id(
@@ -890,13 +910,26 @@ class ResponsesHostServer:
         )
         yield stream.emit_created()
 
-        # Shutdown and request cancellation are independent. Check shutdown
-        # first so resilient background work is deferred to the next lifetime.
-        if context.shutdown.is_set():
+        if store_response and context.shutdown.is_set():
             await context.exit_for_recovery()
 
+        yield stream.emit_in_progress()
+
+        if not store_response and recovering:
+            yield stream.emit_failed(
+                code="unsupported_recovery",
+                message="Crash recovery is not supported for store=false responses.",
+            )
+            return
+
+        if not store_response and context.shutdown.is_set():
+            yield stream.emit_failed(
+                code="server_shutdown",
+                message=_NON_STORED_SHUTDOWN_MESSAGE,
+            )
+            return
+
         if cancellation_signal.is_set():
-            yield stream.emit_in_progress()
             if context.client_cancelled:
                 yield stream.emit_failed(
                     code="cancelled",
@@ -906,15 +939,22 @@ class ResponsesHostServer:
                 yield stream.emit_completed()
             return
 
-        yield stream.emit_in_progress()
-
-        if not recovering:
+        if store_response and not recovering:
             # Persist handler admission before any provider or graph I/O.
             yield stream.checkpoint()
 
         usage = UsageAccumulator()
         try:
             config = await self.build_runnable_config(request, context)
+            graph = self._graph
+            checkpointer = getattr(graph, "checkpointer", None)
+            if not store_response and isinstance(checkpointer, BaseCheckpointSaver):
+                graph = copy(graph)
+                checkpoint_graph = graph
+                if isinstance(graph, RunnableBinding):
+                    checkpoint_graph = copy(cast("CompiledStateGraph", graph.bound))
+                    graph.bound = checkpoint_graph
+                checkpoint_graph.checkpointer = TransientCheckpointSaver(checkpointer)
             root_response_id = HostingRunnableConfig(config).root_response_id
             if root_response_id is not None:
                 stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
@@ -953,7 +993,7 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(self._graph, config)
+                pending = await detect_pending_interrupts(graph, config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -983,13 +1023,19 @@ class ResponsesHostServer:
                     async for event in emit_interrupts(pending, stream):
                         yield event
                     ref = HostingRunnableConfig(config).checkpoint_ref
-                    if ref is not None:
+                    if store_response and ref is not None:
                         task_storage.store_checkpoint_ref(ref)
                         await self._conversation_chain_store.set(
                             conversation_chain_id,
                             CONVERSATION_CHECKPOINT_KEY,
                             ref.to_dict(),
                         )
+                    if not store_response and context.shutdown.is_set():
+                        yield stream.emit_failed(
+                            code="server_shutdown",
+                            message=_NON_STORED_SHUTDOWN_MESSAGE,
+                        )
+                        return
                     yield stream.emit_completed()
                     return
 
@@ -1000,12 +1046,25 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
 
+            if not store_response and context.shutdown.is_set():
+                yield stream.emit_failed(
+                    code="server_shutdown",
+                    message=_NON_STORED_SHUTDOWN_MESSAGE,
+                )
+                return
+
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(
-                self._graph.astream(
+                graph.astream(
                     graph_input,
                     config=config,
-                    stream_mode=self._stream_modes,
+                    stream_mode=(
+                        self._stream_modes
+                        if store_response
+                        else [
+                            mode for mode in self._stream_modes if mode != "checkpoints"
+                        ]
+                    ),
                     durability=self._durability,
                 )
             ) as graph_stream:
@@ -1019,14 +1078,22 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None:
+            if store_response and checkpoint_ref is not None:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,
                     checkpoint_ref.to_dict(),
                 )
             if context.shutdown.is_set():
-                await context.exit_for_recovery()
+                if store_response:
+                    await context.exit_for_recovery()
+                else:
+                    yield stream.emit_failed(
+                        code="server_shutdown",
+                        message=_NON_STORED_SHUTDOWN_MESSAGE,
+                        usage=usage.response_usage,
+                    )
+                    return
             if cancellation_signal.is_set():
                 if context.client_cancelled:
                     yield stream.emit_failed(
@@ -1051,6 +1118,14 @@ class ResponsesHostServer:
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 
+            if not store_response and context.shutdown.is_set():
+                yield stream.emit_failed(
+                    code="server_shutdown",
+                    message=_NON_STORED_SHUTDOWN_MESSAGE,
+                    usage=usage.response_usage,
+                )
+                return
+
             yield stream.emit_completed(usage=usage.response_usage)
         except Exception as exc:  # noqa: BLE001
             logger.exception("LangGraph response handler failed")
@@ -1061,8 +1136,11 @@ class ResponsesHostServer:
             ):
                 # Unsettled writes cannot advance the chain or complete steering.
                 if context.shutdown.is_set():
-                    await context.exit_for_recovery()
-                if cancellation_signal.is_set() and context.client_cancelled:
+                    if store_response:
+                        await context.exit_for_recovery()
+                    else:
+                        code, message = "server_shutdown", _NON_STORED_SHUTDOWN_MESSAGE
+                elif cancellation_signal.is_set() and context.client_cancelled:
                     code, message = "cancelled", "Request was cancelled."
             yield stream.emit_failed(
                 code=code,
@@ -1086,9 +1164,14 @@ class ResponsesHostServer:
         allocator continues past them). The subsequent ``response.in_progress``
         then carries those items as the client-visible reset point, and the
         graph — resumed from its own checkpoint — only appends the remaining
-        phases. On a fresh entry we build an empty envelope from the request.
+        phases. Fresh entries and non-stored requests use an empty envelope
+        from the request; non-stored requests never restore a recovery snapshot.
         """
-        if context.is_recovery and context.persisted_response is not None:
+        if (
+            request.get("store") is not False
+            and context.is_recovery
+            and context.persisted_response is not None
+        ):
             stream = ResponseEventStream(
                 response_id=context.response_id,
                 response=context.persisted_response,

@@ -7,13 +7,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from azure.ai.agentserver.core.storage import FoundryStorageNotFoundError
+from azure.ai.agentserver.core.storage import (
+    FoundryStorageConflictError,
+    FoundryStorageNotFoundError,
+)
 from azure.core.credentials_async import AsyncTokenCredential
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
@@ -24,6 +28,9 @@ from langchain_azure_ai._user_agent import get_user_agent
 from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver, HostingFeature
 from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
     DEFAULT_STORE_NAME_PREFIX,
+)
+from langchain_azure_ai.agents.hosting._responses.transient_checkpoint_saver import (
+    TransientCheckpointSaver,
 )
 
 
@@ -82,7 +89,8 @@ class _FakeStateStore:
         *,
         tags: dict[str, str],
     ) -> None:
-        assert key not in self.items
+        if key in self.items:
+            raise FoundryStorageConflictError("Item already exists")
         await self.set_item(key, value, tags=tags)
 
     async def get_item(self, key: str) -> Any | None:
@@ -145,6 +153,16 @@ class _FakeStateStore:
         self.closed = True
 
 
+@contextmanager
+def _mock_state_store(store: _FakeStateStore) -> Iterator[MagicMock]:
+    with patch(
+        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
+        return_value=store,
+    ) as state_store:
+        state_store.get_or_create = AsyncMock(return_value=store)
+        yield state_store
+
+
 def _config(
     checkpoint_id: str | None = None,
     *,
@@ -177,11 +195,7 @@ def _checkpoint(checkpoint_id: str, value: str) -> Checkpoint:
 @pytest.fixture
 def saver_and_store() -> Iterator[tuple[FoundryCheckpointSaver, _FakeStateStore]]:
     store = _FakeStateStore()
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         yield FoundryCheckpointSaver(_credential()), store
 
 
@@ -244,11 +258,7 @@ async def test_uses_existing_store_without_descriptor_validation(
     setattr(store, setting, value)
     read_properties = AsyncMock(side_effect=AssertionError("Unexpected descriptor GET"))
     monkeypatch.setattr(store, "get", read_properties)
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         config = await saver.aput(
             _config(),
@@ -267,20 +277,16 @@ async def test_uses_existing_store_without_descriptor_validation(
 @pytest.mark.asyncio
 async def test_overlong_thread_id_uses_bounded_stable_store_name() -> None:
     store = _FakeStateStore()
-    get_or_create = AsyncMock(return_value=store)
     long_config = cast(
         RunnableConfig,
         {"configurable": {"thread_id": "thread-" + "x" * 200}},
     )
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=get_or_create,
-    ):
+    with _mock_state_store(store) as state_store:
         saver = FoundryCheckpointSaver(_credential())
         await saver.aget_tuple(long_config)
 
-    store_name = get_or_create.call_args.args[0]
+    state_store.get_or_create.assert_not_awaited()
+    store_name = state_store.call_args.args[0]
     assert len(store_name) <= 128
     assert store_name.startswith(f"{DEFAULT_STORE_NAME_PREFIX}/")
     assert store_name == saver._store_name(long_config["configurable"]["thread_id"])
@@ -289,13 +295,8 @@ async def test_overlong_thread_id_uses_bounded_stable_store_name() -> None:
 @pytest.mark.asyncio
 async def test_round_trip_latest_history_and_pending_writes() -> None:
     store = _FakeStateStore()
-    get_or_create = AsyncMock(return_value=store)
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=get_or_create,
-    ):
+    with _mock_state_store(store) as state_store:
         saver = FoundryCheckpointSaver(_credential())
         first_config = await saver.aput(
             _config(),
@@ -336,18 +337,14 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
     assert [item.config for item in history] == [second_config, first_config]
     assert [item.config for item in before] == [first_config]
     assert [item.config for item in filtered] == [first_config]
-    assert get_or_create.await_count == 8
+    assert state_store.get_or_create.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_list_before_filters_by_checkpoint_id_not_storage_order() -> None:
     store = _FakeStateStore()
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         # Lexicographic order of these ids is a-before < m-newer < z-older, which
         # intentionally disagrees with write/storage order so before-filtering must
@@ -393,11 +390,7 @@ async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
     older_id = "1f1b63e7-4a17-644a-bffe-764ddea781a4"
     newer_id = "1f1b63e7-4a17-67b7-8002-6c64d1d576fe"
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         older_config = await saver.aput(
             _config(),
@@ -433,11 +426,7 @@ async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
     store = _FakeStateStore()
     ids = [f"ckpt-{i:02d}" for i in range(5)]
 
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
         for index, checkpoint_id in enumerate(ids):
             await saver.aput(
@@ -758,6 +747,46 @@ async def test_before_bound_need_not_exist_or_match_metadata(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["latest", "exact", "history"])
+async def test_reads_do_not_create_missing_thread_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+
+    async with FoundryCheckpointSaver(_credential()) as saver:
+        if operation == "history":
+            assert [item async for item in saver.alist(_config())] == []
+        else:
+            config = _config("missing" if operation == "exact" else None)
+            assert await saver.aget_tuple(config) is None
+
+    assert list((tmp_path / "state_stores").glob("*.json")) == []
+
+
+@pytest.mark.parametrize("operation", ["latest", "exact", "history"])
+async def test_read_store_errors_propagate_and_close_client(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    operation: str,
+) -> None:
+    saver, store = saver_and_store
+    error = RuntimeError("Storage unavailable")
+    read_method = "get_item" if operation == "exact" else "list_keys"
+    with patch.object(store, read_method, side_effect=error):
+        with pytest.raises(RuntimeError, match="Storage unavailable") as raised:
+            if operation == "history":
+                _ = [item async for item in saver.alist(_config())]
+            else:
+                config = _config("missing" if operation == "exact" else None)
+                await saver.aget_tuple(config)
+
+    assert raised.value is error
+    assert store.closed
+
+
+@pytest.mark.asyncio
 async def test_latest_history_survive_local_saver_reopen_with_tied_timestamps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -908,11 +937,7 @@ async def test_delete_thread_descriptor_failure_does_not_delete(
 @pytest.mark.asyncio
 async def test_saver_runs_with_real_langgraph() -> None:
     store = _FakeStateStore()
-    with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
-        "FoundryStateStore.get_or_create",
-        new=AsyncMock(return_value=store),
-    ):
+    with _mock_state_store(store):
         saver = FoundryCheckpointSaver(_credential())
 
         async def increment(state: _GraphState) -> _GraphState:
@@ -934,6 +959,83 @@ async def test_saver_runs_with_real_langgraph() -> None:
     assert result == {"value": 2}
     assert snapshot.values == {"value": 2}
     assert snapshot.config["configurable"]["checkpoint_id"]
+
+
+@pytest.mark.asyncio
+async def test_transient_forked_integer_versions_preserve_current_checkpoint(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+) -> None:
+    saver, _ = saver_and_store
+
+    def increment(state: _GraphState) -> _GraphState:
+        return {"value": state["value"] + 1}
+
+    builder = StateGraph(_GraphState)
+    builder.add_node("increment", increment)
+    builder.add_edge(START, "increment")
+    builder.add_edge("increment", END)
+    graph = builder.compile(checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-1"}}
+    await graph.ainvoke({"value": 0}, config)
+    fork_point = (await graph.aget_state(config)).config
+    await graph.ainvoke({"value": 10}, config)
+    other = await saver.aget_tuple(config)
+    assert other is not None
+    source_before = [saved async for saved in saver.alist(config)]
+
+    transient = TransientCheckpointSaver(saver)
+    branch = graph.copy(update={"checkpointer": transient})
+    result = await branch.ainvoke({"value": 20}, fork_point)
+    current = await branch.aget_state(config)
+    checkpoint = await transient.aget_tuple(current.config)
+    assert checkpoint is not None
+    version = checkpoint.checkpoint["channel_versions"]["value"]
+    assert isinstance(version, int)
+    assert version == other.checkpoint["channel_versions"]["value"]
+
+    historical = await branch.aget_state(other.config)
+    after = await branch.aget_state(config)
+    assert result == current.values == {"value": 21}
+    assert historical.values == {"value": 11}
+    assert after.config == current.config
+    assert after.values == current.values
+    history = [saved async for saved in transient.alist(config)]
+    assert (
+        next(
+            saved
+            for saved in history
+            if saved.checkpoint["id"] == checkpoint.checkpoint["id"]
+        ).checkpoint
+        == checkpoint.checkpoint
+    )
+    assert [saved async for saved in saver.alist(config)] == source_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preload", [False, True])
+async def test_transient_pending_writes_preserve_foundry_indices(
+    saver_and_store: tuple[FoundryCheckpointSaver, _FakeStateStore],
+    preload: bool,
+) -> None:
+    saver, store = saver_and_store
+    config = await saver.aput(_config(), _checkpoint("001", "saved"), {}, {})
+    await saver.aput_writes(config, [("__interrupt__", ["question"])], "task")
+    writes = [("__resume__", ["yes"]), ("history", ["same"]), ("history", ["same"])]
+    await saver.aput_writes(config, writes, "task")
+    source_before = await saver.aget_tuple(config)
+    items_before = dict(store.items)
+    assert source_before is not None
+
+    branch = TransientCheckpointSaver(saver)
+    if preload:
+        assert await branch.aget_tuple(config) is not None
+    await branch.aput_writes(config, writes, "task")
+    local = await branch.aget_tuple(config)
+    assert local is not None
+    assert local.pending_writes == source_before.pending_writes
+    assert [saved async for saved in branch.alist(_config())] == [local]
+    assert store.items == items_before
+    assert await saver.aget_tuple(config) == source_before
 
 
 @pytest.mark.asyncio

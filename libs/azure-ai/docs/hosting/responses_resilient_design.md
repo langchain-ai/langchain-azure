@@ -73,13 +73,52 @@ checkpointer. Without the conversation checkpoint reference, the checkpointer
 may contain dangling work that advanced beyond the last committed Responses
 boundary, and a later turn would not know which checkpoint is authoritative.
 
+### Non-stored Turns
+
+For `store=false`, the host reads the committed conversation checkpoint into a
+request-local in-memory branch. Graph checkpoints and pending writes stay in
+that branch; the configured LangGraph saver and the conversation checkpoint
+reference are not updated. The host does not emit SDK recovery checkpoint
+events for the turn. This applies to both streaming and non-streaming requests.
+
+Pending-write indices are preserved for Foundry, in-memory, and SQLite savers.
+Other savers must expose original indices to import ordinary pending writes;
+otherwise the request fails explicitly rather than risking duplicate outputs.
+
+Built-in Foundry conversation and checkpoint reads never create a state store.
+If a store does not exist, the read returns no saved state without creating an
+empty store or its metadata. Only write operations create missing stores.
+Reads of existing stores preserve their properties and stored items. Storage
+failures other than a missing store continue to propagate.
+
+**Crash recovery is not supported for `store=false`**, including when the server
+enables `resilient_background`. Request-local checkpoints only support normal
+conversation reads and interrupt handling within the isolated branch; they are
+not recovery checkpoints and do not survive a process crash.
+
+- The host never restores a persisted response snapshot for a non-stored turn.
+- If a non-stored turn is invoked with `context.is_recovery=True`, it emits
+  `response.failed` with code `unsupported_recovery` before reading graph state
+  or executing graph nodes. It does not replay the request input.
+- On graceful shutdown, a non-stored turn emits `response.failed` with code
+  `server_shutdown`. It never calls `context.exit_for_recovery()` or leaves the
+  turn waiting for execution in the next process lifetime.
+- After a crash, the client must start a new request. A retry does not resume the
+  discarded branch; tools with external side effects must remain replay-safe.
+
+The branch is discarded after the request, including newly created interrupts.
+A non-stored resume of an existing interrupt leaves the saved interrupt pending.
+This flag does not roll back tool side effects or disable long-term store writes
+or tracing. `store=true` and the default behavior retain the durable flow below;
+Agent Server SDK 2.3.0 rejects `background=true` with `store=false`.
+
 ### State Store client lifetime
 
 Each Responses handler owns a `StateStoreClientFactory` from config resolution
 through the final conversation-chain write. Clients are separate by consumer,
-store name and user; hosted clients share one connection pool. Every acquisition
-refreshes metadata. No checkpoint values or descriptors are cached; isolation and
-TTL remain creation options.
+store name and user; hosted clients share one connection pool. Store existence is
+refreshed on reuse. Reads never create missing stores. No checkpoint values or
+descriptors are cached; isolation and TTL remain creation options.
 
 The factory and request features are bound for each iterator advance or close,
 allowing iteration across Tasks. Reuse stays within one handler and event loop;
@@ -95,9 +134,10 @@ exit; caller cancellation takes precedence. Secondary cleanup errors are logged;
 normal-exit cleanup failures propagate.
 
 A graph-close timeout during normal iteration leaves the conversation-chain
-checkpoint unchanged. Shutdown exits for recovery, client cancellation reports
-`cancelled`, and steering reports `server_error`. Explicit `aclose()` preserves
-generator exit and emits no terminal events, even if cleanup times out.
+checkpoint unchanged. Shutdown exits for recovery for stored turns; non-stored
+turns fail with `server_shutdown`. Client cancellation reports `cancelled`, and
+steering reports `server_error`. Explicit `aclose()` preserves generator exit and
+emits no terminal events, even if cleanup times out.
 Execution errors report `server_error`. All `server_error` messages are
 `An internal error occurred.`; internal details stay in logs.
 
@@ -121,6 +161,9 @@ The recovery behavior depends on these assumptions to work properly:
   These node executions should be side-effect-free or idempotent.
 
 ## Crash Recovery
+
+The recovery flow below applies to stored background responses with
+`resilient_background=True`. Non-stored turns are excluded.
 
 ### Important Events
 
