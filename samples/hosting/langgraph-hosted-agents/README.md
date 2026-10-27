@@ -26,6 +26,16 @@ uses a unified `azure.yaml` instead of separate agent manifests.
 
 ## Start here
 
+These examples focus on SDK usage, including hosting, state, human-in-the-loop,
+resilience, and extension points. Include platform dependencies where needed;
+SDK-focused does not mean model-only or platform-free.
+
+[Foundry samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph)
+also demonstrate important uses of the LangChain Azure SDK together with
+LangChain, LangGraph, and Deep Agents, alongside platform configuration,
+deployment, and integration. Selected SDK examples can be reused or adapted
+there. The two collections are complementary, not mutually exclusive.
+
 **New to hosting? Start with [Responses Basic](responses/01_basic/README.md).**
 It is the smallest end-to-end example. Use the
 [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
@@ -39,6 +49,8 @@ for the concepts and protocol comparison.
 | Use the Invocations protocol with session continuity | [Invocations Basic](invocations/01_basic/README.md) |
 | Add local, remote MCP, or managed Toolbox tools | [Tools](responses/02_tools/README.md), [MCP](responses/03_mcp/README.md), or [Foundry Toolbox](responses/04_foundry_toolbox/README.md) |
 | Add tracing or human approval | [Observability](responses/07_observability/README.md) or [HITL](responses/08_hitl/README.md) |
+| Compose native LangChain middleware and review tool calls | [Middleware](responses/11_middleware/README.md), including approve, edit, and reject decisions |
+| Combine Deep Agents research, durable state, and published reports | [Deep Agents](responses/12_deep_agents/README.md) and its [platform setup](responses/12_deep_agents/SETUP.md) |
 | Recover background work after a restart | [Responses Resilient](responses/10_resilient/README.md) or [Invocations Resilient](invocations/04_resilient/README.md) |
 
 After choosing a sample, follow [local setup](#running-the-agent-host-locally),

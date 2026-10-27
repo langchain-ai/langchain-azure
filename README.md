@@ -20,9 +20,9 @@ For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Sto
 
 ## Samples
 
-- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
+- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, state, HITL, resilience, and extension points, with platform dependencies where needed.
 - [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
-- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
+- [Foundry samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate the LangChain Azure SDK together with LangChain, LangGraph, and Deep Agents, alongside platform configuration, deployment, and integration. Selected SDK examples can be reused or adapted there.
 
 # Quick Start with langchain-azure-ai
 
