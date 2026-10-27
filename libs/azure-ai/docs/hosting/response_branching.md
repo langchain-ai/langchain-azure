@@ -1,11 +1,12 @@
 # Response Branching
 
-Response branching lets you send new input from the saved graph state of an
-earlier response, called the **parent**. Use it to continue from an answer, try
-a different direction, or regenerate an answer.
+Response branching lets you send new input using the context of an earlier
+response, called the **parent**. Use it to continue from an answer, try a
+different direction, or regenerate an answer.
 
-It is available only through `ResponsesHostServer` and is disabled by default.
-**Response-ID branching requires a stored parent and its exact graph checkpoint.**
+Checkpoint-based branching is available through `ResponsesHostServer` and is
+disabled by default.
+**It requires a stored parent and its exact graph checkpoint.**
 The server must have an explicitly configured **response storage provider** for
 response records, separate from the graph checkpointer.
 
@@ -50,6 +51,31 @@ Checkpoint selection is an internal execution strategy. It must preserve these
 public semantics rather than introduce a separate client protocol.
 
 ## The basic idea
+
+### Without a checkpointer: history-based continuation
+
+Without a graph checkpointer, the host selects `responses_history` mode. The
+Agent Server SDK creates `ResponseContext` from the request and configured
+response provider. The SDK/provider resolves `previous_response_id` to history
+through that response, or `conversation` to that conversation's retained items.
+The host does not implement a separate history lookup for each linkage type.
+
+The host calls `context.get_history()`, converts the returned items to messages,
+and appends the current request input. It runs the graph from its entry point
+with this combined input, rather than resuming a saved execution.
+
+This supports message-history continuation and branching while the required
+history remains readable. It does not restore custom graph state, completed-node
+progress, or pending interrupts. A `thread_id` alone does not provide persistence.
+No graph checkpoint or checkpoint-branching opt-in is required; SDK reference
+validation and request retention rules still apply.
+
+### With a checkpointer: checkpoint-based branching
+
+With a graph checkpointer, the host selects `langgraph_checkpoint` mode: prior
+state comes from a checkpoint, so only the current request input is passed to
+the graph. The checkpoint-specific eligibility, storage, and recovery rules
+below describe this mode, not history-based continuation.
 
 A **checkpoint** is saved LangGraph execution state, including messages and
 other graph state. Each reusable response points to its own final checkpoint.
@@ -172,9 +198,9 @@ B and C each start from A's exact checkpoint, independently of one another.
 
 ## Requirements and request rules
 
-This scope covers finished-parent branching. Parents with outstanding function
-calls or MCP approval requests remain ineligible even when matching replies are
-supplied; their support is deferred to
+The parent eligibility rules below cover finished-parent checkpoint branching.
+Parents with outstanding function calls or MCP approval requests remain ineligible
+even when matching replies are supplied; their support is deferred to
 [Future scope](#future-scope-function-calls-and-mcp-approvals).
 Ordinary tool and approval continuation behavior is unchanged.
 
@@ -368,8 +394,9 @@ host lifecycle requirement, not a claim about OpenAI's internal storage design.
 
 ## What must be stored?
 
-Branching needs **both** response records and graph checkpoints. Conversation
-continuation also needs a retained head mapping:
+History-based continuation uses SDK-managed response and history storage.
+Checkpoint-based branching additionally needs graph checkpoints, and checkpointed
+conversation continuation needs a retained head mapping:
 
 | Data                                                               | Where it lives             | How to configure it                                |
 | ------------------------------------------------------------------ | -------------------------- | -------------------------------------------------- |
