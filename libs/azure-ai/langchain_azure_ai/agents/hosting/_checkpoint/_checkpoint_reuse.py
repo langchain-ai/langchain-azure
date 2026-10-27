@@ -38,9 +38,16 @@ def _copy_tuple(value: CheckpointTuple, serde: SerializerProtocol) -> Checkpoint
     def clone(stored_value: Any) -> Any:
         return serde.loads_typed(serde.dumps_typed(stored_value))
 
+    header = dict(value.checkpoint)
+    del header["channel_values"]
+    checkpoint = clone(header)
+    checkpoint["channel_values"] = {
+        channel: clone(channel_value)
+        for channel, channel_value in value.checkpoint["channel_values"].items()
+    }
     return CheckpointTuple(
         config=_copy_config(value.config) or {},
-        checkpoint=clone(value.checkpoint),
+        checkpoint=checkpoint,
         metadata=clone(value.metadata),
         parent_config=_copy_config(value.parent_config),
         pending_writes=(

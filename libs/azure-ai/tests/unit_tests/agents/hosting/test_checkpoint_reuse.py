@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import AsyncIterator
 from contextlib import closing
@@ -68,6 +69,65 @@ async def backend(request: pytest.FixtureRequest) -> AsyncIterator[BaseCheckpoin
 class _StateWithPrivateLock(BaseModel):
     value: str
     _lock: Any = PrivateAttr(default_factory=threading.Lock)
+
+
+class _JsonWithBinaryTags:
+    def dumps_typed(self, value: Any) -> tuple[str, bytes]:
+        if isinstance(value, (bytes, bytearray)):
+            return type(value).__name__, bytes(value)
+        return "json", json.dumps(value).encode("utf-8")
+
+    def loads_typed(self, value: tuple[str, bytes]) -> Any:
+        kind, data = value
+        if kind == "bytes":
+            return data
+        if kind == "bytearray":
+            return bytearray(data)
+        return json.loads(data)
+
+
+@pytest.mark.parametrize(
+    "payload", [b"input", bytearray(b"input")], ids=["bytes", "bytearray"]
+)
+async def test_cache_clones_binary_channels_separately_from_header(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes | bytearray
+) -> None:
+    backend = InMemorySaver(serde=_JsonWithBinaryTags())
+    checkpoint = _checkpoint("0001", "input")
+    checkpoint["channel_values"]["binary"] = payload
+    checkpoint["channel_versions"]["binary"] = 1
+    config = await backend.aput(
+        _config(), checkpoint, {}, checkpoint["channel_versions"]
+    )
+    await backend.aput_writes(config, [("binary", payload)], "task")
+    assert await backend.aget_tuple(config) is not None
+    load = AsyncMock(wraps=backend.aget_tuple)
+    monkeypatch.setattr(backend, "aget_tuple", load)
+    saver = _RequestCheckpointSaver(backend)
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        first = await saver.aget_tuple(config)
+        assert first is not None
+        first.checkpoint["channel_values"]["messages"].append("modified")
+        first.checkpoint["versions_seen"]["node"] = {"binary": 2}
+        first_binary = first.checkpoint["channel_values"]["binary"]
+        if isinstance(first_binary, bytearray):
+            first_binary.extend(b" modified")
+        for selected in (_config(), config):
+            cached = await saver.aget_tuple(selected)
+            assert cached is not None
+            assert cached.checkpoint["channel_values"] == {
+                "messages": ["input"],
+                "binary": payload,
+            }
+            assert type(cached.checkpoint["channel_values"]["binary"]) is type(payload)
+            assert cached.checkpoint["versions_seen"] == {}
+            assert cached.pending_writes == [("task", "binary", payload)]
+            cached.checkpoint["channel_values"]["messages"].append("modified again")
+            cached_binary = cached.checkpoint["channel_values"]["binary"]
+            if isinstance(cached_binary, bytearray):
+                cached_binary.extend(b" modified again")
+        load.assert_awaited_once()
 
 
 async def test_cache_supports_serializable_state_that_cannot_be_deepcopied(
