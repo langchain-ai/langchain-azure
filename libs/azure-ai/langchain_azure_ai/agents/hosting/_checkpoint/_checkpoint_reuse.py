@@ -5,12 +5,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
-from inspect import signature
+from inspect import Parameter, signature
 from typing import Any, NamedTuple
 
 from azure.ai.agentserver.core import get_request_context
@@ -34,48 +34,101 @@ def _copy_config(config: RunnableConfig | None) -> RunnableConfig | None:
     return {**config, "configurable": dict(config.get("configurable") or {})}
 
 
-def _copy_tuple(value: CheckpointTuple, serde: SerializerProtocol) -> CheckpointTuple:
-    def clone(stored_value: Any) -> Any:
-        return serde.loads_typed(serde.dumps_typed(stored_value))
-
-    header = dict(value.checkpoint)
-    del header["channel_values"]
-    checkpoint = clone(header)
-    checkpoint["channel_values"] = {
-        channel: clone(channel_value)
-        for channel, channel_value in value.checkpoint["channel_values"].items()
+def _reference_config(
+    config: RunnableConfig | None, keys: set[str]
+) -> RunnableConfig | None:
+    if config is None:
+        return None
+    return {
+        "configurable": deepcopy(
+            {
+                key: value
+                for key, value in (config.get("configurable") or {}).items()
+                if key in keys
+            }
+        )
     }
-    return CheckpointTuple(
-        config=_copy_config(value.config) or {},
-        checkpoint=checkpoint,
-        metadata=clone(value.metadata),
-        parent_config=_copy_config(value.parent_config),
-        pending_writes=(
+
+
+class _SerializedCheckpoint(NamedTuple):
+    config: RunnableConfig
+    parent_config: RunnableConfig | None
+    header: tuple[str, bytes]
+    channels: dict[str, tuple[str, bytes]]
+    metadata: tuple[str, bytes]
+    writes: list[tuple[str, str, tuple[str, bytes]]] | None
+
+    @classmethod
+    def create(
+        cls, value: CheckpointTuple, serde: SerializerProtocol, keys: set[str]
+    ) -> _SerializedCheckpoint:
+        header = dict(value.checkpoint)
+        del header["channel_values"]
+        return cls(
+            _reference_config(value.config, keys) or {},
+            _reference_config(value.parent_config, keys),
+            serde.dumps_typed(header),
+            {
+                channel: serde.dumps_typed(item)
+                for channel, item in value.checkpoint["channel_values"].items()
+            },
+            serde.dumps_typed(value.metadata),
             [
-                (task, channel, clone(output))
-                for task, channel, output in value.pending_writes
+                (task, channel, serde.dumps_typed(item))
+                for task, channel, item in value.pending_writes
             ]
             if value.pending_writes is not None
-            else None
-        ),
+            else None,
+        )
+
+    def restore(
+        self, serde: SerializerProtocol, config: RunnableConfig
+    ) -> CheckpointTuple:
+        checkpoint = serde.loads_typed(self.header)
+        checkpoint["channel_values"] = {
+            channel: serde.loads_typed(item) for channel, item in self.channels.items()
+        }
+        return CheckpointTuple(
+            config={
+                **config,
+                "configurable": {
+                    **(config.get("configurable") or {}),
+                    **(self.config.get("configurable") or {}),
+                },
+            },
+            checkpoint=checkpoint,
+            metadata=serde.loads_typed(self.metadata),
+            parent_config=_copy_config(self.parent_config),
+            pending_writes=[
+                (task, channel, serde.loads_typed(item))
+                for task, channel, item in self.writes
+            ]
+            if self.writes is not None
+            else None,
+        )
+
+
+def _accepts_task_path(method: Callable[..., Any]) -> bool:
+    return any(
+        parameter.name == "task_path" or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in signature(method).parameters.values()
     )
 
 
 class _CachedCheckpoint(NamedTuple):
     """A cached result, including a confirmed missing checkpoint."""
 
-    value: CheckpointTuple | None
+    value: _SerializedCheckpoint | None
     allowlist: frozenset[tuple[str, ...]]
+    config_values: dict[str, Any]
 
 
 @dataclass
 class _CheckpointReadContext:
-    """Keep one request's input snapshot separate from its advancing output."""
+    """Reuse only exact reads of one request's input checkpoint."""
 
     key: tuple[object, str | None, str, str] | None = None
     input_checkpoint_id: str | None = None
-    latest_checkpoint_id: str | None = None
-    resolved: bool = False
     active: bool = True
     cache_enabled: bool = True
     cache: _CachedCheckpoint | None = None
@@ -101,8 +154,6 @@ class _CheckpointReadContext:
                 namespace,
             )
             self.input_checkpoint_id = get_checkpoint_id(config)
-            self.latest_checkpoint_id = self.input_checkpoint_id
-            self.resolved = bool(self.input_checkpoint_id)
 
     @contextmanager
     def bind(self) -> Iterator[None]:
@@ -139,9 +190,18 @@ class _RequestCheckpointSaver(ObjectProxy):
         super().__init__(saver)
         self._self_cache_owner = saver if cache_owner is None else cache_owner
         self._self_allowlist = allowlist
-        self._self_accepts_task_path = (
-            "task_path" in signature(saver.aput_writes).parameters
-        )
+        self._self_async_task_path = _accepts_task_path(saver.aput_writes)
+        self._self_sync_task_path = _accepts_task_path(saver.put_writes)
+        self._self_extra_config_keys = {spec.id for spec in saver.config_specs} - {
+            "thread_id",
+            "checkpoint_ns",
+            "checkpoint_id",
+        }
+        self._self_reference_keys = self._self_extra_config_keys | {
+            "thread_id",
+            "checkpoint_ns",
+            "checkpoint_id",
+        }
 
     def __copy__(self) -> _RequestCheckpointSaver:
         return type(self)(
@@ -163,7 +223,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         )
 
     def _read_context(
-        self, thread_id: str | None, namespace: str | None = None
+        self, thread_id: str | None = None, namespace: str | None = None
     ) -> _CheckpointReadContext | None:
         reads = _checkpoint_reads.get()
         if reads is None or not reads.active or reads.key is None:
@@ -172,7 +232,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         if (
             owner is self._self_cache_owner
             and user_id == get_request_context().user_id
-            and request_thread_id == thread_id
+            and (thread_id is None or request_thread_id == thread_id)
             and (namespace is None or request_namespace == namespace)
         ):
             return reads
@@ -180,7 +240,9 @@ class _RequestCheckpointSaver(ObjectProxy):
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         configurable = config.get("configurable") or {}
-        if not isinstance(configurable.get("checkpoint_ns", ""), str):
+        if not isinstance(configurable.get("thread_id"), str) or not isinstance(
+            configurable.get("checkpoint_ns", ""), str
+        ):
             return await self.__wrapped__.aget_tuple(config)
         reads = self._read_context(
             configurable.get("thread_id"), configurable.get("checkpoint_ns", "")
@@ -188,16 +250,11 @@ class _RequestCheckpointSaver(ObjectProxy):
         if reads is None:
             return await self.__wrapped__.aget_tuple(config)
         checkpoint_id = get_checkpoint_id(config)
-        if not checkpoint_id and reads.resolved:
-            checkpoint_id = reads.latest_checkpoint_id
-            if checkpoint_id is None:
-                return None
-            config = {
-                **config,
-                "configurable": {**configurable, "checkpoint_id": checkpoint_id},
-            }
-        cacheable = reads.cache_enabled and (
-            not checkpoint_id or checkpoint_id == reads.input_checkpoint_id
+        # Checkpoint-less reads must reach storage for LangGraph's fork protection.
+        cacheable = (
+            bool(checkpoint_id)
+            and reads.cache_enabled
+            and checkpoint_id == reads.input_checkpoint_id
         )
         try:
             cached = reads.cache
@@ -206,24 +263,38 @@ class _RequestCheckpointSaver(ObjectProxy):
                 and cached is not None
                 and cached.allowlist == self._self_allowlist
             ):
-                return (
-                    _copy_tuple(cached.value, self.serde)
-                    if cached.value is not None
-                    else None
-                )
+                try:
+                    if cached.config_values == {
+                        key: configurable.get(key)
+                        for key in self._self_extra_config_keys
+                    }:
+                        return (
+                            cached.value.restore(self.serde, config)
+                            if cached.value is not None
+                            else None
+                        )
+                except Exception:
+                    reads.invalidate()
             result = await self.__wrapped__.aget_tuple(config)
             # A write may have disabled caching while this read awaited storage.
             if cacheable and reads.active and reads.cache_enabled:
-                reads.cache = _CachedCheckpoint(
-                    _copy_tuple(result, self.serde) if result is not None else None,
-                    self._self_allowlist,
-                )
-                if not reads.resolved:
-                    reads.input_checkpoint_id = (
-                        get_checkpoint_id(result.config) if result is not None else None
+                try:
+                    reads.cache = _CachedCheckpoint(
+                        _SerializedCheckpoint.create(
+                            result, self.serde, self._self_reference_keys
+                        )
+                        if result is not None
+                        else None,
+                        self._self_allowlist,
+                        deepcopy(
+                            {
+                                key: configurable.get(key)
+                                for key in self._self_extra_config_keys
+                            }
+                        ),
                     )
-                    reads.latest_checkpoint_id = reads.input_checkpoint_id
-                    reads.resolved = True
+                except Exception:
+                    reads.invalidate()
             return result
         except BaseException:
             reads.invalidate()
@@ -240,19 +311,8 @@ class _RequestCheckpointSaver(ObjectProxy):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        configurable = config.get("configurable") or {}
-        reads = self._read_context(
-            configurable.get("thread_id"), configurable.get("checkpoint_ns", "")
-        )
-        if reads is not None:
-            reads.invalidate()
-        result = await self.__wrapped__.aput(config, checkpoint, metadata, new_versions)
-        if reads is not None and reads.active:
-            reads.latest_checkpoint_id = max(
-                reads.latest_checkpoint_id or "", checkpoint["id"]
-            )
-            reads.resolved = True
-        return result
+        self._invalidate_config(config)
+        return await self.__wrapped__.aput(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(
         self,
@@ -261,20 +321,80 @@ class _RequestCheckpointSaver(ObjectProxy):
         task_id: str,
         task_path: str = "",
     ) -> None:
+        self._invalidate_config(config)
+        kwargs = {"task_path": task_path} if self._self_async_task_path else {}
+        await self.__wrapped__.aput_writes(config, writes, task_id, **kwargs)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        self._invalidate_threads([thread_id])
+        await self.__wrapped__.adelete_thread(thread_id)
+
+    def _invalidate_config(self, config: RunnableConfig) -> None:
         configurable = config.get("configurable") or {}
         reads = self._read_context(
             configurable.get("thread_id"), configurable.get("checkpoint_ns", "")
         )
         if reads is not None:
             reads.invalidate()
-        kwargs = {"task_path": task_path} if self._self_accepts_task_path else {}
-        await self.__wrapped__.aput_writes(config, writes, task_id, **kwargs)
 
-    async def adelete_thread(self, thread_id: str) -> None:
-        reads = self._read_context(thread_id)
-        if reads is not None:
+    def _invalidate_threads(self, thread_ids: Sequence[str] | None = None) -> None:
+        reads = self._read_context()
+        if (
+            reads is not None
+            and reads.key is not None
+            and (thread_ids is None or reads.key[2] in thread_ids)
+        ):
             reads.invalidate()
-        await self.__wrapped__.adelete_thread(thread_id)
-        if reads is not None and reads.active:
-            reads.latest_checkpoint_id = None
-            reads.resolved = True
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        self._invalidate_config(config)
+        return self.__wrapped__.put(config, checkpoint, metadata, new_versions)
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        self._invalidate_config(config)
+        kwargs = {"task_path": task_path} if self._self_sync_task_path else {}
+        self.__wrapped__.put_writes(config, writes, task_id, **kwargs)
+
+    def delete_thread(self, thread_id: str) -> None:
+        self._invalidate_threads([thread_id])
+        self.__wrapped__.delete_thread(thread_id)
+
+    def delete_for_runs(self, run_ids: Sequence[str]) -> None:
+        self._invalidate_threads()
+        self.__wrapped__.delete_for_runs(run_ids)
+
+    async def adelete_for_runs(self, run_ids: Sequence[str]) -> None:
+        self._invalidate_threads()
+        await self.__wrapped__.adelete_for_runs(run_ids)
+
+    def copy_thread(self, source_thread_id: str, target_thread_id: str) -> None:
+        self._invalidate_threads([target_thread_id])
+        self.__wrapped__.copy_thread(source_thread_id, target_thread_id)
+
+    async def acopy_thread(self, source_thread_id: str, target_thread_id: str) -> None:
+        self._invalidate_threads([target_thread_id])
+        await self.__wrapped__.acopy_thread(source_thread_id, target_thread_id)
+
+    def prune(
+        self, thread_ids: Sequence[str], *, strategy: str = "keep_latest"
+    ) -> None:
+        self._invalidate_threads(thread_ids)
+        self.__wrapped__.prune(thread_ids, strategy=strategy)
+
+    async def aprune(
+        self, thread_ids: Sequence[str], *, strategy: str = "keep_latest"
+    ) -> None:
+        self._invalidate_threads(thread_ids)
+        await self.__wrapped__.aprune(thread_ids, strategy=strategy)

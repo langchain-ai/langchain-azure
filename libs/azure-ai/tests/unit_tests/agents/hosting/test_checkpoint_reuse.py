@@ -12,8 +12,8 @@ from collections.abc import AsyncIterator
 from contextlib import closing
 from copy import copy
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from typing import Annotated, Any
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from azure.ai.agentserver.core import (
@@ -21,11 +21,16 @@ from azure.ai.agentserver.core import (
     reset_request_context,
     set_request_context,
 )
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.runnables import ConfigurableFieldSpec, RunnableConfig
+from langgraph.channels import DeltaChannel
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, PrivateAttr
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import (
     FoundryCheckpointSaver,
@@ -127,7 +132,9 @@ async def test_cache_clones_binary_channels_separately_from_header(
             cached_binary = cached.checkpoint["channel_values"]["binary"]
             if isinstance(cached_binary, bytearray):
                 cached_binary.extend(b" modified again")
-        load.assert_awaited_once()
+        assert (
+            load.await_count == 2
+        )  # Exact input is cached; latest still reads storage.
 
 
 async def test_cache_supports_serializable_state_that_cannot_be_deepcopied(
@@ -184,7 +191,7 @@ async def test_decorator_reuses_any_backend_without_copying_runtime_context(
         assert await saver.aget(config) == latest.checkpoint
         if "response_context" in latest.config["configurable"]:
             assert latest.config["configurable"]["response_context"] is runtime
-        load.assert_awaited_once()
+        assert load.await_count == 2
 
 
 async def test_cache_distinguishes_savers_that_compare_equal() -> None:
@@ -214,7 +221,13 @@ async def test_decorator_reuses_cosmos_checkpoint(
     backend = cosmos.CosmosDBSaver(container)
     config = await backend.aput(_config(), _checkpoint("0001", "input"), {}, {})
     document = container.upsert_item.call_args.args[0]
-    query = AsyncMock(side_effect=[[document], []])
+
+    async def lookup(query: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        if "TOP 1" in query:
+            return [{"id": document["id"]}]
+        return [document] if "c.id=@checkpoint_key" in query else []
+
+    query = AsyncMock(side_effect=lookup)
     monkeypatch.setattr(backend, "_query_items", query)
     saver = _RequestCheckpointSaver(backend)
     with closing(_CheckpointReadContext()) as reads, reads.bind():
@@ -224,9 +237,9 @@ async def test_decorator_reuses_cosmos_checkpoint(
         assert await saver.aget_tuple(_config()) == first
         assert await saver.aget_tuple(config) == first
         assert (
-            query.await_count == 2
-        )  # One checkpoint query and one pending-write query.
-        assert all("TOP 1" not in call.args[0] for call in query.await_args_list)
+            query.await_count == 5
+        )  # Two exact-load queries plus three latest queries.
+        assert sum("TOP 1" in call.args[0] for call in query.await_args_list) == 1
 
 
 async def test_decorator_preserves_backend_capabilities_and_allowlist_clones(
@@ -248,13 +261,13 @@ async def test_decorator_preserves_backend_capabilities_and_allowlist_clones(
         assert isinstance(clone, _RequestCheckpointSaver)
         assert clone._self_cache_owner is backend
         assert copy(clone)._self_cache_owner is backend
-        assert await clone.aget_tuple(_config()) == first
+        assert await clone.aget_tuple(config) == first
         assert load.await_count == 2
     load.reset_mock()
     with closing(_CheckpointReadContext()) as reads, reads.bind():
         reads.pin(saver, config)
         assert await clone.aget_tuple(config) == first
-        assert await copy(clone).aget_tuple(_config()) == first
+        assert await copy(clone).aget_tuple(config) == first
         load.assert_awaited_once()
 
 
@@ -277,9 +290,7 @@ async def test_request_pins_input_and_returns_independent_snapshots(
         if first.pending_writes:
             first.pending_writes[0][2]["values"].append("modified")
         exact = await saver.aget_tuple(config)
-        latest = await saver.aget_tuple(_config())
-        assert exact == latest
-        assert exact is not None and exact is not latest
+        assert exact is not None and exact is not first
         assert exact.checkpoint["channel_values"]["messages"] == ["input"]
         assert exact.metadata.get("step") != 999
         assert exact.pending_writes == [
@@ -287,13 +298,18 @@ async def test_request_pins_input_and_returns_independent_snapshots(
         ]
         assert len(store.get_item_calls) == write_count + 1
         assert all(call["tags"]["kind"] == "write" for call in store.list_keys_calls)
+        latest = await saver.aget_tuple(_config())
+        assert latest is not None and latest.config == _config("0002")
+        assert await saver.aget_tuple(config) == exact
+        assert len(store.get_item_calls) == write_count + 2
+        assert reads.input_checkpoint_id == "0001"
     assert reads.cache is None
     latest = await saver.aget_tuple(_config())
     assert latest is not None and latest.config == _config("0002")
 
 
 @pytest.mark.parametrize("existing", [False, True])
-async def test_request_without_reference_resolves_input_only_once(
+async def test_checkpointless_reads_always_observe_backend_head(
     saver_and_store: tuple[_RequestCheckpointSaver, _FakeStateStore], existing: bool
 ) -> None:
     saver, store = saver_and_store
@@ -304,8 +320,14 @@ async def test_request_without_reference_resolves_input_only_once(
         first = await saver.aget_tuple(_config())
         other = FoundryCheckpointSaver(_credential())
         await other.aput(_config(), _checkpoint("0002", "remote"), {}, {})
-        assert await saver.aget_tuple(_config()) == first
-        assert len(store.list_keys_calls) == (2 if existing else 1)
+        latest = await saver.aget_tuple(_config())
+        assert latest is not None and latest.config == _config("0002")
+        assert first is None or first.config == _config("0001")
+        assert reads.cache is None
+        assert (
+            sum(call["tags"]["kind"] == "checkpoint" for call in store.list_keys_calls)
+            == 2
+        )
 
 
 @pytest.mark.parametrize("mutation", ["checkpoint", "writes", "failure", "delete"])
@@ -417,3 +439,261 @@ async def test_inflight_read_cannot_refill_cache_after_mutation(
         result = await saver.aget_tuple(config)
         assert result is not None
         assert result.pending_writes == [("task", "messages", "output")]
+
+
+def _append_deltas(state: list[str], updates: list[list[str]]) -> list[str]:
+    return state + [item for update in updates for item in update]
+
+
+class _DeltaState(TypedDict):
+    items: Annotated[list[str], DeltaChannel(_append_deltas)]
+
+
+async def test_historical_update_preserves_existing_delta_descendant() -> None:
+    backend = InMemorySaver()
+    builder = StateGraph(_DeltaState)
+    builder.add_node("step", lambda state: {"items": ["B"]})
+    builder.add_edge(START, "step")
+    builder.add_edge("step", END)
+    graph = builder.compile(checkpointer=backend)
+    await graph.ainvoke({"items": ["A"]}, _config())
+    head = await graph.aget_state(_config())
+    ancestor = head.parent_config
+    assert ancestor is not None
+    saver = _RequestCheckpointSaver(backend)
+    wrapped = graph.copy({"checkpointer": saver})
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, ancestor)
+        branch = await wrapped.aupdate_state(
+            ancestor,
+            {"items": ["C"]},
+            as_node="step",
+            task_id="00000000-0000-0000-0000-000000000001",
+        )
+    assert (await graph.aget_state(head.config)).values["items"] == ["A", "B"]
+    assert (await graph.aget_state(branch)).values["items"] == ["A", "C"]
+
+
+async def test_failed_turn_resume_replays_a_superseded_checkpoint() -> None:
+    class State(TypedDict):
+        approved: bool
+        done: bool
+
+    approvals = 0
+    finishes = 0
+
+    def approve(state: State) -> dict[str, bool]:
+        nonlocal approvals
+        answer = interrupt("Approve?")
+        approvals += 1
+        return {"approved": answer}
+
+    def finish(state: State) -> dict[str, bool]:
+        nonlocal finishes
+        finishes += 1
+        if finishes == 1:
+            raise RuntimeError("failed turn")
+        return {"done": True}
+
+    backend = InMemorySaver()
+    builder = StateGraph(State)
+    builder.add_node("approve", approve)
+    builder.add_node("finish", finish)
+    builder.add_edge(START, "approve")
+    builder.add_edge("approve", "finish")
+    builder.add_edge("finish", END)
+    graph = builder.compile(checkpointer=backend)
+    await graph.ainvoke({"approved": False, "done": False}, _config())
+    paused = (await graph.aget_state(_config())).config
+    with pytest.raises(RuntimeError, match="failed turn"):
+        await graph.ainvoke(Command(resume=True), paused)
+    saver = _RequestCheckpointSaver(backend)
+    wrapped = graph.copy({"checkpointer": saver})
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, paused)
+        result = await wrapped.ainvoke(Command(resume=True), paused)
+    assert result["done"]
+    assert approvals == finishes == 2
+
+
+@pytest.mark.parametrize("failure", ["encode", "decode"])
+async def test_cache_copy_failure_falls_back_to_backend(
+    backend: BaseCheckpointSaver, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    checkpoint = _checkpoint("0001", "input")
+    config = await backend.aput(
+        _config(), checkpoint, {}, checkpoint["channel_versions"]
+    )
+    saver = _RequestCheckpointSaver(backend)
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        if failure == "decode":
+            await saver.aget_tuple(config)
+            original = backend.serde.loads_typed
+            failed = False
+
+            def fail_once(value: tuple[str, bytes]) -> Any:
+                nonlocal failed
+                if not failed:
+                    failed = True
+                    raise ValueError("cache decode")
+                return original(value)
+
+            monkeypatch.setattr(backend.serde, "loads_typed", fail_once)
+        else:
+            monkeypatch.setattr(
+                backend.serde,
+                "dumps_typed",
+                Mock(side_effect=ValueError("cache encode")),
+            )
+        for _ in range(2):
+            result = await saver.aget_tuple(config)
+            assert result is not None
+            assert result.checkpoint["channel_values"]["messages"] == ["input"]
+        assert reads.cache is None and not reads.cache_enabled
+
+
+async def test_cache_hits_only_deserialize_and_use_current_config(
+    backend: BaseCheckpointSaver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = _checkpoint("0001", "input")
+    config = await backend.aput(
+        _config(), checkpoint, {}, checkpoint["channel_versions"]
+    )
+    encode = Mock(wraps=backend.serde.dumps_typed)
+    monkeypatch.setattr(backend.serde, "dumps_typed", encode)
+    saver = _RequestCheckpointSaver(backend)
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        first: RunnableConfig = {
+            **config,
+            "configurable": {**config["configurable"], "marker": "first"},
+        }
+        await saver.aget_tuple(first)
+        calls = encode.call_count
+        second: RunnableConfig = {
+            **config,
+            "configurable": {**config["configurable"], "marker": "second"},
+        }
+        cached = await saver.aget_tuple(second)
+        assert cached is not None
+        assert cached.config["configurable"]["marker"] == "second"
+        assert encode.call_count == calls
+        bare = await saver.aget_tuple(config)
+        assert bare is not None and "marker" not in bare.config["configurable"]
+
+
+@pytest.mark.parametrize("missing_first", [False, True])
+async def test_cache_preserves_backend_locator_fields_without_cross_partition_reuse(
+    monkeypatch: pytest.MonkeyPatch, missing_first: bool
+) -> None:
+    class PartitionSaver(InMemorySaver):
+        @property
+        def config_specs(self) -> list[ConfigurableFieldSpec]:
+            return [ConfigurableFieldSpec(id="partition", annotation=str)]
+
+        async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+            if missing_first and config["configurable"]["partition"] == "first":
+                return None
+            result = await super().aget_tuple(config)
+            if result is not None:
+                result.checkpoint["channel_values"]["messages"] = [
+                    config["configurable"]["partition"]
+                ]
+            return result
+
+    backend = PartitionSaver()
+    checkpoint = _checkpoint("0001", "input")
+    config = await backend.aput(
+        _config(), checkpoint, {}, checkpoint["channel_versions"]
+    )
+    load = AsyncMock(wraps=backend.aget_tuple)
+    monkeypatch.setattr(backend, "aget_tuple", load)
+    saver = _RequestCheckpointSaver(backend)
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        for partition in ("first", "second", "second"):
+            selected: RunnableConfig = {
+                **config,
+                "configurable": {**config["configurable"], "partition": partition},
+            }
+            result = await saver.aget_tuple(selected)
+            if missing_first and partition == "first":
+                assert result is None
+            else:
+                assert result is not None
+                assert result.checkpoint["channel_values"]["messages"] == [partition]
+                assert result.config["configurable"]["partition"] == partition
+        assert load.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "put",
+        "put_writes",
+        "delete_thread",
+        "delete_for_runs",
+        "copy_thread",
+        "prune",
+        "aput",
+        "aput_writes",
+        "adelete_thread",
+        "adelete_for_runs",
+        "acopy_thread",
+        "aprune",
+    ],
+)
+async def test_all_mutators_invalidate_cached_state(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    backend = InMemorySaver()
+    checkpoint = _checkpoint("0001", "input")
+    config = await backend.aput(
+        _config(), checkpoint, {}, checkpoint["channel_versions"]
+    )
+    write = backend.put_writes
+
+    def mutate(*args: Any, **kwargs: Any) -> Any:
+        write(config, [("messages", "changed")], "mutator")
+        return config if method in {"put", "aput"} else None
+
+    operation = (
+        AsyncMock(side_effect=mutate)
+        if method.startswith("a")
+        else Mock(side_effect=mutate)
+    )
+    monkeypatch.setattr(backend, method, operation)
+    saver = _RequestCheckpointSaver(backend)
+    plain = method.removeprefix("a")
+    arguments: dict[str, tuple[Any, ...]] = {
+        "put": (config, checkpoint, {}, {}),
+        "put_writes": (config, [("messages", "changed")], "mutator"),
+        "delete_thread": ("thread-1",),
+        "delete_for_runs": (["run"],),
+        "copy_thread": ("other", "thread-1"),
+        "prune": (["thread-1"],),
+    }
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        await saver.aget_tuple(config)
+        result = getattr(saver, method)(*arguments[plain])
+        if method.startswith("a"):
+            await result
+        fresh = await saver.aget_tuple(config)
+        assert fresh is not None
+        assert fresh.pending_writes == [("mutator", "messages", "changed")]
+
+
+@pytest.mark.parametrize("method", ["put_writes", "aput_writes"])
+async def test_task_path_is_forwarded_through_keyword_arguments(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    backend = InMemorySaver()
+    operation = AsyncMock() if method.startswith("a") else Mock()
+    monkeypatch.setattr(backend, method, operation)
+    saver = _RequestCheckpointSaver(backend)
+    result = getattr(saver, method)(_config("0001"), [], "task", task_path="node")
+    if method.startswith("a"):
+        await result
+    assert operation.call_args.kwargs == {"task_path": "node"}

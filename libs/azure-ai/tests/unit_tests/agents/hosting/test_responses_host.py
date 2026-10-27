@@ -790,8 +790,8 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
             assert len({store.name for store in created}) == 2
             assert len(reference_reads) == 1
             if turn == 2:
-                assert len(checkpoint_reads) == 1, checkpoint_reads
-                assert checkpoint_lists == []
+                assert len(checkpoint_reads) == 2, checkpoint_reads
+                assert len(checkpoint_lists) == 1
 
 
 @pytest.mark.parametrize("recovering", [False, True])
@@ -826,7 +826,6 @@ async def test_request_pins_reference_after_recovery_selection(
         assert reads is not None and reads.key is not None
         assert reads.key[2:] == (reference.thread_id, "")
         assert reads.input_checkpoint_id == reference.checkpoint_id
-        assert reads.latest_checkpoint_id == reference.checkpoint_id
         yield "messages", (AIMessage(content="done"), {})
 
     monkeypatch.setattr(server.graph, "astream", run)

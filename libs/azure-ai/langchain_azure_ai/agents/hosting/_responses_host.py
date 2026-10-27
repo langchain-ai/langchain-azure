@@ -453,7 +453,7 @@ class ResponsesHostServer:
 
     @property
     def graph(self) -> "CompiledStateGraph":
-        """The hosted compiled state graph."""
+        """The hosted graph, copied to decorate a configured checkpoint saver."""
         return self._graph
 
     # ------------------------------------------------------------------
@@ -678,8 +678,9 @@ class ResponsesHostServer:
         Responses provider when possible. Checkpointed graphs
         additionally restore the exact ``(thread_id, checkpoint_id)`` saved
         for this user and conversation chain. With any checkpoint saver,
-        that reference fixes the request's input; execution does not reselect
-        a newer remote checkpoint. The full :class:`ResponseContext`
+        that reference fixes the request's input. Latest-checkpoint queries
+        still reach storage to preserve historical-branch protection.
+        The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
 
