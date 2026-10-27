@@ -18,10 +18,7 @@ from weakref import WeakSet
 import aiohttp
 from anyio import CancelScope
 from azure.ai.agentserver.core import get_request_context
-from azure.ai.agentserver.core.storage import (
-    FoundryStateStore,
-    FoundryStorageNotFoundError,
-)
+from azure.ai.agentserver.core.storage import FoundryStateStore
 from azure.core.pipeline.transport import AioHttpTransport
 
 logger = logging.getLogger(__name__)
@@ -114,7 +111,7 @@ class StateStoreClientFactory:
 
     A consumer instance supplies fixed credentials, endpoint and client options.
     Distinct consumers, store names and platform users never share a client.
-    Only the connection pool is shared; descriptors are refreshed on every use.
+    Stores are resolved once per handler; explicit saver deletion resets reuse.
     All borrowers must run on the event loop that created the factory.
     """
 
@@ -153,57 +150,62 @@ class StateStoreClientFactory:
         *args: Any,
         **options: Any,
     ) -> FoundryStateStore:
-        """Resolve a client while preserving get_or_create's metadata read."""
+        """Resolve a store once and lend its client until handler exit or deletion."""
         # Each consumer instance fixes endpoint, credential and pipeline options.
         key = (owner, name, get_request_context().user_id)
-        while True:
+        if self.closed:
+            raise RuntimeError("State Store client factory has already ended")
+        store = self.clients.get(key)
+        if store is not None:
+            return store
+        async with self.locks.setdefault(key, asyncio.Lock()):
             if self.closed:
                 raise RuntimeError("State Store client factory has already ended")
             store = self.clients.get(key)
             if store is not None:
-                try:
-                    # Replace get_or_create's metadata read, never cache descriptors.
-                    await store.get()
-                    return store
-                except FoundryStorageNotFoundError:
-                    pass
-            async with self.locks.setdefault(key, asyncio.Lock()):
-                if self.closed:
-                    raise RuntimeError("State Store client factory has already ended")
-                # A concurrent acquisition may have replaced the missing client.
-                if self.clients.get(key) is not store:
-                    continue
-                if store is not None:
-                    # Existing borrowers retain the old client until scope exit.
-                    del self.clients[key]
-                if os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
-                    if self.session is None:
-                        self.session = aiohttp.ClientSession(
-                            cookie_jar=aiohttp.DummyCookieJar(),
-                            trust_env=True,
-                            auto_decompress=False,
-                        )
-                        self.stack.push_async_callback(
-                            _close_resource, self.session.close, "shared_session", self
-                        )
-                    options["transport"] = AioHttpTransport(
-                        session=self.session,
-                        session_owner=False,
-                        **{
-                            option: options[option]
-                            for option in _CONNECTION_OPTIONS
-                            if option in options
-                        },
-                    )
-                store = await store_type.get_or_create(name, *args, **options)
-                if self.closed:
-                    await _close_resource(store.aclose, "store_client", self)
-                    raise RuntimeError("State Store client factory has already ended")
-                self.stack.push_async_callback(
-                    _close_resource, store.aclose, "store_client", self
-                )
-                self.clients[key] = store
                 return store
+            if os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
+                if self.session is None:
+                    self.session = aiohttp.ClientSession(
+                        cookie_jar=aiohttp.DummyCookieJar(),
+                        trust_env=True,
+                        auto_decompress=False,
+                    )
+                    self.stack.push_async_callback(
+                        _close_resource, self.session.close, "shared_session", self
+                    )
+                options["transport"] = AioHttpTransport(
+                    session=self.session,
+                    session_owner=False,
+                    **{
+                        option: options[option]
+                        for option in _CONNECTION_OPTIONS
+                        if option in options
+                    },
+                )
+            store = await store_type.get_or_create(name, *args, **options)
+            if self.closed:
+                await _close_resource(store.aclose, "store_client", self)
+                raise RuntimeError("State Store client factory has already ended")
+            self.stack.push_async_callback(
+                _close_resource, store.aclose, "store_client", self
+            )
+            self.clients[key] = store
+            return store
+
+
+@asynccontextmanager
+async def _state_store_deletion_scope(owner: object, name: str) -> AsyncIterator[None]:
+    """Forget a handler client and defer reacquisition until deletion finishes."""
+    factory = _current_factory.get()
+    if factory is None:
+        yield
+        return
+    key = (owner, name, get_request_context().user_id)
+    async with factory.locks.setdefault(key, asyncio.Lock()):
+        # Existing borrowers keep their client until handler cleanup.
+        factory.clients.pop(key, None)
+        yield
 
 
 @asynccontextmanager

@@ -289,6 +289,13 @@ its checkpointer; mutable configuration may remain shared with the original
 graph.
 `InvocationsHostServer` retains its existing execution path.
 
+By default, each Responses handler checks or creates its Foundry checkpoint
+and conversation-chain stores on first use, then reuses their clients without
+additional store-existence checks. Thread deletion through the saver resets
+that handler's client binding. Deletion by another request or process during
+a handler may cause item reads to return missing or writes to fail. The next
+handler resolves its stores again.
+
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 ### Durable graph state
