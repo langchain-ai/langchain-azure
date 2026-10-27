@@ -82,8 +82,8 @@ and creates an independent child.
 A stored response created within a conversation can be selected using
 `previous_response_id` when the common continuation rules allow it. The branch
 restores that response's persisted exact checkpoint, not a mutable conversation
-head. Cross-linkage and conversation-head policy are separate work tracked under
-[TODO](#todo).
+head. Whether that branch advances the original conversation's head is a separate
+cross-linkage question tracked under [TODO](#todo).
 
 ## Quick start
 
@@ -169,6 +169,11 @@ A response-ID parent is reusable only when:
 4. Its graph has finished, with no pending tasks or interrupts, and its output
    has no outstanding function calls or MCP approval requests.
 
+A branch selecting an in-progress, failed, or cancelled parent receives a 4xx
+error under the common error contract before graph execution. Do not wait for
+completion or fall back to another response or intermediate progress. Broader
+continuation and recovery pointer timing is outside this feature.
+
 Parents created before branching was enabled or through ordinary continuation,
 including responses saved in a conversation, are eligible when the common
 continuation rules admit them and they satisfy these checks. No branching-specific
@@ -228,9 +233,6 @@ as a response-ID parent. A branch requires a stored, accessible parent, regardle
 of whether the child itself uses `store=True` or `store=False`. The child's
 retention choice must not delete or modify its stored parent.
 
-The effects of `conversation` with `store=False` on item appends and head
-advancement are a separate Responses/Conversations topic, including Azure
-observations and OpenAI compatibility verification; see [TODO](#todo).
 Conversation-state isolation,
 temporary checkpoint cleanup, and full-input replay responsibilities also belong
 to a separate execution-lifecycle design. This branching feature does not define
@@ -476,6 +478,9 @@ Before claiming compatibility, cover these observable scenarios:
   boolean constructor values are not response providers.
 - B and C can select A independently, including when a newer sibling exists.
   A child with `store=False` does not delete or modify its stored parent.
+- In-progress, failed, and cancelled parents receive a 4xx error under the common
+  error contract before graph execution, without waiting or falling back to
+  another response or intermediate progress.
 - A stored, eligible response created in a conversation can be selected using
   only `previous_response_id` when ordinary continuation admits that parent,
   even after newer responses exist. Its branch uses the selected response's exact
@@ -493,37 +498,17 @@ compatibility:
 - Exact status, error code, and parameter attribution for reference errors not
   already specified above, including inaccessible resources and malformed
   response references, reusing the common continuation rules.
-- Acceptance of parents in different response statuses.
 
 These are compatibility verification items, not permission to invent stricter
 branching-only rules or silently fall back to a different conversation or parent.
 
 ## TODO
 
-Discuss conversation linkage and pointer movement as a separate ordinary
-continuation design topic, not as branching implementation or verification
-requirements:
-
-- Define the shared continuation rules for request admission, parent selection,
-  and persistence of each response's exact checkpoint reference. Branching reuses
-  those rules within its supported finished-parent scope.
-- Resolve the cross-linkage case: A is stored in an explicit conversation, B uses
-  `previous_response_id=A.id`, and C later uses the original `conversation` ID.
-  Decide whether B advances that conversation's pointer and which parent and
-  context C selects, without assuming that B is included or excluded.
-- Review pointer publication. The existing pointer uses the user-scoped SDK
-  `conversation_chain_id`, not a global LangGraph thread head. Ordinary
-  continuation can update it after streaming, before shutdown/cancellation
-  checks and terminal response persistence. Decide the intended behavior for
-  intermediate progress, pauses, failures, cancellation, recovery, and concurrent
-  turns, including whether recovery reuses an admitted starting reference.
-- Define conversation lookup behavior across providers. Local memory/file
-  providers currently return empty history for both missing and existing empty
-  conversations, while the inspected Foundry-backed path delegates lookup to the
-  service. Resolve existence and authorization handling in the common
-  continuation contract, rather than adding branching-only rules.
-- Define `conversation` with `store=False` item-append and head-advancement
-  behavior, including Azure observations and OpenAI compatibility verification.
+Investigate the cross-linkage case separately from the current branching
+requirements: A is stored in an explicit conversation, B uses
+`previous_response_id=A.id`, and C later uses the original `conversation` ID.
+Decide whether B advances that conversation's pointer and which parent and
+context C selects, without assuming that B is included or excluded.
 
 If the common continuation rules allow a request to select B, branching restores
 B's persisted exact checkpoint reference and creates an independent child.
