@@ -948,9 +948,7 @@ class ResponsesHostServer:
             config = await self.build_runnable_config(request, context)
             graph = self._graph
             checkpointer = getattr(graph, "checkpointer", None)
-            if not store_response and isinstance(
-                checkpointer, BaseCheckpointSaver
-            ):
+            if not store_response and isinstance(checkpointer, BaseCheckpointSaver):
                 graph = copy(graph)
                 checkpoint_graph = graph
                 if isinstance(graph, RunnableBinding):
