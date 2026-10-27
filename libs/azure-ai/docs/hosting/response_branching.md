@@ -6,12 +6,13 @@ a different direction, or regenerate an answer.
 
 It is available only through `ResponsesHostServer` and is disabled by default.
 **Response-ID branching requires a stored parent and its exact graph checkpoint.**
-The server must have an explicitly configured response provider.
+The server must have an explicitly configured **response storage provider** for
+response records, separate from the graph checkpointer.
 
-> **Specification status:** This document defines the target contract. Requiring
-> an explicit provider and the OpenAI compatibility requirements below are
-> specification changes, not claims that the current implementation supports
-> them. See [Implementation gaps and verification](#implementation-gaps-and-verification).
+> **Specification status:** This document defines the target contract, not a
+> claim of full implementation. Current behavior, implementation gaps, and
+> deferred scope are listed under
+> [Implementation gaps and verification](#implementation-gaps-and-verification).
 
 ## OpenAI compatibility target
 
@@ -27,22 +28,13 @@ or its item-management routes. The `/responses` request field `conversation`
 references an existing conversation resolved by the configured provider or
 platform. Creating and managing that resource is outside this API path's scope.
 
-> **Current limitation:** Branching from a parent with outstanding function
-> calls (`function_call`) or MCP approval requests (`mcp_approval_request`) is
-> not supported yet. Providing `function_call_output` or `mcp_approval_response`
-> does not enable branching from that parent. Support is planned for a future
-> update. The tool/approval branching behavior described below is a compatibility
-> target, not a current capability. Ordinary tool and approval continuation
-> behavior is unchanged.
-
 - `previous_response_id` selects a specific response, not a thread's latest state.
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID, although a sequential conversation may internally use its
   latest response's checkpoint.
 - An existing `conversation` ID continues that conversation's current retained
   state. An unknown or unresolvable ID must produce an explicit error, not create
-  a conversation or silently start a new thread. This is the compatibility
-  target; current local providers differ as described under
+  a conversation or silently start a new thread. See
   [Conversation lookup](#conversation-lookup-current-behavior-and-target).
 - `previous_response_id` and `conversation` are mutually exclusive.
 - Request `store` controls response retention and defaults to `True`. Enabling
@@ -176,12 +168,11 @@ B and C each start from A's exact checkpoint, independently of one another.
 
 ## Requirements and request rules
 
-> **Current scope:** Branching requires a finished parent graph with no pending
-> tasks, interrupts, function calls, or MCP approval requests. Parents with
-> outstanding `function_call` or `mcp_approval_request` items remain ineligible
-> even when matching replies are supplied. Support for these branching flows is
-> deferred to the future scope below. Ordinary tool and approval continuation
-> behavior is unchanged.
+This scope covers finished-parent branching. Parents with outstanding function
+calls or MCP approval requests remain ineligible even when matching replies are
+supplied; their support is deferred to
+[Future scope](#future-scope-function-calls-and-mcp-approvals).
+Ordinary tool and approval continuation behavior is unchanged.
 
 A response-ID parent is reusable only when:
 
@@ -204,31 +195,16 @@ is outside the current branching scope, even if its response status is
 ### Conversation lookup: current behavior and target
 
 OpenAI's `conversation` field references an existing conversation resource.
-Supplying an ID to `POST /responses` does not create that resource. The current
-local host does not yet enforce this distinction:
-
-| Case                                                              | Current local behavior                                                                                                                                                                                                              | OpenAI-compatible target                                                                                                                  |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| A previously unused, syntactically valid conversation ID          | `InMemoryResponseProvider` and `FileResponseStore` return empty history. The adapter does not independently check resource existence; without a saved checkpoint, it uses the ID as the graph thread and can start fresh execution. | Reject the missing reference before graph execution, including when `store=False`. Do not create a conversation or substitute a new root. |
-| An existing conversation with no retained items                   | Empty history follows the same local path as a missing ID.                                                                                                                                                                          | Accept the existing empty resource and start its first turn. Empty history alone cannot establish whether the resource exists.            |
-| `enable_response_branching=True` with an explicit conversation ID | The request still uses ordinary conversation continuation, so enabling branching does not add missing-conversation validation.                                                                                                      | Apply the same conversation existence and authorization checks regardless of the branching flag.                                          |
-
-With `FoundryStorageProvider`, history lookup is delegated to the remote service.
-In the inspected Agent Server SDK 2.3.0, reference lookup happens before the graph
-handler and backend not-found errors are surfaced to the caller. Local
-first-use acceptance must not be assumed for Foundry or custom providers; their
-lookup and error behavior must be checked separately.
-
-Direct Azure Responses REST requests with an unknown, valid-format conversation
-ID returned HTTP 404 with both `store=True` and `store=False`. The OpenAI
-documentation establishes the existing-resource model; exact error details at
-OpenAI's public endpoint remain a separate compatibility verification item.
+Supplying an ID to `POST /responses` does not create that resource. Reject a
+missing reference before graph execution, including when `store=False`, but
+accept an existing empty conversation and start its first turn. Apply the same
+existence and authorization checks regardless of the branching flag.
 
 The adapter must obtain an existence-aware result from the authorized provider
 or platform. A missing resource, an existing empty resource, an authorization
 failure, and a storage failure must not all become an empty history list. The
-current local first-use behavior is an implementation difference, not a promised
-extension to the target contract.
+current provider differences are recorded under
+[Implementation gaps and verification](#implementation-gaps-and-verification).
 
 ### Instructions, checkpoints, and routing
 
@@ -487,9 +463,7 @@ these fields or call these helpers.
 Branching adds exact starting-state selection to the existing hosting path,
 not a separate execution or recovery subsystem. Configuration and input hooks,
 graph streaming, output conversion, progress persistence, and SDK finalization
-remain shared with ordinary checkpointed execution. Explicit conversations
-currently retain their ordinary continuation and HITL routing; the conversation
-requirements below describe the target contract, with gaps listed afterward.
+remain shared with ordinary checkpointed execution.
 
 The execution flow below is limited to finished-parent branching. Branching from
 parents awaiting function results or MCP approval decisions is deferred to
@@ -670,31 +644,36 @@ The branching helpers and saver wrapper are internal, not public extension point
 
 ## Implementation gaps and verification
 
-This revision changes the specification only. In particular:
+This revision changes the specification only. Implementation gaps and unverified
+behavior are distinguished below; neither indicates completed support.
 
-- The current constructor selects a default provider when branching is enabled
-  and `store` is omitted. It must be changed to require an explicit provider.
-- The current branching path supports finished parents and rejects approval and
-  tool-result replies. Supporting pending-parent continuation requires host
-  implementation work. Full input replay for unretained tool and approval
-  responses is a separate application responsibility: developers must adapt
-  their graphs as described under
-  [Function-call outputs and MCP approval replies](#function-call-outputs-and-mcp-approval-replies).
-- Explicit conversations currently use the ordinary continuation path. Verify
-  authorized context resolution, checkpoint selection, and public response fields
-  against the conversation contract above, including response-ID selection of a
-  stored conversation response and isolation of unretained turns. Implement
-  existence-aware lookup as described under
-  [Conversation lookup](#conversation-lookup-current-behavior-and-target), and
-  prevent `store=False` turns from updating the retained conversation head on
-  every checkpointed continuation and finalization path.
-- Ordinary continuation currently updates its latest checkpoint reference
-  without checking request `store`, including explicit conversation requests
-  when branching is enabled. Fix this compatibility gap and implement cleanup
-  of finalized unretained executions; neither is an optional checkpointer
-  exception to the store contract.
-- Checkpoint restoration must be verified not to inherit request-scoped
-  `instructions` from the parent.
+| Topic | Target contract | Implementation status |
+| --- | --- | --- |
+| Explicit response storage provider | Branching requires an explicitly supplied provider. | **Implementation required:** The constructor selects a default provider when `store` is omitted. |
+| Conversation lookup | Reject missing resources before graph execution; distinguish them from existing empty conversations. | **Implementation required:** Local providers do not enforce this distinction; see provider differences below. |
+| Conversation context and linkage | Resolve authorized context, select the correct checkpoint, and preserve public linkage fields and response-ID branch isolation. | **Verification required:** Explicit conversations use ordinary continuation and HITL routing, including when branching is enabled. |
+| Request `store=False` | Preserve the retained conversation head and prior graph state; clean up finalized execution-owned checkpoints on every continuation and finalization path. | **Implementation required:** Ordinary continuation updates its checkpoint pointer without checking request `store`; isolation and cleanup must be completed. |
+| Request-scoped `instructions` | Do not inherit the parent's top-level instructions through its checkpoint. | **Verification required:** Check checkpoint restoration against this rule. |
+
+**Future scope:** Pending-parent tool and approval branching is not part of this
+scope; the current branching path rejects those replies. See
+[Future scope](#future-scope-function-calls-and-mcp-approvals).
+Full input replay for unretained responses remains an application responsibility,
+not automatic host support; see
+[Function-call outputs and MCP approval replies](#function-call-outputs-and-mcp-approval-replies).
+
+**Provider differences:** `InMemoryResponseProvider` and `FileResponseStore`
+return empty history for both missing and existing empty conversations. Without
+a saved checkpoint, the adapter can use the ID as the graph thread and execute
+from empty state. Enabling branching does not add an existence check. With
+`FoundryStorageProvider`, lookup is delegated to the remote service; in the
+inspected Agent Server SDK 2.3.0, it occurs before the graph handler and surfaces
+backend not-found errors. Check custom providers separately; local first-use
+acceptance is not a promised extension to the target contract.
+
+**Service observations:** Direct Azure Responses REST requests with an unknown,
+valid-format conversation ID returned HTTP 404 with both `store=True` and
+`store=False`. Exact error details at OpenAI's public endpoint remain unverified.
 
 Conversation advancement and response-ID branch isolation were verified through
 REST at an Azure project-scoped OpenAI endpoint. Unretained function-call and MCP
