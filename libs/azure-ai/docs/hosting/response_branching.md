@@ -7,8 +7,10 @@ different direction, or regenerate an answer.
 Checkpoint-based branching is available through `ResponsesHostServer` and is
 disabled by default.
 **It requires a stored parent and its exact graph checkpoint.**
-The server must have an explicitly configured **response storage provider** for
-response records, separate from the graph checkpointer.
+The server uses a **response storage provider** for response records, separate
+from the graph checkpointer. Branching accepts the host's default provider:
+`FileResponseStore` locally or `FoundryStorageProvider` on Foundry. Passing
+server `store=provider` optionally overrides that default.
 
 > **Specification status:** This document defines the target contract, not a
 > claim of full implementation. Current behavior, implementation gaps, and
@@ -40,8 +42,7 @@ platform. Creating and managing that resource is outside this API path's scope.
 - `previous_response_id` and `conversation` are mutually exclusive.
 - Request `store` controls response retention and defaults to `True`. Enabling
   branching must not silently override `store=False`. See
-  [Request store behavior](#request-store-behavior) for conversation advancement,
-  tool and approval replies, and checkpoint cleanup.
+  [Request store behavior](#request-store-behavior) for response retention.
 - Tool outputs and approval decisions are valid continuation inputs. A graph
   pause alone must not cause an otherwise valid protocol request to be rejected.
 - With `previous_response_id`, a previous response's top-level `instructions`
@@ -84,10 +85,10 @@ same graph execution path:
 | Reference                      | Lookup                                                              | Starting checkpoint                                          |
 | ------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------ |
 | `previous_response_id=A.id`    | Load A from the response store and read its checkpoint reference.   | A's exact final checkpoint, regardless of later responses.   |
-| `conversation=conversation.id` | Read the conversation's head reference from the conversation store. | The final checkpoint of its latest completed, retained turn. |
+| `conversation=conversation.id` | Read the conversation's head reference from the conversation store. | The final checkpoint selected for the conversation's context. |
 
 A response ID is a **fixed checkpoint reference**. A conversation ID is a
-**moving checkpoint reference**, advanced only after a retained turn completes.
+**moving checkpoint reference**, published only after a conversation turn finishes.
 Intermediate checkpoints are execution/recovery progress, not conversation heads.
 
 If a conversation advances through A, C, and D, its reference moves forward to D.
@@ -109,10 +110,6 @@ C uses `conversation=conversation.id` after B finishes. It continues from A,
 without B's input or output, and advances the conversation to C when stored.
 D then continues from C. Creating B neither blocks nor advances the conversation.
 
-A conversation turn with `store=False` reads the selected state but does not
-move the reference. Later conversation turns continue from the previously
-retained state, without that unretained turn's input, output, or graph changes.
-
 This abstraction preserves the public API: a conversation remains a separate
 resource, and the linkage fields remain mutually exclusive. The latest retained
 response's checkpoint is usable only when it represents the conversation context
@@ -123,11 +120,9 @@ resolved by the provider or platform.
 ### 1. Enable branching on the server
 
 Starting from the [basic hosting setup](../../README.md#hosting-langgraph-agents-on-microsoft-foundry)
-with a configured `model`, supply an explicit response provider and graph
-checkpointer:
+with a configured `model`, enable branching on a graph with a checkpointer:
 
 ```python
-from azure.ai.agentserver.responses import FileResponseStore
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -139,12 +134,12 @@ if __name__ == "__main__":
     ResponsesHostServer(
         graph,
         enable_response_branching=True,
-        store=FileResponseStore(),
     ).run(port=8088)
 ```
 
-Server `store` is a response provider, not a boolean. `InMemorySaver` is for
-local demos; use a durable, history-preserving saver for reuse after restart.
+  Server `store=provider` is an optional response-provider override, not a boolean.
+  `InMemorySaver` is for local demos; use a durable, history-preserving saver for
+  reuse after restart.
 
 ### 2. Create a parent and two branches
 
@@ -190,11 +185,11 @@ With `enable_response_branching=True`, three requirements are mandatory:
   unreadable, fail before graph execution. Do not fall back to message-history
   reconstruction, a latest checkpoint, or a new root response.
 
-The parent eligibility rules below cover finished-parent checkpoint branching.
-Parents with outstanding function calls or MCP approval requests remain ineligible
-even when matching replies are supplied; their support is deferred to
-[Future scope](#future-scope-function-calls-and-mcp-approvals).
-Ordinary tool and approval continuation behavior is unchanged.
+The parent eligibility rules below cover only branching from finished parent
+graphs. Ordinary tool and approval continuation keeps its existing behavior.
+Branching from a paused parent is future work, including isolation of tool replies,
+approval decisions, and resume state between children of that parent. Supplying
+matching replies does not make a paused parent eligible for this branching path.
 
 A response-ID parent is reusable only when:
 
@@ -265,99 +260,26 @@ during initialization.
 The branching flag controls the checkpoint execution strategy for supported
 requests. It must not change the public meanings of `conversation`, `store`,
 or `instructions`.
-With branching disabled, the constructor's existing optional-provider default
-remains unchanged.
+The constructor's existing automatic provider selection remains available with
+branching enabled or disabled; `store=provider` is an optional override.
 
 ## Request `store` behavior
 
 Request `store` is a boolean and defaults to `True`. It controls retention of the
-current response, independently of the server's provider configuration. Azure
-OpenAI behavior verified through REST is the OpenAI-compatible baseline for the
-following public rules.
+current response, independently of the server's provider configuration. Enabling
+branching must honor this choice rather than force response retention.
 
-### Response retention and conversation advancement
+A response created with `store=False` is not retained and cannot later be selected
+as a response-ID parent. A branch requires a stored, accessible parent, regardless
+of whether the child itself uses `store=True` or `store=False`. The child's
+retention choice must not delete or modify its stored parent.
 
-For a successfully completed response:
-
-| Linkage                        | Request `store`   | Current response retained? | Effect on the conversation                                                               |
-| ------------------------------ | ----------------- | -------------------------- | ---------------------------------------------------------------------------------------- |
-| `conversation=conversation.id` | `True` or omitted | Yes                        | Append this turn's input and output, and advance the conversation's head.                |
-| `conversation=conversation.id` | `False`           | No                         | Read retained context without appending this turn or advancing the head.                 |
-| `previous_response_id=A.id`    | `True` or omitted | Yes                        | Leave A's associated conversation unchanged; the child is a separate response-ID branch. |
-| `previous_response_id=A.id`    | `False`           | No                         | Leave the stored parent and its associated conversation unchanged.                       |
-
-The same retention rules apply to a root response without either linkage field.
-Context selection is independent of retention: a conversation request reads its
-current retained context, while a response-ID request reads its selected parent's
-exact state. `store=False` does not delete an existing parent or conversation
-history. The next conversation request still reads the preceding retained state,
-excluding the unretained turn.
-
-An unretained response is unavailable for retrieval (HTTP 404). Referencing it
-through `previous_response_id` fails with HTTP 400,
-`code="previous_response_not_found"`, and `param="previous_response_id"`.
-Returning a function call or MCP approval request does not make an exception.
-
-### Function-call outputs and MCP approval replies
-
-An unretained response A can return `function_call` or `mcp_approval_request`
-items, including with response `status="completed"`. The client can still submit
-a matching reply, but cannot rely on server-side retention of A:
-
-| Follow-up to A created with `store=False`                                              | Function-call result                                      | MCP approval reply                                                     |
-| -------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `previous_response_id=A.id` plus the reply                                             | HTTP 400, `previous_response_not_found`.                  | HTTP 400, `previous_response_not_found`.                               |
-| Only the reply, without A's call/request in input                                      | HTTP 400; no matching function call.                      | HTTP 400; the approval request is missing from input.                  |
-| Original input, A's complete output, and the matching reply; no `previous_response_id` | Accepted; the model can use the supplied function result. | Accepted; an approved MCP call can execute and produce a final answer. |
-
-Full input replay has this form:
-
-```text
-POST /responses
-store=false
-input = original request input + all items from A.output + matching reply
-```
-
-The matching reply is a `function_call_output` with the original `call_id`, or an
-`mcp_approval_response` with the original `approval_request_id` and `approve`
-decision. Resend the required tool definitions and current request instructions.
-Include the complete prior output, not only the reply identifier. A `call_id`
-or approval-request ID alone does not restore the missing context.
-
-Conversely, when A was created with `store=True`, a follow-up can use
-`previous_response_id=A.id` and submit its matching reply even if the follow-up
-itself uses `store=False`. Parent retention and child retention are independent.
-
-**Developer responsibility:** To use full input replay, the application developer
-must adapt the graph's input handling, routing, and state reconstruction to
-consume replayed calls, results, approval requests, and decisions as a new
-execution, without relying on a saved interrupt or checkpoint from A. The client
-supplies the complete context; the graph must know how to process it.
-`ResponsesHostServer` does not automatically make an arbitrary graph replay-capable and must not resume A's deleted checkpoint.
-
-The accepted replay cases above describe the protocol contract, not a guarantee
-for an unmodified graph. This responsibility does not expand the current
-finished-parent branching scope.
-
-### Checkpointer isolation and cleanup
-
-The retention and advancement rules apply with or without a LangGraph
-checkpointer, regardless of `enable_response_branching`. With `store=False`,
-preserve the conversation's retained checkpoint reference and all prior graph
-state. This isolation covers all graph state, not only messages or SDK history.
-
-For this host, an unretained response's execution-owned checkpoints are temporary:
-
-- Checkpoints may be written while the request executes or is awaiting supported recovery. They must never become the retained conversation head.
-- Once execution is finalized, delete host-managed checkpoints and pending writes owned exclusively by that unretained response. This also applies when the response ends by returning a function call or MCP approval request, or reaches terminal failure or cancellation.
-- Delete only this response's data. Preserve stored parents, sibling branches, and checkpoints needed to restore retained state; do not delete a shared thread.
-- An execution deferred for supported recovery is not finalized. Cleanup must not remove the progress needed for that recovery; recovered finalization applies the same `store=False` cleanup rule.
-- Surface cleanup failures explicitly; do not silently report successful cleanup.
-
-A later conversation request must resolve its retained head, not the saver's
-implicit latest checkpoint. If the existing conversation was empty before the
-unretained turn, it must still start empty afterward. Checkpoint deletion is a
-host lifecycle requirement, not a claim about OpenAI's internal storage design.
+The effects of `conversation` with `store=False` on item appends and head
+advancement are a separate Responses/Conversations topic, including Azure
+observations and OpenAI compatibility verification. Conversation-state isolation,
+temporary checkpoint cleanup, and full-input replay responsibilities also belong
+to a separate execution-lifecycle design. This branching feature does not define
+those behaviors or add them as implementation or verification requirements.
 
 ## What must be stored?
 
@@ -367,30 +289,22 @@ conversation continuation needs a retained head mapping:
 
 | Data                                                               | Where it lives             | How to configure it                                |
 | ------------------------------------------------------------------ | -------------------------- | -------------------------------------------------- |
-| Response, status, input/output, and internal checkpoint references | SDK response provider      | Server: `ResponsesHostServer(..., store=provider)` |
+| Response, status, input/output, and internal checkpoint references | SDK response provider      | Host default; optional `store=provider`            |
 | Graph state, pending writes, and checkpoint history                | LangGraph checkpoint saver | Graph: `checkpointer=...`                          |
 | Conversation ID -> retained final checkpoint reference             | Conversation store         | Host: existing `conversation_chain_store`          |
 
-With branching enabled, the server's `store` is a required explicit provider;
-it configures storage capability and the backend. The client's `store` is a
-boolean that defaults to `True` and controls retention of that response. These
-are separate contracts: having a provider does not force every response to be
-retained, and a client setting `store=True` cannot supply a missing provider.
+The server uses its default response provider unless `store=provider` overrides
+it. The client's `store` is a boolean that defaults to `True` and controls
+retention of that response. Having a provider does not force every response to
+be retained.
 
-Unretained responses follow the
-[request store rules](#request-store-behavior), including execution-owned
-checkpoint cleanup.
+Response retention does not replace the graph's checkpointer. The application
+owns the graph saver's initialization, lifecycle, and general retention policy.
 
-Use an appropriate provider explicitly, such as `FileResponseStore` for a local
-demo or `FoundryStorageProvider` on Foundry. Response retention does not replace
-the graph's checkpointer. The application owns the graph saver's initialization,
-lifecycle, and general retention policy; the host must implement the unretained
-execution cleanup specified above.
-
-**Migration:** Branching callers that relied on automatic provider selection
-must pass that provider explicitly. Preserve its backend configuration and
-existing data; selecting a different provider does not migrate response records
-or graph checkpoints.
+**Migration:** Existing automatic provider selection remains valid when enabling
+branching; no explicit provider argument is required. If overriding the provider,
+preserve its backend configuration and existing data. Selecting a different
+provider does not migrate response records or graph checkpoints.
 
 **Retaining a response does not retain or renew its graph checkpoints.**
 Durable backends can still expire data. Align both lifetimes, retain history
@@ -466,8 +380,8 @@ graph streaming, output conversion, progress persistence, and SDK finalization
 remain shared with ordinary checkpointed execution.
 
 The execution flow below is limited to finished-parent branching. Branching from
-parents awaiting function results or MCP approval decisions is deferred to
-[Future scope](#future-scope-function-calls-and-mcp-approvals).
+parents awaiting function results or MCP approval decisions is future work;
+ordinary tool and approval continuation keeps its existing behavior.
 
 ### Checkpoint references
 
@@ -512,11 +426,9 @@ root checkpoint namespace.
 5. **Finish.** After shutdown/cancellation checks and pending interrupt emission,
    emit `response.completed` for SDK finalization. Request `store` controls
    terminal response retention. A retained response keeps the same confirmed
-   final checkpoint reference; no separate boundary is written. An unretained
-   response must complete execution-owned checkpoint cleanup as specified under
-   [Checkpointer isolation and cleanup](#checkpointer-isolation-and-cleanup).
-   Only successful finalization of a stored conversation turn updates its
-   conversation-store head, as described below.
+  final checkpoint reference; no separate boundary is written. Any conversation
+  head publication happens last, after successful finalization, as described
+  below.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
 checkpoint alone cannot make a reusable parent: its response must also be stored
@@ -527,7 +439,7 @@ approval is not a reusable parent within this scope.
 ### Conversation head references
 
 The conversation store maps each authorized `conversation_id` to the exact final
-graph checkpoint of its latest completed, retained turn. The existing
+graph checkpoint selected for its context. The existing
 `conversation_chain_store` may be reused for this mapping; a full conversation
 chain is not required for branching.
 
@@ -538,19 +450,18 @@ updates must not redirect an in-flight or recovered request.
 
 Keep the previous conversation head unchanged while the graph runs. Intermediate
 checkpoints may be published as execution/recovery progress, but never as the
-retained head. At successful turn finalization, update the conversation store
-to that run's confirmed final checkpoint only when `store=True` and both the
-response record and checkpoint are persisted. The next conversation request
-starts from this final checkpoint, not the saver's implicit latest checkpoint.
-Response-ID branches do not update this head.
+finalized head. When a conversation turn publishes a new head, do so only at
+successful turn finalization, after its required response persistence and
+checkpoint writes have succeeded. Publish that run's confirmed final checkpoint,
+not an intermediate checkpoint or the saver's implicit latest checkpoint.
 
 Streaming, pauses, shutdown, cancellation, and recovery must not bypass this
-finalization rule or promote an intermediate checkpoint. A failed, cancelled,
-or unretained turn leaves the prior head unchanged, even if it wrote newer
+finalization rule or promote an intermediate checkpoint. A failed or cancelled
+turn leaves the prior head unchanged, even if it wrote newer
 checkpoints. Internal progress references remain separate from the retained head.
-If an existing conversation has no retained checkpoint yet, a `store=False`
-turn must leave that starting state empty. The next request must not discover
-and restore the unretained turn through a thread-level latest-checkpoint lookup.
+
+Response-ID branches do not update this conversation head. The conversation-head
+effects of `store=False` turns remain a separate design topic.
 
 ### Current continuation pointer
 
@@ -656,18 +567,14 @@ behavior are distinguished below; neither indicates completed support.
 
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Explicit response storage provider | Branching requires an explicitly supplied provider.                                                                                                        | **Implementation required:** The constructor selects a default provider when `store` is omitted.                                                             |
+| Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
 | Conversation lookup                | Reject missing resources before graph execution; distinguish them from existing empty conversations.                                                       | **Implementation required:** Local providers do not enforce this distinction; see provider differences below.                                                |
-| Conversation context and linkage   | Use shared checkpoint execution; write back only the completed, retained turn's final checkpoint, preserving public linkage fields and branch isolation.   | **Implementation required:** Explicit conversations use ordinary continuation and HITL routing; the existing pointer can be updated before finalization.     |
-| Request `store=False`              | Preserve the retained conversation head and prior graph state; clean up finalized execution-owned checkpoints on every continuation and finalization path. | **Implementation required:** Ordinary continuation updates its checkpoint pointer without checking request `store`; isolation and cleanup must be completed. |
+| Conversation context and linkage   | Use shared checkpoint execution; publish a selected head only after graph completion and finalization, preserving public linkage fields.                   | **Implementation required:** Explicit conversations use ordinary continuation and HITL routing; the existing pointer can be updated before finalization.     |
 | Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
 
-**Future scope:** Pending-parent tool and approval branching is not part of this
-scope; the current branching path rejects those replies. See
-[Future scope](#future-scope-function-calls-and-mcp-approvals).
-Full input replay for unretained responses remains an application responsibility,
-not automatic host support; see
-[Function-call outputs and MCP approval replies](#function-call-outputs-and-mcp-approval-replies).
+**Future scope:** Branching from paused parent graphs, including isolation of
+tool replies, approval decisions, and resume state between children, is deferred.
+Ordinary tool and approval continuation keeps its existing behavior.
 
 **Provider differences:** `InMemoryResponseProvider` and `FileResponseStore`
 return empty history for both missing and existing empty conversations. Without
@@ -678,62 +585,30 @@ inspected Agent Server SDK 2.3.0, it occurs before the graph handler and surface
 backend not-found errors. Check custom providers separately; local first-use
 acceptance is not a promised extension to the target contract.
 
-**Service observations:** Direct Azure Responses REST requests with an unknown,
-valid-format conversation ID returned HTTP 404 with both `store=True` and
-`store=False`. Exact error details at OpenAI's public endpoint remain unverified.
-
-Conversation advancement and response-ID branch isolation were verified through
-REST at an Azure project-scoped OpenAI endpoint. Unretained function-call and MCP
-approval continuations were verified at the account-level OpenAI endpoint.
-These results define the compatibility baseline above; they do not establish
-support in the host implementation.
-
 Before claiming compatibility, cover these observable scenarios:
 
-- A valid explicit provider and a history-preserving saver enable branching;
-  missing providers and boolean constructor values are rejected.
+- The host's default provider and a history-preserving saver enable branching.
+  Cover local `FileResponseStore`, Foundry `FoundryStorageProvider`, and an
+  explicit provider override. Omitting `store` must not fail initialization;
+  boolean constructor values are not response providers.
 - B and C can select A independently, including when a newer sibling exists.
   A child with `store=False` does not delete or modify its stored parent.
 - A stored, eligible response created in a conversation can be selected using
   only `previous_response_id`, even after that conversation advances. Its branch
-  uses the selected response's context and leaves the conversation head unchanged.
-  Subsequent conversation turns can continue and advance without inheriting
-  the branch's input or output.
-- A conversation turn with `store=False` can read retained context but is not
-  retrievable or reusable by response ID. Its input and output are not appended
-  to the conversation, and the next conversation turn still starts from the
-  retained head, even when the unretained execution wrote newer checkpoints.
-  Verify this through `POST /responses` with a real graph saver, both with
-  branching enabled and disabled: after retained A, unretained B must leave A's
-  head unchanged, and a subsequent stored C must read A without B's messages
-  or other graph-state changes. Also verify that an unretained first turn in an
-  existing empty conversation leaves the next turn starting empty. Repeat the
-  isolation checks for supported recovery and interrupted-finalization paths.
-- For an unretained response ending in a function call or MCP approval request,
-  reject response-ID continuation and a reply without matching input history.
-  Verify full input replay with the matching reply using a developer-adapted,
-  replay-capable graph, without restoring the deleted checkpoint. This is not
-  a guarantee for arbitrary graphs. Also verify the converse: a stored parent
-  accepts a reply whose child response uses `store=False`. Check function results
-  and actual execution of approved MCP calls, not only request admission.
-  Pending-parent branching remains in future scope.
-- After an unretained execution is finalized, its host-managed checkpoints and
-  pending writes are removed without deleting or changing retained parents or
-  siblings. Cover tool/approval outputs, terminal failure/cancellation, supported
-  recovery, and explicit cleanup errors.
+  uses the selected response's exact checkpoint, not the conversation's latest
+  state, and leaves the conversation head unchanged. Subsequent conversation
+  turns can continue and advance without inheriting the branch's input or output.
 - Resolve an existing conversation through the configured provider or platform,
-  reuse both ID forms, and verify that stored turns advance its retained context.
-  Also cover an existing empty conversation and recovery after the conversation
-  advances. During a multi-step graph run, the head must remain at the prior
+  and preserve the selected starting checkpoint during recovery even if the
+  conversation advances. During a multi-step graph run, the head remains at the prior
   final checkpoint. Only successful finalization advances it to that run's exact
   final checkpoint; failure, cancellation, or terminal response-storage failure
   must not advance it.
 - Unknown, malformed, or unresolvable conversation IDs, authorization errors,
   and storage lookup failures must not create conversations or start graph
-  execution. Check valid but absent IDs with both `store=True` and `store=False`
-  through `POST /responses`, covering local memory/file providers and the
-  Foundry-backed path. Thread-mapping helper tests alone do not establish
-  reference-validation behavior.
+  execution. Check valid but absent IDs through `POST /responses`, covering local
+  memory/file providers and the Foundry-backed path. Thread-mapping helper tests
+  alone do not establish reference-validation behavior.
 - Return matched function outputs and approved or denied MCP decisions through
   the same linkage used for ordinary continuation.
 - Verify HTTP errors, error objects, terminal SSE events, and absence of graph
@@ -747,10 +622,6 @@ compatibility:
   already specified above, including inaccessible resources and malformed
   response or conversation references.
 - Acceptance of parents in different response statuses.
-- Partial, missing, duplicate, or unknown tool outputs and approval decisions,
-  including requests with multiple outstanding calls. Do not assume function
-  outputs and MCP approvals have identical batch-completeness rules.
-- Concurrent requests to one conversation and the visibility/order of its items.
 
 These are compatibility verification items, not permission to invent stricter
 branching-only rules or silently fall back to a different conversation or parent.
