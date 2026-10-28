@@ -106,9 +106,7 @@ print(second.output_text)
 Both children start from `parent`'s exact finished checkpoint. Keep the parent
 stored (the default), leave steering disabled, and resend any request-level
 `instructions` needed by each child. Local in-memory graph checkpoints do not
-survive restart. See the
-[branching guide](../../../../../libs/azure-ai/docs/hosting/response_branching.md)
-for retention and recovery limits.
+survive restart.
 
 ## Deploying the Agent to Foundry
 

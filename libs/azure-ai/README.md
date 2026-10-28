@@ -271,9 +271,7 @@ To create independent children of a completed response instead, set
 `ResponsesHostServer(graph, enable_response_branching=True)` and send
 `previous_response_id`. Each child restores the parent's exact saved checkpoint,
 not the thread's latest state. Branching requires a history-preserving async
-checkpointer, an adapter-owned host, and steering disabled. See the
-[response branching guide](docs/hosting/response_branching.md) for request rules,
-instruction isolation, retention, and recovery.
+checkpointer, an adapter-owned host, and steering disabled.
 
 For checkpointed graphs, each request resolves its saved input checkpoint reference
 once, including the saved task reference on recovery. Interrupt inspection and
