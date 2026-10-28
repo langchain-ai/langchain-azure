@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, Literal, cast
 
 from azure.ai.agentserver.core.storage import (
@@ -38,6 +39,8 @@ from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
 )
+
+from ._storage import get_state_store
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -116,15 +119,22 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     encoded in item keys within that store. The saver is async-only; use it
     with ``graph.ainvoke`` or ``graph.astream``.
 
+    Latest and history queries enumerate matching checkpoint keys to order by
+    LangGraph ID, independently of storage creation order. Key-listing cost
+    grows with retained history; checkpoint values are fetched only as needed.
+    Exact lookups in a known namespace read the checkpoint directly.
+
     Args:
         credential: Optional async Azure credential. Omit to use
             ``DefaultAzureCredential``.
         endpoint: Foundry project or storage endpoint. When omitted, the SDK
             resolves ``FOUNDRY_PROJECT_ENDPOINT``.
         store_name_prefix: Prefix used for per-thread store names.
-        user_isolation: Partition items by the hosted request's end user.
+        user_isolation: Partition items by the hosted request's end user when
+            creating a store. Existing stores retain their isolation settings.
         item_ttl_seconds: Sliding item TTL configured when a thread store is
-            first created. ``-1`` disables expiration.
+            first created. Existing stores retain their TTL. ``-1`` disables
+            expiration.
         api_version: Foundry storage API version.
         serde: Optional LangGraph serializer.
     """
@@ -171,28 +181,46 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Fetch an exact checkpoint or the latest checkpoint in a namespace."""
         thread_id, checkpoint_ns = self._thread_and_namespace(config)
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             checkpoint_id = get_checkpoint_id(config)
 
             if checkpoint_id:
                 item = await store.get_item(
                     self._checkpoint_key(checkpoint_ns, checkpoint_id)
                 )
-            else:
-                # Foundry orders keys by creation time. Descending order with
-                # limit=1 selects the newest checkpoint in this namespace.
-                tags: _CheckpointItemTags = {
-                    "kind": "checkpoint",
-                    "ns": checkpoint_ns,
-                }
-                page = await store.list_keys(
-                    tags=cast(Mapping[str, str], tags),
-                    limit=1,
-                    order="desc",
+                if item is None:
+                    return None
+                return await self._checkpoint_tuple(
+                    store,
+                    thread_id,
+                    cast(_CheckpointItemValue, item.value),
                 )
-                item = await store.get_item(page.keys[0].key) if page.keys else None
 
+            # Foundry's list_keys order is (created_at, storage id) with
+            # second-level timestamps, so two checkpoints written in the same
+            # second can come back out of LangGraph checkpoint-id order.
+            # Sort keys by checkpoint id (embedded in the storage key) first,
+            # then fetch only the winning value — matching InMemorySaver order
+            # without reading every checkpoint body.
+            tags: _CheckpointItemTags = {
+                "kind": "checkpoint",
+                "ns": checkpoint_ns,
+            }
+            latest_key: str | None = None
+            latest_id: str | None = None
+            async for storage_key in self._iter_checkpoint_keys(
+                store, cast(Mapping[str, str], tags)
+            ):
+                item_ns, item_id = self._parse_checkpoint_key(storage_key)
+                if item_ns != checkpoint_ns or not item_id:
+                    continue
+                if latest_id is None or item_id > latest_id:
+                    latest_id = item_id
+                    latest_key = storage_key
+
+            if latest_key is None:
+                return None
+            item = await store.get_item(latest_key)
             if item is None:
                 return None
             return await self._checkpoint_tuple(
@@ -200,8 +228,6 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 thread_id,
                 cast(_CheckpointItemValue, item.value),
             )
-        finally:
-            await store.aclose()
 
     async def alist(
         self,
@@ -211,7 +237,10 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        """List checkpoints newest-first for one known thread."""
+        """List checkpoints by descending LangGraph ID for one known thread.
+
+        ``before`` is an exclusive ID bound and need not exist in storage.
+        """
         if config is None:
             raise ValueError("config with a thread_id is required")
         if limit is not None and limit < 1:
@@ -234,64 +263,54 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                 if field in filter:
                     tags[field] = str(filter[field])
 
-        store = await self._get_or_create_store(thread_id)
-        try:
-            after: str | None = None
-            if before_id and before is not None:
-                before_configurable = before.get("configurable") or {}
-                before_ns = before_configurable.get("checkpoint_ns", checkpoint_ns)
-                if not isinstance(before_ns, str):
-                    raise ValueError("checkpoint_ns must be a string")
-                before_item = await store.get_item(
-                    self._checkpoint_key(before_ns, before_id)
+        async with self._get_or_create_store(thread_id) as store:
+            if checkpoint_id and before_id and checkpoint_id >= before_id:
+                return
+            # Sort/filter by LangGraph checkpoint id from storage keys first.
+            # Foundry order uses second-level created_at plus hash-derived ids,
+            # which can reverse true checkpoint order within the same second.
+            # Fetch values only for keys that survive filters / limit.
+            candidates: list[tuple[str, str]] = []
+            if checkpoint_id and namespace_is_set:
+                candidates.append(
+                    (checkpoint_id, self._checkpoint_key(checkpoint_ns, checkpoint_id))
                 )
-                if before_item is None:
-                    return
-                # Foundry store cursors are relative to the requested order. With
-                # descending order, items after this cursor are older.
-                after = before_item.id
-
-            yielded = 0
-            while True:
-                page = await store.list_keys(
-                    tags=cast(Mapping[str, str], tags),
-                    limit=_PAGE_SIZE,
-                    order="desc",
-                    after=after,
-                )
-                for key in page.keys:
-                    item = await store.get_item(key.key)
-                    if item is None:
-                        continue
-                    value = cast(_CheckpointItemValue, item.value)
-                    item_ns = value.get("checkpoint_ns", "")
-                    item_id = value.get("checkpoint_id")
-                    if not isinstance(item_id, str):
+            else:
+                async for storage_key in self._iter_checkpoint_keys(
+                    store, cast(Mapping[str, str], tags)
+                ):
+                    item_ns, item_id = self._parse_checkpoint_key(storage_key)
+                    if not item_id:
                         continue
                     if namespace_is_set and item_ns != checkpoint_ns:
                         continue
                     if checkpoint_id and item_id != checkpoint_id:
                         continue
-
-                    checkpoint_tuple = await self._checkpoint_tuple(
-                        store, thread_id, value
-                    )
-                    if filter and not all(
-                        checkpoint_tuple.metadata.get(name) == expected
-                        for name, expected in filter.items()
-                    ):
+                    if before_id and item_id >= before_id:
                         continue
+                    candidates.append((item_id, storage_key))
 
-                    yield checkpoint_tuple
-                    yielded += 1
-                    if limit is not None and yielded >= limit:
-                        return
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            yielded = 0
+            for _, storage_key in candidates:
+                item = await store.get_item(storage_key)
+                if item is None:
+                    continue
+                value = cast(_CheckpointItemValue, item.value)
+                metadata = cast(
+                    CheckpointMetadata, self._deserialize(value["metadata"])
+                )
+                if filter and not all(
+                    metadata.get(name) == expected for name, expected in filter.items()
+                ):
+                    continue
 
-                if not page.has_more or page.last_id is None:
+                yield await self._checkpoint_tuple(
+                    store, thread_id, value, metadata=metadata
+                )
+                yielded += 1
+                if limit is not None and yielded >= limit:
                     return
-                after = page.last_id
-        finally:
-            await store.aclose()
 
     async def aput(
         self,
@@ -325,15 +344,12 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if step is not None:
             tags["step"] = str(step)
 
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             await store.set_item(
                 self._checkpoint_key(checkpoint_ns, checkpoint_id),
                 cast(JSONObject, value),
                 tags=cast(Mapping[str, str], tags),
             )
-        finally:
-            await store.aclose()
         return self._config(thread_id, checkpoint_ns, checkpoint_id)
 
     async def aput_writes(
@@ -356,8 +372,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         if not task_id:
             raise ValueError("task_id must be a non-empty string")
 
-        store = await self._get_or_create_store(thread_id)
-        try:
+        async with self._get_or_create_store(thread_id) as store:
             for ordinal, (channel, value) in enumerate(writes):
                 index = WRITES_IDX_MAP.get(channel, ordinal)
                 item_value: _PendingWriteItemValue = {
@@ -395,16 +410,26 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                         )
                     except FoundryStorageConflictError:
                         pass
-        finally:
-            await store.aclose()
 
     async def adelete_thread(self, thread_id: str) -> None:
-        """Delete a thread's store and every checkpoint item in it."""
+        """Delete thread data according to the store's actual isolation setting.
+
+        Isolated stores retain the store and other users' partitions; only the
+        current user's items are deleted. Non-isolated stores are deleted in full.
+        A missing store is ignored.
+
+        Args:
+            thread_id: Identifier of the thread to delete.
+
+        Raises:
+            ValueError: ``thread_id`` is empty.
+        """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")
         store = self._bound_store(thread_id)
         try:
-            if self._user_isolation:
+            properties = await store.get()
+            if properties.user_isolation:
                 keys: list[str] = []
                 after: str | None = None
                 while True:
@@ -426,8 +451,13 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         finally:
             await store.aclose()
 
-    async def _get_or_create_store(self, thread_id: str) -> FoundryStateStore:
-        store = await FoundryStateStore.get_or_create(
+    @asynccontextmanager
+    async def _get_or_create_store(
+        self, thread_id: str
+    ) -> AsyncIterator[FoundryStateStore]:
+        async with get_state_store(
+            self,
+            FoundryStateStore,
             self._store_name(thread_id),
             self._credential,
             self._endpoint,
@@ -439,25 +469,8 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             # header. Keep it lazy so registered prefixes and the telemetry
             # opt-out are evaluated per request.
             get_server_version=get_user_agent,
-        )
-        try:
-            properties = await store.get()
-            if properties.user_isolation != self._user_isolation:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"user_isolation={properties.user_isolation}; expected "
-                    f"{self._user_isolation}"
-                )
-            if properties.item_ttl_seconds != self._item_ttl_seconds:
-                raise ValueError(
-                    f"State store {store.name!r} already exists with "
-                    f"item_ttl_seconds={properties.item_ttl_seconds}; expected "
-                    f"{self._item_ttl_seconds}"
-                )
-        except BaseException:
-            await store.aclose()
-            raise
-        return store
+        ) as store:
+            yield store
 
     def _bound_store(self, thread_id: str) -> FoundryStateStore:
         return FoundryStateStore(
@@ -472,11 +485,46 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
             get_server_version=get_user_agent,
         )
 
+    async def _iter_checkpoint_keys(
+        self,
+        store: FoundryStateStore,
+        tags: Mapping[str, str],
+    ) -> AsyncIterator[str]:
+        """Yield storage keys for checkpoints matching ``tags``, no values.
+
+        Iteration order follows the store cursor and must not be treated as
+        LangGraph checkpoint order; callers sort or reduce by checkpoint id
+        parsed from each key, then ``get_item`` only what they need.
+        """
+        after: str | None = None
+        while True:
+            page = await store.list_keys(
+                tags=tags,
+                limit=_PAGE_SIZE,
+                order="desc",
+                after=after,
+            )
+            for key in page.keys:
+                yield key.key
+            if not page.has_more or page.last_id is None:
+                return
+            after = page.last_id
+
+    @staticmethod
+    def _parse_checkpoint_key(storage_key: str) -> tuple[str, str]:
+        """Split ``{checkpoint_ns}/{checkpoint_id}`` into namespace and id."""
+        checkpoint_ns, separator, checkpoint_id = storage_key.rpartition("/")
+        if not separator:
+            return "", storage_key
+        return checkpoint_ns, checkpoint_id
+
     async def _checkpoint_tuple(
         self,
         store: FoundryStateStore,
         thread_id: str,
         value: _CheckpointItemValue,
+        *,
+        metadata: CheckpointMetadata | None = None,
     ) -> CheckpointTuple:
         checkpoint_id = value["checkpoint_id"]
         checkpoint_ns = value.get("checkpoint_ns", "")
@@ -489,7 +537,11 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         return CheckpointTuple(
             config=self._config(thread_id, checkpoint_ns, checkpoint_id),
             checkpoint=cast(Checkpoint, self._deserialize(value["checkpoint"])),
-            metadata=cast(CheckpointMetadata, self._deserialize(value["metadata"])),
+            metadata=(
+                metadata
+                if metadata is not None
+                else cast(CheckpointMetadata, self._deserialize(value["metadata"]))
+            ),
             parent_config=(
                 self._config(thread_id, checkpoint_ns, parent_checkpoint_id)
                 if parent_checkpoint_id

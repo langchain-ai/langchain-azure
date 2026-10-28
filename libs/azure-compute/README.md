@@ -5,9 +5,9 @@ compute that runs agent-authored code.
 
 ## Installation
 
-This source snapshot is not published on public PyPI. Use Python 3.11 or
-later and Git, and install the integration you need from this pinned source
-revision in a virtual environment:
+`langchain-azure-compute` is not yet published on public PyPI. Use Python
+3.11 or later and Git, and install the integration you need from this
+pinned source revision in a virtual environment:
 
 ```bash
 python -m pip install "langchain-azure-compute[dynamic-sessions] @ git+https://github.com/langchain-ai/langchain-azure.git@cb9db867b4e4f7dab74995254efe3332a6b6e2f5#subdirectory=libs/azure-compute"

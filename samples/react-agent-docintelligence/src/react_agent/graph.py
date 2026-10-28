@@ -14,14 +14,12 @@ the analyst, showing how to wire agents together in a pipeline.
 
 from typing import Literal
 
+from langchain_azure_ai.agents import AgentServiceAgentState, AgentServiceFactory
+from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
+from langchain_azure_ai.tools import AzureAIDocumentIntelligenceTool
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt.tool_node import ToolNode
-
-from langchain_azure_ai.agents import AgentServiceFactory
-from langchain_azure_ai.agents.prebuilt import AgentServiceAgentState
-from langchain_azure_ai.callbacks.tracers import AzureAIOpenTelemetryTracer
-from langchain_azure_ai.tools import AzureAIDocumentIntelligenceTool
 
 from react_agent.prompts import ANALYST_PROMPT, PARSER_PROMPT
 

@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: langchain-azure-deep-research
+requiredVersions:
+  extensions:
+    azure.ai.agents: '>=1.0.0-beta.9'
+services:
+  ai-project:
+    host: azure.ai.project
+    deployments:
+      - name: gpt-4.1-mini
+        model:
+          format: OpenAI
+          name: gpt-4.1-mini
+          version: '2025-04-14'
+        sku:
+          name: GlobalStandard
+          capacity: 50
+  deep-research-tools:
+    host: azure.ai.toolbox
+    uses:
+      - ai-project
+    tools:
+      - type: web_search
+        name: web_search
+  deep-research:
+    host: azure.ai.agent
+    project: .
+    language: python
+    uses:
+      - ai-project
+      - deep-research-tools
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+    kind: hosted
+    name: langchain-azure-deep-research
+    description: Deep Research with planning, delegated web search, and virtual files.
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+    env:
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      TOOLBOX_NAME: deep-research-tools
+      REPORT_STORAGE_ACCOUNT_URL: ${REPORT_STORAGE_ACCOUNT_URL}
+      REPORT_STORAGE_CONTAINER: ${REPORT_STORAGE_CONTAINER}
+      AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED: 'false'
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: 'false'
+    container:
+      resources:
+        cpu: '0.5'
+        memory: 1Gi
+infra:
+  provider: microsoft.foundry
