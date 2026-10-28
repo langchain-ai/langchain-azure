@@ -368,9 +368,6 @@ if TYPE_CHECKING:
         ResponsesServerOptions,
     )
 
-    from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
-        FoundryCheckpointSaver,
-    )
     from langchain_azure_ai.agents.hosting._invoke_host import (
         InvocationsHostServer,
     )
@@ -381,6 +378,8 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.hosting._responses_host import (
         ResponsesHostServer,
     )
+
+    from ._checkpoint._foundry_checkpoint_saver import FoundryCheckpointSaver
 
 __all__ = [
     "HOSTING_USER_AGENT",
@@ -407,7 +406,7 @@ _module_lookup = {
     "ConversationChainStoreProtocol": ("langchain_azure_ai.agents.hosting._responses"),
     "CreateResponse": "azure.ai.agentserver.responses",
     "FoundryCheckpointSaver": (
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver"
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver"
     ),
     "FoundryConversationChainStore": ("langchain_azure_ai.agents.hosting._responses"),
     "InvocationsHostServer": "langchain_azure_ai.agents.hosting._invoke_host",

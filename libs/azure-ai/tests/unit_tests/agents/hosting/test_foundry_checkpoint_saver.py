@@ -22,7 +22,7 @@ from typing_extensions import TypedDict
 
 from langchain_azure_ai._user_agent import get_user_agent
 from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver, HostingFeature
-from langchain_azure_ai.agents.hosting._foundry_checkpoint_saver import (
+from langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver import (
     DEFAULT_STORE_NAME_PREFIX,
 )
 
@@ -178,7 +178,7 @@ def _checkpoint(checkpoint_id: str, value: str) -> Checkpoint:
 def saver_and_store() -> Iterator[tuple[FoundryCheckpointSaver, _FakeStateStore]]:
     store = _FakeStateStore()
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -187,7 +187,7 @@ def saver_and_store() -> Iterator[tuple[FoundryCheckpointSaver, _FakeStateStore]
 
 def test_constructor_registers_foundry_checkpoint_feature() -> None:
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "_add_process_hosting_features"
     ) as add_process_features:
         saver = FoundryCheckpointSaver(_credential())
@@ -202,7 +202,7 @@ async def test_put_stamps_state_store_user_agent() -> None:
     credential = _credential()
 
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ) as get_or_create:
@@ -245,7 +245,7 @@ async def test_uses_existing_store_without_descriptor_validation(
     read_properties = AsyncMock(side_effect=AssertionError("Unexpected descriptor GET"))
     monkeypatch.setattr(store, "get", read_properties)
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -273,7 +273,7 @@ async def test_overlong_thread_id_uses_bounded_stable_store_name() -> None:
         {"configurable": {"thread_id": "thread-" + "x" * 200}},
     )
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=get_or_create,
     ):
@@ -292,7 +292,7 @@ async def test_round_trip_latest_history_and_pending_writes() -> None:
     get_or_create = AsyncMock(return_value=store)
 
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=get_or_create,
     ):
@@ -344,7 +344,7 @@ async def test_list_before_filters_by_checkpoint_id_not_storage_order() -> None:
     store = _FakeStateStore()
 
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -394,7 +394,7 @@ async def test_latest_uses_checkpoint_id_when_storage_order_disagrees() -> None:
     newer_id = "1f1b63e7-4a17-67b7-8002-6c64d1d576fe"
 
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -434,7 +434,7 @@ async def test_alist_limit_fetches_only_selected_checkpoint_values() -> None:
     ids = [f"ckpt-{i:02d}" for i in range(5)]
 
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -689,7 +689,8 @@ async def test_latest_history_and_limit_order_keys_across_pages(
     store.list_keys_calls.clear()
     store.get_item_calls.clear()
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver._PAGE_SIZE", 2
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver._PAGE_SIZE",
+        2,
     ):
         latest = await saver.aget_tuple(_config())
         assert store.get_item_calls == ["/checkpoint-007"]
@@ -830,7 +831,7 @@ async def test_delete_thread_uses_store_isolation(
         )
     with (
         patch(
-            "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+            "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
             "FoundryStateStore",
             return_value=store,
         ),
@@ -860,7 +861,7 @@ async def test_delete_thread_stamps_user_agent() -> None:
         aclose=AsyncMock(),
     )
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver.FoundryStateStore",
         return_value=store,
     ) as state_store:
         saver = FoundryCheckpointSaver(_credential(), user_isolation=False)
@@ -887,7 +888,7 @@ async def test_delete_thread_descriptor_failure_does_not_delete(
         aclose=AsyncMock(),
     )
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver.FoundryStateStore",
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver.FoundryStateStore",
         return_value=store,
     ):
         saver = FoundryCheckpointSaver(_credential(), user_isolation=False)
@@ -909,7 +910,7 @@ async def test_delete_thread_descriptor_failure_does_not_delete(
 async def test_saver_runs_with_real_langgraph() -> None:
     store = _FakeStateStore()
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "FoundryStateStore.get_or_create",
         new=AsyncMock(return_value=store),
     ):
@@ -940,7 +941,7 @@ async def test_saver_runs_with_real_langgraph() -> None:
 async def test_close_closes_owned_default_credential() -> None:
     credential = SimpleNamespace(close=AsyncMock())
     with patch(
-        "langchain_azure_ai.agents.hosting._foundry_checkpoint_saver."
+        "langchain_azure_ai.agents.hosting._checkpoint._foundry_checkpoint_saver."
         "DefaultAzureCredential",
         return_value=credential,
     ):

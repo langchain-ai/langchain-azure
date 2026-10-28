@@ -356,6 +356,9 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
     from azure.ai.agentserver.core.storage import FoundryStateStore
 
     from langchain_azure_ai.agents import hosting
+    from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+        _checkpoint_reads,
+    )
     from langchain_azure_ai.agents.hosting._storage import get_state_store
     from langchain_azure_ai.agents.hosting._storage.state_store_factory import (
         _current_factory,
@@ -368,24 +371,31 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
     monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
     factories = []
+    checkpoint_contexts = []
     expected_features = HostingFeature.RESPONSES | HostingFeature.HITL
 
     async def handle(*args: Any) -> AsyncGenerator[Any, None]:
         factory = _current_factory.get()
         assert factory is not None
         factories.append(factory)
+        checkpoints = _checkpoint_reads.get()
+        assert checkpoints is not None
+        checkpoint_contexts.append(checkpoints)
         try:
             async with get_state_store(server, FoundryStateStore, "store"):
                 pass
             hosting._add_request_hosting_features(HostingFeature.HITL)
             yield "first"
             assert _current_factory.get() is factory
+            assert _checkpoint_reads.get() is checkpoints
             assert hosting.get_hosting_features() == expected_features
             if ending == "cancel":
                 raise asyncio.CancelledError("stop")
             yield "second"
         finally:
             assert _current_factory.get() is factory
+            assert _checkpoint_reads.get() is checkpoints
+            assert checkpoints.active
             assert hosting.get_hosting_features() == expected_features
             async with get_state_store(server, FoundryStateStore, "store"):
                 store.aclose.assert_not_awaited()
@@ -399,6 +409,7 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
     try:
         assert await asyncio.create_task(advance()) == "first"
         assert _current_factory.get() is None
+        assert _checkpoint_reads.get() is None
         if ending == "close":
             await cast(AsyncGenerator[Any, None], iterator).aclose()
         elif ending == "cancel":
@@ -413,6 +424,8 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
         acquire.assert_awaited_once()
         store.aclose.assert_awaited_once()
         assert factories[0].session is not None and factories[0].session.closed
+        assert not checkpoint_contexts[0].active
+        assert checkpoint_contexts[0].cache is None
     finally:
         await factories[0].stack.aclose()
 
@@ -711,6 +724,23 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
     closed: list[FoundryStateStore] = []
     get_or_create = FoundryStateStore.get_or_create
     aclose = FoundryStateStore.aclose
+    get_item = FoundryStateStore.get_item
+    list_keys = FoundryStateStore.list_keys
+    checkpoint_reads: list[str] = []
+    checkpoint_lists: list[dict[str, Any]] = []
+    reference_reads: list[str] = []
+
+    async def read(store: FoundryStateStore, key: str, **kwargs: Any) -> Any:
+        if key == CONVERSATION_CHECKPOINT_KEY:
+            reference_reads.append(key)
+        if "FoundryCheckpointSaver/" in store.name and "/writes/" not in key:
+            checkpoint_reads.append(key)
+        return await get_item(store, key, **kwargs)
+
+    async def keys(store: FoundryStateStore, **kwargs: Any) -> Any:
+        if (kwargs.get("tags") or {}).get("kind") == "checkpoint":
+            checkpoint_lists.append(kwargs)
+        return await list_keys(store, **kwargs)
 
     async def acquire(*args: Any, **kwargs: Any) -> FoundryStateStore:
         store = await get_or_create(*args, **kwargs)
@@ -727,6 +757,8 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
 
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     monkeypatch.setattr(FoundryStateStore, "aclose", close)
+    monkeypatch.setattr(FoundryStateStore, "get_item", read)
+    monkeypatch.setattr(FoundryStateStore, "list_keys", keys)
     builder = StateGraph(MessagesState)
     builder.add_node("reply", reply)
     builder.add_edge(START, "reply")
@@ -735,6 +767,9 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
     server = ResponsesHostServer(graph)
     with _client(server) as client:
         for turn in (1, 2):
+            checkpoint_reads.clear()
+            checkpoint_lists.clear()
+            reference_reads.clear()
             response = client.post(
                 "/responses",
                 json={"input": "hello", "conversation": "reuse", "stream": streaming},
@@ -753,6 +788,55 @@ def test_requests_reuse_two_clients_and_restore_checkpoint_state(
             assert len(created) == len(closed) == 2 * turn
             assert len({id(store) for store in created}) == 2 * turn
             assert len({store.name for store in created}) == 2
+            assert len(reference_reads) == 1
+            if turn == 2:
+                assert len(checkpoint_reads) == 2, checkpoint_reads
+                assert len(checkpoint_lists) == 1
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+async def test_request_pins_reference_after_recovery_selection(
+    monkeypatch: pytest.MonkeyPatch, recovering: bool
+) -> None:
+    from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+    from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+        _checkpoint_reads,
+    )
+
+    graph = make_checkpointed_echo_graph()
+    graph.checkpointer = FoundryCheckpointSaver(credential=AsyncMock())
+    server = ResponsesHostServer(graph)
+    reference = CheckpointRef("input-thread", "input-checkpoint")
+    chain_get = AsyncMock(return_value=reference.to_dict())
+    monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+    context = _context()
+    context.is_recovery = recovering
+    if recovering:
+        context.persisted_response = _response_object(
+            context.response_id,
+            internal_metadata={
+                METADATA_LANGGRAPH_THREAD_ID: "recovery-thread",
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "recovery-checkpoint",
+            },
+        )
+        reference = CheckpointRef("recovery-thread", "recovery-checkpoint")
+
+    async def run(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        reads = _checkpoint_reads.get()
+        assert reads is not None and reads.key is not None
+        assert reads.key[2:] == (reference.thread_id, "")
+        assert reads.input_checkpoint_id == reference.checkpoint_id
+        yield "messages", (AIMessage(content="done"), {})
+
+    monkeypatch.setattr(server.graph, "astream", run)
+    events = [
+        event
+        async for event in server._handle_create_async_gen(
+            _request(), context, asyncio.Event()
+        )
+    ]
+    assert events[-1]["type"] == "response.completed"
+    chain_get.assert_awaited_once()
 
 
 @pytest.mark.parametrize("streaming", [False, True])
