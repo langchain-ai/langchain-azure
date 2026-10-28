@@ -2496,7 +2496,10 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
-async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> None:
+@pytest.mark.parametrize("bound_checkpoint", [False, True])
+async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
+    bound_checkpoint: bool,
+) -> None:
     server = ResponsesHostServer(make_checkpointed_two_node_graph())
     request = _request()
     context = _context(
@@ -2543,6 +2546,10 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot() -> Non
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         },
     )
+    if bound_checkpoint:
+        server.graph.config = {
+            "configurable": {"checkpoint_id": "wrong-bound-checkpoint"}
+        }
     events = [
         event
         async for event in server.handle_create(
