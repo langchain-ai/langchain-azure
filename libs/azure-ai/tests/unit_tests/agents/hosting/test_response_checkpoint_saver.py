@@ -8,12 +8,16 @@ from __future__ import annotations
 import asyncio
 import json
 from copy import copy
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
+from langgraph.checkpoint.base import (
+    CheckpointMetadata,
+    CheckpointTuple,
+    empty_checkpoint,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 
 from langchain_azure_ai.agents.hosting._responses import CheckpointRef
@@ -74,7 +78,9 @@ async def test_progress_waits_for_a_successful_graph_write(
     assert await waiting
     stored = await backend.aget_tuple(saved_config)
     assert stored is not None
-    assert json.loads(stored.metadata[METADATA_RESPONSE_EXECUTION]) == [
+    stamp = stored.metadata.get(METADATA_RESPONSE_EXECUTION)
+    assert isinstance(stamp, str)
+    assert json.loads(stamp) == [
         "response",
         "parent",
     ]
@@ -162,7 +168,9 @@ async def test_recovery_checks_ownership_with_legacy_compatibility(
     metadata: dict[str, Any] = {"step": 0}
     if stamp is not None:
         metadata[METADATA_RESPONSE_EXECUTION] = stamp
-    config = await backend.aput(_config(), checkpoint, metadata, {})
+    config = await backend.aput(
+        _config(), checkpoint, cast(CheckpointMetadata, metadata), {}
+    )
     saver = _saver(
         backend,
         recovery_ref=CheckpointRef("thread", checkpoint["id"]),

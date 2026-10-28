@@ -12,7 +12,7 @@ import operator
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
+from types import AsyncGeneratorType, SimpleNamespace
 from typing import Annotated, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -158,6 +158,7 @@ def test_siblings_restore_the_exact_parent(
 def test_default_file_provider_and_unretained_child() -> None:
     calls: list[list[str]] = []
     server = ResponsesHostServer(_graph(calls), enable_response_branching=True)
+    assert server.app._orchestrator is not None
     assert isinstance(server.app._orchestrator._provider, FileResponseStore)
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
@@ -463,6 +464,7 @@ def test_hooks_and_bound_configuration_cannot_redirect_a_branch() -> None:
         stored = client.portal.call(provider.get_response, parent["id"])
     assert _text(child) == "A|B"
     assert _config(cast(Any, stored))["configurable"]["thread_id"] == parent["id"]
+    assert graph.config is not None
     assert graph.config["configurable"]["thread_id"] == "bound-thread"
 
 
@@ -713,6 +715,7 @@ async def test_recovery_keeps_original_mode_and_response_owned_progress(
     events = server._handle_create_async_gen(
         request, _context(request, provider, "resp-current"), asyncio.Event()
     )
+    assert isinstance(events, AsyncGeneratorType)
     snapshots = []
     async for event in events:
         if isinstance(event, ResponseCheckpointEvent):
@@ -1004,6 +1007,7 @@ def test_hosted_default_provider_remains_available(
     monkeypatch.setattr("azure.identity.aio.DefaultAzureCredential", MagicMock())
     server = ResponsesHostServer(_graph([]), enable_response_branching=True)
     factory.assert_called_once()
+    assert server.app._orchestrator is not None
     assert server.app._orchestrator._provider is provider
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
