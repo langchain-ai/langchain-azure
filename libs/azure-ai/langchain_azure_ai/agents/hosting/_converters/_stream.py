@@ -472,9 +472,9 @@ class StreamConverter:
             for message in messages:
                 if isinstance(message, AIMessage):
                     if (
-                        (message.id or cached)
+                        cached
+                        and self._restore_cached_output
                         and message.id not in self._message_ids
-                        and (not cached or self._restore_cached_output)
                     ):
                         async for event in self.handle_message_chunk(message):
                             yield event

@@ -146,6 +146,39 @@ async def test_recovery_restores_cached_text_once(
     assert len(recovered.response["output"]) == 2
 
 
+@pytest.mark.parametrize("restore_cached_output", [False, True])
+async def test_regular_updates_do_not_replay_history(
+    restore_cached_output: bool,
+) -> None:
+    stream = ResponseEventStream(response_id="resp-history")
+    stream.emit_created()
+    stream.emit_in_progress()
+    previous = AIMessage(id="previous", content="previous answer")
+    current = AIMessage(id="current", content="new answer")
+
+    events = [
+        event
+        async for event in stream_graph_to_events(
+            _agen(
+                [
+                    ("messages", (current, {})),
+                    ("updates", {"model": {"messages": [previous, current]}}),
+                ]
+            ),
+            stream,
+            cancellation_signal=asyncio.Event(),
+            restore_cached_output=restore_cached_output,
+        )
+    ]
+
+    assert [
+        event["delta"]
+        for event in events
+        if event["type"] == "response.output_text.delta"
+    ] == ["new answer"]
+    assert len(stream.response["output"]) == 1
+
+
 def _types(events: list[Any]) -> list[str]:
     return [event["type"] for event in events]
 

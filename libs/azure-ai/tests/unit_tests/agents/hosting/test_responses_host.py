@@ -30,6 +30,7 @@ from azure.ai.agentserver.responses.models import (
     MessageContentInputTextContent,
     ResponseObject,
 )
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
@@ -1124,6 +1125,47 @@ def _context(
     context.get_input_items = AsyncMock(return_value=[_message_item(current_text)])
     context.get_history = AsyncMock(return_value=history or [])
     return context
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+async def test_bound_callbacks_run_once_without_mutating_graph(
+    checkpointed: bool,
+) -> None:
+    started: list[uuid.UUID] = []
+    ended: list[uuid.UUID] = []
+
+    class Handler(BaseCallbackHandler):
+        run_inline = True
+
+        def on_chain_start(self, *args: Any, **kwargs: Any) -> None:
+            if kwargs.get("parent_run_id") is None:
+                started.append(kwargs["run_id"])
+
+        def on_chain_end(self, *args: Any, **kwargs: Any) -> None:
+            if kwargs.get("parent_run_id") is None:
+                ended.append(kwargs["run_id"])
+
+    handler = Handler()
+    graph = (
+        make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+    ).with_config({"callbacks": [handler]})
+    bound_config = graph.config
+    server = ResponsesHostServer(graph)
+
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(), _context(conversation_id=None), asyncio.Event()
+        )
+    ]
+
+    assert events[-1]["type"] == "response.completed"
+    assert len(started) == 1
+    assert ended == started
+    assert graph.config is bound_config
+    assert server.graph.config is bound_config
+    assert bound_config is not None
+    assert bound_config["callbacks"] == [handler]
 
 
 def test_non_streaming_request_returns_completed_response() -> None:
