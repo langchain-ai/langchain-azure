@@ -18,12 +18,14 @@ import pytest
 pytest.importorskip("azure.ai.agentserver.responses")
 
 from azure.ai.agentserver.responses import (
+    FoundryResourceNotFoundError,
     ResponseContext,
     ResponseEventStream,
     ResponsesServerOptions,
 )
 from azure.ai.agentserver.responses.models import CreateResponse
 from azure.ai.agentserver.responses.store._memory import InMemoryResponseProvider
+from azure.core.exceptions import ResourceNotFoundError
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.utils import ConfigurableFieldSpec
@@ -256,8 +258,12 @@ def test_store_false_does_not_disable_graph_persistence(
         assert _text(result) == ("A,B" if parented else "B")
         assert len(list(saver.list(None))) > before
         assert client.get(f"/responses/{result['id']}").status_code == 404
-        unavailable = _post(client, "not-run", previous_response_id=result["id"])
-        assert unavailable["status"] == "failed", unavailable
+        unavailable = client.post(
+            "/responses",
+            json={"input": "not-run", "previous_response_id": result["id"]},
+        )
+        assert unavailable.status_code == 404, unavailable.text
+        assert unavailable.json()["error"]["code"] == "previous_response_not_found"
         if parented:
             sibling = _post(client, "C", previous_response_id=parent_id)
             assert _text(sibling) == "A,C"
@@ -631,6 +637,125 @@ def test_invalid_linkage_is_rejected_before_execution(fields: dict[str, Any]) ->
         response = client.post("/responses", json={"input": "A", **fields})
     assert response.status_code == 400, response.text
     assert executions == []
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("default_provider", [False, True])
+@pytest.mark.parametrize(
+    "parent_status", ["missing", "unretained", "in_progress", "failed", "cancelled"]
+)
+def test_invalid_parent_reference_is_rejected_before_execution(
+    stream: bool, default_provider: bool, parent_status: str
+) -> None:
+    graph, executions = _branch_graph()
+    server = ResponsesHostServer(
+        graph,
+        store=None if default_provider else InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    provider = server._response_provider
+    assert provider is not None
+    with TestClient(server.app) as client:
+        parent = _post(client, "A", store=parent_status != "unretained")
+        assert client.portal is not None
+        if parent_status == "missing":
+            client.portal.call(provider.delete_response, parent["id"])
+        elif parent_status != "unretained":
+            stored = client.portal.call(provider.get_response, parent["id"])
+            stored["status"] = parent_status
+            client.portal.call(provider.update_response, stored)
+        with patch.object(
+            graph,
+            "astream",
+            side_effect=AssertionError("Invalid parents must not execute the graph."),
+        ) as graph_stream:
+            response = client.post(
+                "/responses",
+                json={
+                    "input": "must-not-run",
+                    "previous_response_id": parent["id"],
+                    "stream": stream,
+                },
+            )
+        missing_parent = parent_status in {"missing", "unretained"}
+        assert response.status_code == (404 if missing_parent else 400), response.text
+        assert response.headers["content-type"].startswith("application/json")
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["param"] == "previous_response_id"
+        if missing_parent:
+            assert error["code"] == "previous_response_not_found"
+        else:
+            assert error["code"] != "server_error"
+        graph_stream.assert_not_called()
+    assert executions == ["A"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_parent_reference_preserves_sdk_identifier_validation(stream: bool) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with (
+        patch.object(
+            provider,
+            "get_response",
+            side_effect=AssertionError("Malformed IDs must not reach storage."),
+        ) as lookup,
+        TestClient(server.app) as client,
+    ):
+        response = client.post(
+            "/responses",
+            json={
+                "input": "must-not-run",
+                "previous_response_id": "not-a-valid-response-id",
+                "stream": stream,
+            },
+        )
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "invalid_parameters"
+    assert error["param"] == "previous_response_id"
+    lookup.assert_not_awaited()
+    assert executions == []
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("failure", ["empty", "foundry", "azure", "backend"])
+def test_parent_reference_distinguishes_storage_failures(
+    stream: bool, failure: str
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    errors = {
+        "empty": None,
+        "foundry": FoundryResourceNotFoundError("private storage details"),
+        "azure": ResourceNotFoundError("private storage details"),
+        "backend": TimeoutError("private storage details"),
+    }
+    with TestClient(server.app) as client:
+        parent = _post(client, "A")
+        with patch.object(
+            provider, "get_response", side_effect=errors[failure], return_value=None
+        ) as lookup:
+            response = client.post(
+                "/responses",
+                json={
+                    "input": "must-not-run",
+                    "previous_response_id": parent["id"],
+                    "stream": stream,
+                },
+            )
+    backend_failure = failure == "backend"
+    assert response.status_code == (500 if backend_failure else 404), response.text
+    error = response.json()["error"]
+    assert error["code"] == (
+        "server_error" if backend_failure else "previous_response_not_found"
+    )
+    assert "private storage details" not in response.text
+    lookup.assert_awaited_once()
+    assert executions == ["A"]
 
 
 @pytest.mark.parametrize("checkpointer", [None, False, True])
@@ -1556,8 +1681,12 @@ def test_failed_terminal_persistence_does_not_publish_a_usable_parent(
         assert retrieved.status_code == 200, retrieved.text
         assert retrieved.json()["status"] == "failed"
         assert retrieved.json()["error"]["code"] == "storage_error"
-        unavailable = _post(client, "not-run", previous_response_id=failed_id)
-        assert unavailable["status"] == "failed"
+        unavailable = client.post(
+            "/responses",
+            json={"input": "not-run", "previous_response_id": failed_id},
+        )
+        assert unavailable.status_code == 400, unavailable.text
+        assert unavailable.json()["error"]["param"] == "previous_response_id"
         c = _post(client, "C", previous_response_id=a["id"])
     assert _text(c) == "A,C"
     assert executions == ["A", "B", "C"]

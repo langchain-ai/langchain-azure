@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
-from azure.ai.agentserver.responses import ResponseContext, ResponseProviderProtocol
+from azure.ai.agentserver.core import (
+    FoundryAgentRequestContext,
+    reset_request_context,
+    set_request_context,
+)
+from azure.ai.agentserver.responses import (
+    FoundryResourceNotFoundError,
+    PlatformContext,
+    ResponseContext,
+    ResponseProviderProtocol,
+)
+from azure.ai.agentserver.responses._id_generator import IdGenerator
+from azure.core.exceptions import ResourceNotFoundError
 from langchain_core.runnables import RunnableConfig
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -25,9 +38,10 @@ BRANCH_MODE_HEADER = "x-client-langchain-response-branching"
 BRANCH_MODE = "checkpoint-v1"
 BRANCH_MODE_METADATA = "langgraph_response_branching"
 
+logger = logging.getLogger(__name__)
 
 _branch_selections: ContextVar[
-    dict[tuple[int, ResponseContext, str], CheckpointRef] | None
+    dict[tuple[int, str, str | None, str | None], Mapping[str, Any]] | None
 ] = ContextVar("langchain_azure_ai_branch_selections", default=None)
 
 
@@ -38,14 +52,28 @@ class BranchingAdmissionMiddleware:
         app: The next ASGI application.
         enabled: Whether fresh requests may use response branching. Client mode
             headers are removed even when branching is disabled.
+        provider: Response provider used to validate parent references.
     """
 
-    def __init__(self, app: ASGIApp, *, enabled: bool) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        enabled: bool,
+        provider: ResponseProviderProtocol | None = None,
+    ) -> None:
         self.app = app
         self.enabled = enabled
+        self.provider = provider
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Validate fresh HTTP requests before SDK admission."""
+        with branch_selection_scope():
+            await self._handle_request(scope, receive, send)
+
+    async def _handle_request(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
         if scope["type"] == "http":
             headers = [
                 (name, value)
@@ -62,7 +90,8 @@ class BranchingAdmissionMiddleware:
                 and scope["method"] == "POST"
                 and scope["path"].rstrip("/").endswith("/responses")
             ):
-                body = await Request(scope, receive).body()
+                request = Request(scope, receive)
+                body = await request.body()
                 try:
                     payload = json.loads(body)
                 except (ValueError, UnicodeDecodeError):
@@ -83,6 +112,10 @@ class BranchingAdmissionMiddleware:
                             status_code=400,
                         )(scope, receive, send)
                         return
+                    parent_error = await self._invalid_parent(payload, request)
+                    if parent_error is not None:
+                        await parent_error(scope, receive, send)
+                        return
                 original_receive = receive
                 body_sent = False
 
@@ -99,6 +132,67 @@ class BranchingAdmissionMiddleware:
 
                 receive = replay_body
         await self.app(scope, receive, send)
+
+    async def _invalid_parent(
+        self, payload: dict[str, Any], request: Request
+    ) -> JSONResponse | None:
+        parent_id = payload.get("previous_response_id")
+        if not parent_id or self.provider is None:
+            return None
+        if not IdGenerator.is_valid(parent_id, allowed_prefixes=["caresp"])[0]:
+            return None
+        platform_context = PlatformContext(
+            user_id_key=request.headers.get("x-agent-user-id"),
+            call_id=request.headers.get("x-agent-foundry-call-id"),
+        )
+        token = set_request_context(
+            FoundryAgentRequestContext(
+                user_id=platform_context.user_id_key,
+                call_id=platform_context.call_id,
+            )
+        )
+        try:
+            parent = await _get_branch_parent(
+                self.provider, parent_id, platform_context
+            )
+        except Exception:
+            logger.exception("Response branch parent lookup failed")
+            return JSONResponse(
+                {
+                    "error": {
+                        "type": "server_error",
+                        "message": "An internal error occurred.",
+                        "param": None,
+                        "code": "server_error",
+                    }
+                },
+                status_code=500,
+            )
+        finally:
+            reset_request_context(token)
+        if parent is not None and parent.get("status") == "completed":
+            return None
+        code = (
+            "previous_response_not_found"
+            if parent is None
+            else "invalid_request_error"
+        )
+        message = (
+            "The previous response was not found."
+            if parent is None
+            else "The parent response must be stored and completed."
+        )
+        return JSONResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": message,
+                    "param": "previous_response_id",
+                    "code": code,
+                }
+            },
+            status_code=404 if parent is None else 400,
+        )
 
     @staticmethod
     def _invalid_linkage(payload: dict[str, Any]) -> tuple[str, str] | None:
@@ -122,11 +216,37 @@ class BranchingAdmissionMiddleware:
 @contextmanager
 def branch_selection_scope() -> Iterator[None]:
     """Reuse checkpoint selections only during one request's config preparation."""
+    if _branch_selections.get() is not None:
+        yield
+        return
     token = _branch_selections.set({})
     try:
         yield
     finally:
         _branch_selections.reset(token)
+
+
+async def _get_branch_parent(
+    provider: ResponseProviderProtocol,
+    parent_id: str,
+    context: PlatformContext | None,
+) -> Mapping[str, Any] | None:
+    selections = _branch_selections.get()
+    key = (
+        id(provider),
+        parent_id,
+        getattr(context, "user_id_key", None),
+        getattr(context, "call_id", None),
+    )
+    if selections is not None and key in selections:
+        return selections[key]
+    try:
+        parent = await provider.get_response(parent_id, context=context)
+    except (KeyError, FoundryResourceNotFoundError, ResourceNotFoundError):
+        return None
+    if parent is not None and selections is not None:
+        selections[key] = parent
+    return parent
 
 
 def _require_completed_tools(parent: Mapping[str, Any]) -> None:
@@ -158,16 +278,11 @@ async def select_branch_checkpoint(
     """Select the stored, completed parent's exact checkpoint for execution."""
     if provider is None:
         provider = getattr(context, "_provider", None)
-    selections = _branch_selections.get()
-    key = (id(provider), context, parent_id)
-    if selections is not None and key in selections:
-        return selections[key]
-
     if provider is None:
         raise BranchingError(
             "invalid_branch_state", "The Responses provider is unavailable."
         )
-    parent = await provider.get_response(parent_id, context=context.platform_context)
+    parent = await _get_branch_parent(provider, parent_id, context.platform_context)
     if parent is None or parent.get("status") != "completed":
         raise BranchingError(
             "invalid_branch_state",
@@ -180,8 +295,6 @@ async def select_branch_checkpoint(
         )
     _require_completed_tools(parent)
 
-    if selections is not None:
-        selections[key] = ref
     return ref
 
 

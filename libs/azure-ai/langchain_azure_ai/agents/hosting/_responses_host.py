@@ -563,6 +563,7 @@ class ResponsesHostServer:
         self._app.add_middleware(
             BranchingAdmissionMiddleware,
             enabled=enable_response_branching,
+            provider=self._response_provider,
         )
 
         # Wire the create handler.
