@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseEventStream
+from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
@@ -31,7 +32,6 @@ METADATA_LANGGRAPH_CHECKPOINT_ID = "langgraph_checkpoint_id"
 METADATA_LANGGRAPH_THREAD_ID = "langgraph_thread_id"
 METADATA_LANGGRAPH_ROOT_RESPONSE_ID = "langgraph_root_response_id"
 METADATA_RESPONSE_EXECUTION = "langgraph_response_execution"
-_METADATA_EMITTED_MESSAGES = "langgraph_emitted_message_ids"
 
 
 class TaskStorageManager:
@@ -83,23 +83,6 @@ class TaskStorageManager:
             raise RuntimeError("The response's saved graph checkpoint is malformed.")
         return reference
 
-    @property
-    def emitted_message_ids(self) -> set[str]:
-        """Return graph messages already included in the persisted output."""
-        if self._metadata is None:
-            return set()
-        value = self._metadata.get(_METADATA_EMITTED_MESSAGES, [])
-        if not isinstance(value, list) or not all(
-            isinstance(item, str) for item in value
-        ):
-            raise RuntimeError("The response's saved message identities are malformed.")
-        return set(value)
-
-    def store_emitted_message_ids(self, message_ids: set[str]) -> None:
-        """Commit message identities together with output and graph progress."""
-        if self._metadata is not None and message_ids:
-            self._metadata[_METADATA_EMITTED_MESSAGES] = sorted(message_ids)
-
 
 @dataclass
 class _CheckpointProgress:
@@ -108,6 +91,7 @@ class _CheckpointProgress:
     parent_response_id: str | None
     head: CheckpointRef | None
     require_ownership: bool
+    input_message_ids: frozenset[str] | None = None
     confirmed: set[CheckpointRef] = field(default_factory=set)
     inherited: set[CheckpointRef] = field(default_factory=set)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -142,6 +126,11 @@ class ResponseCheckpointSaver(ObjectProxy):
             thread_id, response_key, parent_response_id, recovery_ref, require_ownership
         )
         self._self_task_path = _accepts_task_path(saver.aput_writes)
+
+    @property
+    def input_message_ids(self) -> frozenset[str]:
+        """Return message identities present before the current graph execution."""
+        return self._self_progress.input_message_ids or frozenset()
 
     def _clone(self, saver: BaseCheckpointSaver) -> ResponseCheckpointSaver:
         progress = self._self_progress
@@ -198,6 +187,8 @@ class ResponseCheckpointSaver(ObjectProxy):
         if saved is None:
             if reference is not None:
                 raise RuntimeError("The required graph checkpoint is missing.")
+            if self._self_progress.input_message_ids is None:
+                self._self_progress.input_message_ids = frozenset()
             return None
         actual = HostingRunnableConfig(saved.config).checkpoint_ref
         if (
@@ -229,6 +220,13 @@ class ResponseCheckpointSaver(ObjectProxy):
             progress.confirmed.add(actual)
         else:
             progress.inherited.add(actual)
+        if progress.input_message_ids is None:
+            messages = saved.checkpoint["channel_values"].get("messages") or ()
+            progress.input_message_ids = frozenset(
+                message.id
+                for message in messages
+                if isinstance(message, BaseMessage) and message.id
+            )
         return saved
 
     async def aget(self, config: RunnableConfig) -> Checkpoint | None:

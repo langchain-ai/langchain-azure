@@ -944,7 +944,9 @@ class ResponsesHostServer:
         usage = UsageAccumulator()
         try:
             config = await self.build_runnable_config(request, context)
-            if isinstance(getattr(self._graph, "checkpointer", None), BaseCheckpointSaver):
+            if isinstance(
+                getattr(self._graph, "checkpointer", None), BaseCheckpointSaver
+            ):
                 config = merge_configs(getattr(self._graph, "config", None), config)
             root_response_id = HostingRunnableConfig(config).root_response_id
             if root_response_id is not None:

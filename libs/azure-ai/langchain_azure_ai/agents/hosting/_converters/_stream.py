@@ -104,7 +104,10 @@ async def stream_graph_to_events(
         Responses API event payload dicts.
     """
     converter = StreamConverter(
-        stream, usage=usage, restore_cached_output=restore_cached_output
+        stream,
+        usage=usage,
+        checkpoint_saver=checkpoint_saver,
+        restore_cached_output=restore_cached_output,
     )
     task_storage = TaskStorageManager.from_stream(stream)
 
@@ -391,10 +394,12 @@ class StreamConverter:
         stream: ResponseEventStream,
         *,
         usage: UsageAccumulator | None = None,
+        checkpoint_saver: ResponseCheckpointSaver | None = None,
         restore_cached_output: bool = False,
     ) -> None:
         self._stream = stream
         self._usage = usage or UsageAccumulator()
+        self._checkpoint_saver = checkpoint_saver
         self._restore_cached_output = restore_cached_output
         self._outputs = _OutputQueue()
         self._emitters: dict[
@@ -402,9 +407,7 @@ class StreamConverter:
         ] = {}
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
-        self._task_storage = TaskStorageManager.from_stream(stream)
-        self._persisted_message_ids = self._task_storage.emitted_message_ids
-        self._message_ids = set(self._persisted_message_ids)
+        self._message_ids: set[str] = set()
         for item in stream.response.get("output") or []:
             if item.get("type") == "function_call":
                 self._emitted_tool_call_ids.add(item["call_id"])
@@ -425,7 +428,6 @@ class StreamConverter:
         """Drain all item lifecycles before persisting the SDK checkpoint."""
         async for event in self.flush():
             yield event
-        self._task_storage.store_emitted_message_ids(self._message_ids)
         yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
@@ -433,7 +435,11 @@ class StreamConverter:
         message = _extract_ai_message(payload)
         if message is None:
             return
-        if message.id in self._persisted_message_ids:
+        if (
+            self._restore_cached_output
+            and self._checkpoint_saver is not None
+            and message.id in self._checkpoint_saver.input_message_ids
+        ):
             return
         if message.id:
             self._message_ids.add(message.id)
@@ -470,6 +476,13 @@ class StreamConverter:
             # ID-less legacy streams have only the node update as a boundary.
             self._finish_message(None)
             for message in messages:
+                if (
+                    cached
+                    and self._checkpoint_saver is not None
+                    and isinstance(message, BaseMessage)
+                    and message.id in self._checkpoint_saver.input_message_ids
+                ):
+                    continue
                 if isinstance(message, AIMessage):
                     if (
                         cached

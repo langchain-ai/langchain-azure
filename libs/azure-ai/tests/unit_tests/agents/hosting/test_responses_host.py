@@ -2608,6 +2608,192 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
     assert text == "research"
 
 
+async def test_many_graph_outputs_keep_checkpoint_metadata_bounded() -> None:
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        step = sum(isinstance(message, AIMessage) for message in state["messages"])
+        return {
+            "messages": [
+                AIMessage(id=f"lc_run--{uuid.uuid4()}", content=f"answer {step}")
+            ]
+        }
+
+    builder = StateGraph(MessagesState)
+    for step in range(12):
+        builder.add_node(f"answer-{step}", answer)
+        builder.add_edge(START if step == 0 else f"answer-{step - 1}", f"answer-{step}")
+    builder.add_edge("answer-11", END)
+    server = ResponsesHostServer(builder.compile(checkpointer=InMemorySaver()))
+    request = _request()
+    context = _context(response_id="resp-root", conversation_id=None)
+    events = [
+        event async for event in server.handle_create(request, context, asyncio.Event())
+    ]
+
+    assert events[-1]["type"] == "response.completed"
+    assert [
+        event["delta"]
+        for event in events
+        if isinstance(event, dict) and event["type"] == "response.output_text.delta"
+    ] == [f"answer {step}" for step in range(12)]
+    metadata = events[-1]["response"]["metadata"]["_internal_metadata"]
+    assert len(metadata) <= 512
+    assert "langgraph_emitted_message_ids" not in json.loads(metadata)
+
+    context.is_recovery = True
+    context.persisted_response = events[-1]["response"]
+    recovered = [
+        event async for event in server.handle_create(request, context, asyncio.Event())
+    ]
+    assert recovered[-1]["type"] == "response.completed"
+    assert recovered[-1]["response"]["output"] == events[-1]["response"]["output"]
+    assert not any(
+        isinstance(event, dict) and event["type"] == "response.output_text.delta"
+        for event in recovered
+    )
+
+
+@pytest.mark.parametrize("with_tool_history", [False, True])
+async def test_cached_recovery_omits_checkpoint_history(
+    with_tool_history: bool,
+) -> None:
+    from copy import copy
+
+    from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (
+        ResponseCheckpointSaver,
+    )
+
+    backend = InMemorySaver()
+    fast_finished = asyncio.Event()
+    interrupted = True
+    fast_calls: list[str] = []
+
+    async def fast(state: MessagesState) -> dict[str, Any]:
+        fast_calls.append("fast")
+        fast_finished.set()
+        return {
+            "messages": [
+                *state["messages"],
+                AIMessage(
+                    id="cached-current",
+                    content="cached fast answer",
+                    usage_metadata={
+                        "input_tokens": 2,
+                        "output_tokens": 1,
+                        "total_tokens": 3,
+                    },
+                ),
+            ]
+        }
+
+    async def slow(state: MessagesState) -> dict[str, Any]:
+        await fast_finished.wait()
+        if interrupted:
+            raise RuntimeError("interrupted before response persistence")
+        return {"messages": [AIMessage(id="slow-current", content="resumed slow")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("fast", fast)
+    builder.add_node("slow", slow)
+    builder.add_edge(START, "fast")
+    builder.add_edge(START, "slow")
+    builder.add_edge("fast", END)
+    builder.add_edge("slow", END)
+    server = ResponsesHostServer(builder.compile(checkpointer=backend))
+    request = _request()
+    context = _context(response_id="resp-root", conversation_id=None)
+    config = await server.build_runnable_config(request, context)
+    execution_graph = copy(server.graph)
+    saver = server.graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    execution_graph.checkpointer = ResponseCheckpointSaver(
+        saver,
+        thread_id="resp-root",
+        response_key="resp-root",
+        parent_response_id=None,
+    )
+    history: list[BaseMessage] = [
+        HumanMessage(id="previous-user", content="old question"),
+        AIMessage(
+            id="previous-answer",
+            content="previous answer",
+            usage_metadata={
+                "input_tokens": 90,
+                "output_tokens": 10,
+                "total_tokens": 100,
+            },
+            tool_calls=[{"id": "previous-call", "name": "lookup", "args": {}}]
+            if with_tool_history
+            else [],
+        ),
+    ]
+    if with_tool_history:
+        history.append(
+            ToolMessage(
+                id="previous-result",
+                tool_call_id="previous-call",
+                content="old result",
+            )
+        )
+    history.append(HumanMessage(id="current-user", content="new question"))
+    selected: RunnableConfig | None = None
+    with pytest.raises(RuntimeError, match="interrupted before response persistence"):
+        async for mode, payload in execution_graph.astream(
+            {"messages": history},
+            config,
+            stream_mode=["messages", "updates", "checkpoints"],
+            durability="sync",
+        ):
+            if (
+                mode == "checkpoints"
+                and isinstance(payload, dict)
+                and "fast" in payload.get("next", ())
+            ):
+                selected = payload["config"]
+
+    assert selected is not None
+    saved = await backend.aget_tuple(selected)
+    assert saved is not None
+    assert any(
+        channel == "messages"
+        and any(message.id == "cached-current" for message in value)
+        for _, channel, value in saved.pending_writes or []
+    )
+    context.is_recovery = True
+    context.persisted_response = _response_object(
+        "resp-root",
+        internal_metadata={
+            METADATA_LANGGRAPH_THREAD_ID: "resp-root",
+            METADATA_LANGGRAPH_CHECKPOINT_ID: selected["configurable"]["checkpoint_id"],
+        },
+    )
+    interrupted = False
+    events = [
+        event async for event in server.handle_create(request, context, asyncio.Event())
+    ]
+
+    assert events[-1]["type"] == "response.completed"
+    assert [
+        event["delta"]
+        for event in events
+        if isinstance(event, dict) and event["type"] == "response.output_text.delta"
+    ] == ["cached fast answer", "resumed slow"]
+    assert not any(
+        item["type"] in {"function_call", "function_call_output"}
+        for item in events[-1]["response"]["output"]
+    )
+    assert events[-1]["response"]["usage"]["total_tokens"] == 3
+    assert fast_calls == ["fast"]
+    context.get_input_items.assert_not_awaited()
+
+
 async def test_conversation_state_store_supports_linear_response_chain(
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:

@@ -10,6 +10,7 @@ import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,6 +32,9 @@ from langchain_azure_ai.agents.hosting._responses import (  # noqa: E402
     METADATA_LANGGRAPH_CHECKPOINT_ID,
     METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
+)
+from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (  # noqa: E402
+    ResponseCheckpointSaver,
 )
 
 
@@ -110,6 +114,8 @@ async def test_recovery_restores_cached_text_once(
     )
     recovered.emit_created()
     recovered.emit_in_progress()
+    saver = MagicMock(spec=ResponseCheckpointSaver)
+    saver.input_message_ids = frozenset({"first"})
     events = [
         event
         async for event in stream_graph_to_events(
@@ -135,6 +141,7 @@ async def test_recovery_restores_cached_text_once(
             ),
             recovered,
             cancellation_signal=asyncio.Event(),
+            checkpoint_saver=saver,
             restore_cached_output=True,
         )
     ]
@@ -144,6 +151,55 @@ async def test_recovery_restores_cached_text_once(
         if event["type"] == "response.output_text.delta"
     ] == ["restored from writes"]
     assert len(recovered.response["output"]) == 2
+
+
+async def test_cached_output_is_not_repeated_after_another_recovery() -> None:
+    from copy import deepcopy
+
+    stream = ResponseEventStream(response_id="resp-repeated")
+    stream.emit_created()
+    stream.emit_in_progress()
+    current = AIMessage(id="current", content="cached answer")
+    checkpoint = {
+        "config": {
+            "configurable": {
+                "thread_id": "thread",
+                "checkpoint_id": "checkpoint",
+            }
+        }
+    }
+    updates = {
+        "model": {"messages": [current]},
+        "__metadata__": {"cached": True},
+    }
+    async for _ in stream_graph_to_events(
+        _agen([("updates", updates), ("checkpoints", checkpoint)]),
+        stream,
+        cancellation_signal=asyncio.Event(),
+        restore_cached_output=True,
+    ):
+        pass
+
+    recovered = ResponseEventStream(
+        response_id="resp-repeated", response=deepcopy(stream.response)
+    )
+    recovered.emit_created()
+    recovered.emit_in_progress()
+    saver = MagicMock(spec=ResponseCheckpointSaver)
+    saver.input_message_ids = frozenset({"current"})
+    events = [
+        event
+        async for event in stream_graph_to_events(
+            _agen([("updates", updates)]),
+            recovered,
+            cancellation_signal=asyncio.Event(),
+            checkpoint_saver=saver,
+            restore_cached_output=True,
+        )
+    ]
+
+    assert events == []
+    assert recovered.response["output"] == stream.response["output"]
 
 
 @pytest.mark.parametrize("restore_cached_output", [False, True])
@@ -177,6 +233,46 @@ async def test_regular_updates_do_not_replay_history(
         if event["type"] == "response.output_text.delta"
     ] == ["new answer"]
     assert len(stream.response["output"]) == 1
+
+
+async def test_cached_update_with_serialized_messages_does_not_fail() -> None:
+    stream = ResponseEventStream(response_id="resp-serialized")
+    stream.emit_created()
+    stream.emit_in_progress()
+    saver = MagicMock(spec=ResponseCheckpointSaver)
+    saver.input_message_ids = frozenset({"history"})
+
+    events = [
+        event
+        async for event in stream_graph_to_events(
+            _agen(
+                [
+                    (
+                        "updates",
+                        {
+                            "model": {
+                                "messages": [
+                                    {"role": "assistant", "content": "serialized"},
+                                    AIMessage(id="current", content="cached answer"),
+                                ]
+                            },
+                            "__metadata__": {"cached": True},
+                        },
+                    )
+                ]
+            ),
+            stream,
+            cancellation_signal=asyncio.Event(),
+            checkpoint_saver=saver,
+            restore_cached_output=True,
+        )
+    ]
+
+    assert [
+        event["delta"]
+        for event in events
+        if event["type"] == "response.output_text.delta"
+    ] == ["cached answer"]
 
 
 def _types(events: list[Any]) -> list[str]:

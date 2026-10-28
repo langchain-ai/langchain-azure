@@ -12,6 +12,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     CheckpointMetadata,
@@ -156,6 +157,30 @@ async def test_native_recovery_keeps_its_head_and_pending_writes() -> None:
     assert advanced is not None
     assert advanced.checkpoint["id"] == next_checkpoint["id"]
     assert (await backend.aget_tuple(_config(sibling["id"]))) is not None
+
+
+async def test_input_history_is_shared_without_following_recovery_progress() -> None:
+    backend = InMemorySaver()
+    checkpoint = empty_checkpoint()
+    history = AIMessage(id="history", content="previous answer")
+    checkpoint["channel_values"]["messages"] = [history]
+    checkpoint["channel_versions"]["messages"] = 1
+    config = await backend.aput(_config(), checkpoint, {"step": 0}, {"messages": 1})
+    saver = _saver(backend, recovery_ref=CheckpointRef("thread", checkpoint["id"]))
+    clone = copy(saver).with_allowlist({(__name__, "Payload")})
+
+    assert await clone.aget_tuple(saver.resume_config(config)) is not None
+    assert saver.input_message_ids == frozenset({"history"})
+
+    advanced = empty_checkpoint()
+    advanced["channel_values"]["messages"] = [
+        history,
+        AIMessage(id="current", content="new answer"),
+    ]
+    advanced["channel_versions"]["messages"] = 2
+    await clone.aput(config, advanced, {"step": 1}, {"messages": 2})
+    assert await saver.aget_tuple(saver.resume_config(config)) is not None
+    assert saver.input_message_ids == clone.input_message_ids == frozenset({"history"})
 
 
 @pytest.mark.parametrize("stamp", [None, '["other","parent"]'])
