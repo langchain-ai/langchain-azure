@@ -192,6 +192,8 @@ For prerequisites, local requests, and Azure deployment, follow the
 [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
 or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
 
+For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
+
 You can also host the graph directly from Python, as shown below.
 For a Responses API host, install the hosting extra. It includes
 the Agent Server version that uses a local file-backed ``FoundryStateStore``
@@ -268,6 +270,24 @@ or run with `steerable_conversations=True`. Both modes are linear and preserve
 the latest LangGraph checkpoint through Agent Server's public
 `conversation_chain_metadata` API. Forking with only `previous_response_id`
 when steering is disabled is not supported for checkpointed graphs.
+
+For checkpointed graphs, each request resolves its saved input checkpoint reference
+once, including the saved task reference on recovery. Interrupt inspection and
+graph startup reuse exact reads of that checkpoint and its pending writes.
+Latest-checkpoint queries still reach storage so LangGraph can protect historical
+branches and recover superseded checkpoints. These checks do not change the
+request's input reference. Checkpoints and pending writes
+are persisted at the graph's normal durability boundaries, including intermediate
+steps and any checkpoint saved at completion. After graph execution and its
+required writes finish, the host updates the conversation's checkpoint reference
+for the next turn.
+The host applies this behavior through a saver decorator, including for
+`FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
+Requests without a saved input reference use the saver's normal latest selection.
+`ResponsesHostServer` serves a shallow copy of the supplied graph when decorating
+its checkpointer; mutable configuration may remain shared with the original
+graph.
+`InvocationsHostServer` retains its existing execution path.
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
