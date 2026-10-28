@@ -1,5 +1,6 @@
 """Unit tests for AzureAIMemoryMiddleware."""
 
+import threading
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
@@ -193,3 +194,76 @@ def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
         mock_project_client.call_args_list[0][1]["endpoint"]
         == "https://foundry.endpoint"
     )
+
+
+async def test_memory_middleware_async_hook_does_not_block_event_loop() -> None:
+    """`aafter_agent` must not run the blocking Azure call on the event loop.
+
+    `_flush_pending_updates` calls `begin_update_memories` on the synchronous
+    client, so doing it inline would stall every other task for the length of
+    that request.
+    """
+    loop_thread = threading.get_ident()
+    calling_threads: list[int] = []
+
+    mock_client = Mock()
+    mock_client.beta.memory_stores.begin_update_memories = Mock(
+        side_effect=lambda **_: (
+            calling_threads.append(threading.get_ident()),
+            Mock(update_id="u1"),
+        )[1]
+    )
+
+    with patch(
+        "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
+        return_value=mock_client,
+    ):
+        middleware = AzureAIMemoryMiddleware(
+            store_name="test_store",
+            scope="user:test",
+            project_endpoint="https://test.api.azureml.ms",
+            update_every_n_turns=1,
+            roles=["user", "assistant"],
+        )
+
+    state = {"messages": [HumanMessage(content="hello")]}
+    result = await middleware.aafter_agent(
+        cast(Any, state), cast(Any, Mock(name="runtime"))
+    )
+
+    assert result is None
+    assert calling_threads, "the flush should have run"
+    assert calling_threads[0] != loop_thread, (
+        "begin_update_memories ran on the event loop thread; "
+        "it must be offloaded to a worker"
+    )
+
+
+async def test_memory_middleware_async_hook_still_batches() -> None:
+    """Offloading must not change the batching behaviour."""
+    mock_client = Mock()
+    mock_client.beta.memory_stores.begin_update_memories = Mock(
+        return_value=Mock(update_id="u1")
+    )
+
+    with patch(
+        "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
+        return_value=mock_client,
+    ):
+        middleware = AzureAIMemoryMiddleware(
+            store_name="test_store",
+            scope="user:test",
+            project_endpoint="https://test.api.azureml.ms",
+            update_every_n_turns=2,
+            roles=["user", "assistant"],
+        )
+
+    runtime = cast(Any, Mock(name="runtime"))
+    # State is cumulative: the middleware tracks how many messages it has seen.
+    first = [HumanMessage(content="one")]
+    await middleware.aafter_agent(cast(Any, {"messages": first}), runtime)
+    mock_client.beta.memory_stores.begin_update_memories.assert_not_called()
+
+    second = [*first, AIMessage(content="two")]
+    await middleware.aafter_agent(cast(Any, {"messages": second}), runtime)
+    assert mock_client.beta.memory_stores.begin_update_memories.call_count == 1
