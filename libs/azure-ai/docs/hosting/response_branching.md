@@ -4,8 +4,9 @@ Response branching lets you send new input using the context of an earlier
 response, called the **parent**. Use it to continue from an answer, try a
 different direction, or regenerate an answer.
 
-Checkpoint-based branching is available through `ResponsesHostServer` and is
-disabled by default.
+This target design provides checkpoint-based branching through
+`ResponsesHostServer`, disabled by default; it does not establish availability
+in a published version.
 **It requires a stored parent and its exact graph checkpoint.**
 The server uses a **response storage provider** for response records, separate
 from the graph checkpointer. Branching accepts the host's default provider:
@@ -86,6 +87,9 @@ head. Whether that branch advances the original conversation's head is a separat
 cross-linkage question tracked under [TODO](#todo).
 
 ## Quick start
+
+**Target-design example:** This setup illustrates the intended contract, not
+verified support in a published version or the linked [implementation PR](https://github.com/langchain-ai/langchain-azure/pull/1206).
 
 ### 1. Enable branching on the server
 
@@ -290,13 +294,31 @@ are logged. Exact reference-error statuses and codes need the verification below
 | Graph checkpoint write fails                                                                                        | Failed response. Progress is not published for the missing checkpoint; investigate the saver backend.                       |
 | SDK terminal response storage fails                                                                                 | The graph checkpoint alone cannot serve as a parent. Check SDK storage errors and the stored response status.               |
 
-- Only single-worker execution is supported. A durable saver supports process
-  recreation, not distributed execution or guarantees for actual process-crash
-  windows.
+- The supported deployment is one host process (one worker), not multiple host
+  processes or distributed workers. Concurrent branch requests within that host
+  are supported; this is not a one-active-request limit. A durable saver supports
+  process recreation, not guarantees for actual process-crash windows.
 - The host selects only the root checkpoint namespace (`checkpoint_ns=""`).
   Private persistent subgraph histories are not rewound or isolated by the host.
 - External effects are not rolled back or guaranteed to happen exactly once.
   Applications must make replayed work safe.
+
+## Checkpoint references
+
+A **root response** has no parent. A **child response** selects a parent using
+`previous_response_id`. Both use the root checkpoint namespace.
+
+| Name             | Meaning                                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Origin           | The parent's exact graph checkpoint, which identifies a child's starting point.                                                                   |
+| Progress         | The current response's latest confirmed graph checkpoint, referenced by SDK recovery metadata.                                                     |
+| Final checkpoint | The last progress reference stored with a completed response. Parent eligibility is checked against the restored graph state and response output. |
+
+These names describe roles for checkpoint references, not copies of graph state.
+**Ownership** means that recovery progress belongs to the current response and
+its requested parent, if any. A shared thread can contain checkpoints from
+several responses, so the thread alone does not establish ownership. A child's
+parent checkpoint is its starting point, not progress made by that child.
 
 ## Background recovery
 
@@ -335,19 +357,15 @@ The execution flow below is limited to finished-parent branching. Branching from
 parents awaiting function results or MCP approval decisions is future work;
 ordinary tool and approval continuation keeps its existing behavior.
 
-### Checkpoint references
-
-| Name             | Meaning                                                                                                                                           |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Origin           | The parent's exact checkpoint selected before a child starts. No separate origin record is stored.                                                |
-| Progress         | This response's latest confirmed graph checkpoint, referenced by SDK recovery metadata.                                                           |
-| Final checkpoint | The last progress reference stored with a completed response. Parent eligibility is checked against the restored graph state and response output. |
-
-These are roles for references, not copies of graph state or three separate
-records. A root response has no parent; both root and child responses use the
-root checkpoint namespace.
-
 ### Fresh request
+
+Persistence has two stages. First, the graph saver saves a **graph checkpoint**:
+the graph's execution state. After confirming that write, the host attaches the
+**checkpoint reference** (thread, namespace, and checkpoint ID) to SDK task
+metadata. It then requests an **SDK recovery snapshot** containing that metadata
+and the response's current output state. Requesting this snapshot is not an
+acknowledgement that the SDK has persisted it; recovery uses the last snapshot
+the SDK actually saved.
 
 1. **Select.** Reuse ordinary continuation's request admission and parent
   selection. For a supported finished parent, load its stored exact checkpoint
@@ -367,13 +385,14 @@ root checkpoint namespace.
    `durability="sync"` and `updates`, `messages`, and `checkpoints` stream modes.
 4. **Publish progress.** For each graph checkpoint event, await
    `wait_for_checkpoint` until the underlying saver write succeeds. Then update
-   `TaskStorageManager`, flush output events, and emit `stream.checkpoint()`.
-   A graph event is not proof of persistence; an SDK task checkpoint requests SDK
-   persistence and is not a successful-write acknowledgement.
+  the checkpoint reference in `TaskStorageManager`, flush output events, and
+  emit `stream.checkpoint()` to request the SDK recovery snapshot. The graph
+  event alone does not confirm the graph write, and the snapshot request does
+  not confirm SDK persistence.
 5. **Finish.** After shutdown/cancellation checks and pending interrupt emission,
    emit `response.completed` for SDK finalization. Request `store` controls
-   terminal response retention. A retained response keeps the same confirmed
-  final checkpoint reference; no separate boundary is written.
+  terminal response retention. A retained response keeps the same confirmed
+  final checkpoint reference.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
 checkpoint alone cannot make a reusable parent: its response must also be stored
@@ -395,15 +414,20 @@ history queries. Serialization and channel-version allocation also remain with
 the application saver. Root progress confirmation needs no cross-thread futures
 or locks.
 
-Parent selection and eligibility stay in branch preparation. Completion retains
-the last confirmed progress reference, without a separate boundary marker;
-legacy markers are ignored. A fresh child needs one authorized parent lookup,
-reused during configuration preparation. Roots and recovery with valid owned
-progress need no parent lookup; a child without progress re-reads its parent.
-Required graph reads and write confirmation remain, but there is no separate
-recovery-validation read or branch-origin, boundary, or global-head record write.
+Branch preparation selects an authorized parent and checks its eligibility so
+the child starts from the intended finished state. A fresh child's parent lookup
+is reused during configuration preparation. The saver adapter validates reads
+and confirms graph writes so SDK progress references identify restorable state.
+Completion retains the last confirmed progress reference for later children.
+Recovery validates response ownership during the checkpoint read: valid owned
+progress needs no parent lookup, while a child without progress re-reads its
+parent. Roots need no parent lookup.
 
 ### Internal metadata and isolation
+
+Because several responses can share a thread, recovery must identify which
+response produced a progress checkpoint. The graph ownership stamp records the
+response and its parent so recovery cannot select a sibling's progress.
 
 - SDK progress fields: `langgraph_thread_id` and `langgraph_checkpoint_id`.
 - Admitted mode: `langgraph_response_branching="checkpoint-v1"`. Recovery uses
