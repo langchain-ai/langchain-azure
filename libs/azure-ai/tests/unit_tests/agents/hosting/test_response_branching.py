@@ -8,6 +8,7 @@ import operator
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any
@@ -21,6 +22,7 @@ from azure.ai.agentserver.responses import (
     FoundryResourceNotFoundError,
     ResponseContext,
     ResponseEventStream,
+    ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
 from azure.ai.agentserver.responses.models import CreateResponse
@@ -1303,9 +1305,11 @@ async def test_recovery_uses_exact_parent_or_owned_progress(
 
 @pytest.mark.parametrize("saved_progress", [False, True])
 @pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("recovery_enabled", [False, True])
 async def test_root_recovery_reuses_saved_progress_or_replays_input(
     saved_progress: bool,
     enabled: bool,
+    recovery_enabled: bool,
 ) -> None:
     graph, executions = _branch_graph()
     provider = InMemoryResponseProvider()
@@ -1319,12 +1323,16 @@ async def test_root_recovery_reuses_saved_progress_or_replays_input(
         persisted = await provider.get_response(root["id"])
         persisted["status"] = "in_progress"
         executions.clear()
+    server = ResponsesHostServer(
+        graph, store=provider, enable_response_branching=recovery_enabled
+    )
     context = _context(
         response_id=persisted["id"], conversation_id=None, current_text="A"
     )
     context.client_headers = {BRANCH_MODE_HEADER: BRANCH_MODE} if enabled else {}
     context.is_recovery = True
     context.persisted_response = persisted
+    assert server._uses_response_branching(_request(), context) is enabled
     with patch.object(provider, "get_response", wraps=provider.get_response) as lookup:
         events = [
             event
@@ -1690,6 +1698,68 @@ def test_failed_terminal_persistence_does_not_publish_a_usable_parent(
         c = _post(client, "C", previous_response_id=a["id"])
     assert _text(c) == "A,C"
     assert executions == ["A", "B", "C"]
+
+
+@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("client_mode", [None, BRANCH_MODE, "forged-mode"])
+def test_injected_app_accepts_requests_before_or_after_startup(
+    started: bool, stream: bool, client_mode: str | None
+) -> None:
+    graph, executions = _branch_graph()
+    app = ResponsesAgentServerHost(store=InMemoryResponseProvider())
+    headers = {} if client_mode is None else {BRANCH_MODE_HEADER: client_mode}
+    client = TestClient(app, headers=headers)
+    with ExitStack() as stack:
+        if started:
+            stack.enter_context(client)
+        server = ResponsesHostServer(graph, app=app)
+        if not started:
+            stack.enter_context(client)
+        assert server.app is app
+        response = _post(client, "A", stream=stream)
+        assert response["status"] == "completed", response
+        assert _text(response) == "A"
+    assert executions == ["A"]
+
+
+@pytest.mark.parametrize("saved_progress", [False, True])
+@pytest.mark.parametrize("client_mode", [None, BRANCH_MODE, "forged-mode"])
+async def test_injected_app_recovery_does_not_trust_client_mode(
+    saved_progress: bool, client_mode: str | None
+) -> None:
+    graph, executions = _branch_graph()
+    provider = InMemoryResponseProvider()
+    app = ResponsesAgentServerHost(store=provider)
+    server = ResponsesHostServer(graph, app=app)
+    persisted = _response_object("injected-root")
+    if saved_progress:
+        with TestClient(app) as client:
+            root = _post(client, "A")
+        persisted = await provider.get_response(root["id"])
+        persisted["status"] = "in_progress"
+        executions.clear()
+    context = _context(
+        response_id=persisted["id"], conversation_id=None, current_text="A"
+    )
+    context.client_headers = (
+        {} if client_mode is None else {BRANCH_MODE_HEADER: client_mode}
+    )
+    context.is_recovery = True
+    context.persisted_response = persisted
+    assert not server._uses_response_branching(_request(), context)
+    events = [
+        event
+        async for event in server.handle_create(
+            _request(), context, asyncio.Event()
+        )
+    ]
+    terminal = events[-1]["response"]
+    assert terminal["status"] == "completed", terminal
+    assert _text(terminal) == "A"
+    assert executions == ([] if saved_progress else ["A"])
+    if saved_progress:
+        context.get_input_items.assert_not_awaited()
 
 
 @pytest.mark.parametrize("enabled", [False, True])

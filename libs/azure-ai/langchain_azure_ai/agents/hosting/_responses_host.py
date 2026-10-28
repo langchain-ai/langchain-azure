@@ -495,6 +495,7 @@ class ResponsesHostServer:
                 "steerable_conversations=True."
             )
         self._enable_response_branching = enable_response_branching
+        self._owns_app = app is None
         self._conversation_chain_store = (
             conversation_chain_store
             if conversation_chain_store is not None
@@ -560,11 +561,12 @@ class ResponsesHostServer:
         self._response_provider = store
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self._app)
-        self._app.add_middleware(
-            BranchingAdmissionMiddleware,
-            enabled=enable_response_branching,
-            provider=self._response_provider,
-        )
+        if self._owns_app:
+            self._app.add_middleware(
+                BranchingAdmissionMiddleware,
+                enabled=enable_response_branching,
+                provider=self._response_provider,
+            )
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
@@ -962,6 +964,8 @@ class ResponsesHostServer:
     def _uses_response_branching(
         self, request: CreateResponse, context: ResponseContext
     ) -> bool:
+        if not self._owns_app:
+            return False
         if context.is_recovery:
             headers = getattr(context, "client_headers", {})
             mode = (
