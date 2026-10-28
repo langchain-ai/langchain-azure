@@ -61,6 +61,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 
 from .._responses import CheckpointRef, HostingRunnableConfig, TaskStorageManager
+from .._responses.task_storage_manager import ResponseCheckpointSaver
 from ._text import _TextMessageEmitter, text_deltas
 from ._utils import extract_reasoning_summary_fragments, tool_output
 
@@ -72,6 +73,8 @@ async def stream_graph_to_events(
     cancellation_signal: asyncio.Event,
     shutdown_signal: asyncio.Event | None = None,
     usage: UsageAccumulator | None = None,
+    checkpoint_saver: ResponseCheckpointSaver | None = None,
+    restore_cached_output: bool = False,
 ) -> AsyncIterator[Any]:
     """Iterate the graph stream and yield Responses API events.
 
@@ -93,11 +96,16 @@ async def stream_graph_to_events(
         shutdown_signal: Set when the host is draining. Iteration stops on set
             so the caller can defer resilient work to the next lifetime.
         usage: Optional accumulator for LangChain AI message usage metadata.
+        checkpoint_saver: Request-local graph persistence confirmation.
+        restore_cached_output: Restore completed-node output on crash recovery,
+            but not when an ordinary continuation reuses prior-turn writes.
 
     Yields:
         Responses API event payload dicts.
     """
-    converter = StreamConverter(stream, usage=usage)
+    converter = StreamConverter(
+        stream, usage=usage, restore_cached_output=restore_cached_output
+    )
     task_storage = TaskStorageManager.from_stream(stream)
 
     # Common timeline:
@@ -136,6 +144,10 @@ async def stream_graph_to_events(
         elif mode == "checkpoints":
             checkpoint_ref = _extract_checkpoint_ref(payload)
             if checkpoint_ref is not None:
+                if checkpoint_saver is not None and not (
+                    await checkpoint_saver.wait_for_checkpoint(checkpoint_ref)
+                ):
+                    continue
                 task_storage.store_checkpoint_ref(checkpoint_ref)
             async for event in converter.checkpoint():
                 yield event
@@ -379,15 +391,25 @@ class StreamConverter:
         stream: ResponseEventStream,
         *,
         usage: UsageAccumulator | None = None,
+        restore_cached_output: bool = False,
     ) -> None:
         self._stream = stream
         self._usage = usage or UsageAccumulator()
+        self._restore_cached_output = restore_cached_output
         self._outputs = _OutputQueue()
         self._emitters: dict[
             tuple[str, str | None], _TextMessageEmitter | _ReasoningEmitter
         ] = {}
         self._emitted_tool_call_ids: set[str] = set()
         self._emitted_tool_output_call_ids: set[str] = set()
+        self._task_storage = TaskStorageManager.from_stream(stream)
+        self._persisted_message_ids = self._task_storage.emitted_message_ids
+        self._message_ids = set(self._persisted_message_ids)
+        for item in stream.response.get("output") or []:
+            if item.get("type") == "function_call":
+                self._emitted_tool_call_ids.add(item["call_id"])
+            elif item.get("type") == "function_call_output":
+                self._emitted_tool_output_call_ids.add(item["call_id"])
 
     def _finish(self, key: tuple[str, str | None]) -> None:
         emitter = self._emitters.pop(key, None)
@@ -403,6 +425,7 @@ class StreamConverter:
         """Drain all item lifecycles before persisting the SDK checkpoint."""
         async for event in self.flush():
             yield event
+        self._task_storage.store_emitted_message_ids(self._message_ids)
         yield self._stream.checkpoint()
 
     async def handle_message_chunk(self, payload: Any) -> AsyncIterator[Any]:
@@ -410,6 +433,10 @@ class StreamConverter:
         message = _extract_ai_message(payload)
         if message is None:
             return
+        if message.id in self._persisted_message_ids:
+            return
+        if message.id:
+            self._message_ids.add(message.id)
         self._usage.add(message)
         message_id = message.id or None
         reasoning_key = ("reasoning", message_id)
@@ -434,11 +461,23 @@ class StreamConverter:
 
     async def handle_update(self, payload: Any) -> AsyncIterator[Any]:
         """Complete matching messages and enqueue their tool calls/results."""
+        cached = (
+            isinstance(payload, dict)
+            and isinstance(payload.get("__metadata__"), dict)
+            and payload["__metadata__"].get("cached") is True
+        )
         for _, messages in _extract_node_updates(payload):
             # ID-less legacy streams have only the node update as a boundary.
             self._finish_message(None)
             for message in messages:
                 if isinstance(message, AIMessage):
+                    if (
+                        (message.id or cached)
+                        and message.id not in self._message_ids
+                        and (not cached or self._restore_cached_output)
+                    ):
+                        async for event in self.handle_message_chunk(message):
+                            yield event
                     self._finish_message(message.id or None)
                     for call in message.tool_calls or []:
                         self._queue_tool_call(call)

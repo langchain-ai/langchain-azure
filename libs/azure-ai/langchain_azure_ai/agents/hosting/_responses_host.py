@@ -35,6 +35,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
+from copy import copy
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -62,6 +63,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import merge_configs
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_azure_ai._api.base import experimental
@@ -98,6 +100,7 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
+from ._responses.task_storage_manager import ResponseCheckpointSaver
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
     _CleanupTimeoutError,
@@ -696,6 +699,17 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
+        if context.is_recovery and context.persisted_response is not None:
+            reference = TaskStorageManager.from_stream(
+                ResponseEventStream(
+                    response_id=context.response_id,
+                    response=context.persisted_response,
+                )
+            ).recovery_checkpoint_ref
+            if reference is not None:
+                return HostingRunnableConfig.create_from_checkpoint(
+                    reference, context
+                ).runnable_config
         hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
             return hosting_config.runnable_config
@@ -929,7 +943,10 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
-            config = await self.build_runnable_config(request, context)
+            config = merge_configs(
+                getattr(self._graph, "config", None),
+                await self.build_runnable_config(request, context),
+            )
             root_response_id = HostingRunnableConfig(config).root_response_id
             if root_response_id is not None:
                 stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
@@ -948,7 +965,9 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
-            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
+            checkpoint_ref = (
+                task_storage.recovery_checkpoint_ref if recovering else None
+            )
             if checkpoint_ref is not None:
                 config = (
                     HostingRunnableConfig(config)
@@ -958,6 +977,22 @@ class ResponsesHostServer:
             checkpoint_reads = _checkpoint_reads.get()
             if checkpoint_reads is not None:
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
+
+            graph = self._graph
+            saver = getattr(graph, "checkpointer", None)
+            response_saver = None
+            if isinstance(saver, BaseCheckpointSaver):
+                response_saver = ResponseCheckpointSaver(
+                    saver,
+                    thread_id=config["configurable"]["thread_id"],
+                    response_key=_scope_thread_id(context.response_id, context),
+                    parent_response_id=request.get("previous_response_id"),
+                    recovery_ref=checkpoint_ref,
+                )
+                graph = copy(graph)
+                graph.checkpointer = response_saver
+                if checkpoint_ref is not None:
+                    config = response_saver.resume_config(config)
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -972,7 +1007,7 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(self._graph, config)
+                pending = await detect_pending_interrupts(graph, config)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1021,7 +1056,7 @@ class ResponsesHostServer:
 
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(
-                self._graph.astream(
+                graph.astream(
                     graph_input,
                     config=config,
                     stream_mode=self._stream_modes,
@@ -1035,6 +1070,8 @@ class ResponsesHostServer:
                     cancellation_signal=cancellation_signal,
                     shutdown_signal=context.shutdown,
                     usage=usage,
+                    checkpoint_saver=response_saver,
+                    restore_cached_output=recovering,
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref

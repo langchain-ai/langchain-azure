@@ -82,6 +82,68 @@ async def _drive(items: list[Any]) -> list[Any]:
     return events
 
 
+@pytest.mark.parametrize("cached_message_id", ["second", None])
+async def test_recovery_restores_cached_text_once(cached_message_id: str | None) -> None:
+    stream = ResponseEventStream(response_id="resp-cached")
+    stream.emit_created()
+    stream.emit_in_progress()
+    first = AIMessage(id="first", content="already persisted")
+    checkpoint = {
+        "config": {
+            "configurable": {
+                "thread_id": "thread",
+                "checkpoint_id": "checkpoint",
+            }
+        }
+    }
+    async for _ in stream_graph_to_events(
+        _agen([("messages", (first, {})), ("checkpoints", checkpoint)]),
+        stream,
+        cancellation_signal=asyncio.Event(),
+    ):
+        pass
+
+    recovered = ResponseEventStream(
+        response_id="resp-cached", response=cast(Any, stream.response)
+    )
+    recovered.emit_created()
+    recovered.emit_in_progress()
+    events = [
+        event
+        async for event in stream_graph_to_events(
+            _agen(
+                [
+                    ("messages", (first, {})),
+                    (
+                        "updates",
+                        {
+                            "cached": {
+                                "messages": [
+                                    first,
+                                    AIMessage(
+                                        id=cached_message_id,
+                                        content="restored from writes",
+                                    ),
+                                ]
+                            },
+                            "__metadata__": {"cached": True},
+                        },
+                    ),
+                ]
+            ),
+            recovered,
+            cancellation_signal=asyncio.Event(),
+            restore_cached_output=True,
+        )
+    ]
+    assert [
+        event["delta"]
+        for event in events
+        if event["type"] == "response.output_text.delta"
+    ] == ["restored from writes"]
+    assert len(recovered.response["output"]) == 2
+
+
 def _types(events: list[Any]) -> list[str]:
     return [event["type"] for event in events]
 
