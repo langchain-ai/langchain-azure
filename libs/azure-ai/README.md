@@ -284,8 +284,9 @@ for the next turn.
 The host applies this behavior through a saver decorator, including for
 `FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
 Requests without a saved input reference use the saver's normal latest selection.
-`ResponsesHostServer` serves a copy of the supplied graph with its saver
-decorated; later changes to the original graph do not change `server.graph`.
+`ResponsesHostServer` serves a shallow copy of the supplied graph when decorating
+its checkpointer; mutable configuration may remain shared with the original
+graph.
 `InvocationsHostServer` retains its existing execution path.
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
