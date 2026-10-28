@@ -991,6 +991,7 @@ class ResponsesHostServer:
                 )
                 graph = copy(graph)
                 graph.checkpointer = response_saver
+                graph.config = None
                 if checkpoint_ref is not None:
                     config = response_saver.resume_config(config)
 
