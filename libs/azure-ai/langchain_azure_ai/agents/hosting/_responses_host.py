@@ -30,7 +30,6 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
@@ -91,6 +90,10 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._converters._request import (
+    _REQUEST_INSTRUCTIONS_PREFIX,
+    _remove_request_instructions,
+)
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -100,6 +103,19 @@ from ._responses import (
     HostingRunnableConfig,
     TaskStorageManager,
 )
+from ._responses.branching import (
+    BRANCHING_MODE,
+    METADATA_RESPONSE_BRANCHING,
+    ResponseBranchingMiddleware,
+    branch_selection_cache,
+    branch_selection_scope,
+    response_branching_enabled,
+    response_provider,
+    select_branch_checkpoint,
+    validate_branch_checkpoint,
+    validate_branching_saver,
+)
+from ._responses.hosting_runnable_config import _scope_thread_id
 from ._responses.task_storage_manager import ResponseCheckpointSaver
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
@@ -251,16 +267,6 @@ def _message_count(
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
 
 
-def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
-    """Namespace a LangGraph thread by the platform-provided user key."""
-    platform_context = getattr(context, "platform_context", None)
-    user_id_key = getattr(platform_context, "user_id_key", None)
-    if not isinstance(user_id_key, str) or not user_id_key:
-        return thread_id
-    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
-    return f"user-{user_namespace}:{thread_id}"
-
-
 def _response_field(response: Any, name: str) -> str | None:
     value = getattr(response, name, None)
     if value is None and hasattr(response, "get"):
@@ -356,6 +362,11 @@ class ResponsesHostServer:
             atomic replacement, and explicit failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
+        enable_response_branching: Restore an exact completed parent checkpoint
+            for ``previous_response_id`` requests. Defaults to ``False``.
+            Requires a history-preserving asynchronous checkpointer, ``app=None``,
+            and steering disabled. The SDK's default response provider remains
+            available; client ``store=False`` still disables response retention.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -365,7 +376,8 @@ class ResponsesHostServer:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs.
+            to host custom-state graphs. Also raised for unsupported branching
+            configurations or a saver without the required asynchronous methods.
     """
 
     def __init__(
@@ -376,12 +388,25 @@ class ResponsesHostServer:
         options: Optional[ResponsesServerOptions] = None,
         store: Optional[ResponseProviderProtocol] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
+        enable_response_branching: bool = False,
         prefix: str = "",
         applicationinsights_connection_string: Optional[str] = None,
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
         saver = getattr(graph, "checkpointer", None)
+        if enable_response_branching:
+            if app is not None or (
+                options is not None and options.steerable_conversations
+            ):
+                raise ValueError(
+                    "Response branching requires app=None and "
+                    "steerable_conversations=False."
+                )
+            validate_branching_saver(saver)
+            if store is not None and not isinstance(store, ResponseProviderProtocol):
+                raise ValueError("store must be a response provider, not a boolean.")
+        self._enable_response_branching = enable_response_branching
         if isinstance(saver, BaseCheckpointSaver) and not isinstance(
             saver, _RequestCheckpointSaver
         ):
@@ -437,6 +462,15 @@ class ResponsesHostServer:
                 options=options,
                 store=store,
                 **host_kwargs,
+            )
+            self._app.add_middleware(
+                ResponseBranchingMiddleware,
+                graph=self._graph,
+                provider=response_provider(self._app)
+                if enable_response_branching
+                else None,
+                enabled=enable_response_branching,
+                path=f"/{prefix.strip().strip('/')}/responses".replace("//", "/"),
             )
 
         self._log_conversation_management_selection()
@@ -560,10 +594,20 @@ class ResponsesHostServer:
         instructions = request.get("instructions")
 
         if mode == "langgraph_checkpoint":
+            prior_calls: frozenset[str] = frozenset()
+            if request.get("previous_response_id") and response_branching_enabled(
+                context, self._enable_response_branching
+            ):
+                selection = await select_branch_checkpoint(
+                    request, context, self._graph
+                )
+                prior_calls = selection.tool_call_ids
             graph_input = build_messages_input(
                 current_items,
                 instructions=instructions if isinstance(instructions, str) else None,
                 skip_call_ids=skip_call_ids or frozenset(),
+                instructions_id=f"{_REQUEST_INSTRUCTIONS_PREFIX}{context.response_id}",
+                prior_tool_call_ids=prior_calls,
             )
             self._log_conversation_input_built(
                 mode=mode,
@@ -709,6 +753,15 @@ class ResponsesHostServer:
             if reference is not None:
                 return HostingRunnableConfig.create_from_checkpoint(
                     reference, context
+                ).runnable_config
+        if request.get("previous_response_id") and response_branching_enabled(
+            context, self._enable_response_branching
+        ):
+            selection = await select_branch_checkpoint(request, context, self._graph)
+            if not selection.ordinary_continuation:
+                assert selection.checkpoint_ref is not None
+                return HostingRunnableConfig.create_from_checkpoint(
+                    selection.checkpoint_ref, context
                 ).runnable_config
         hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
@@ -943,6 +996,12 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
+            branching = response_branching_enabled(
+                context, self._enable_response_branching
+            )
+            if branching:
+                validate_branching_saver(self._graph.checkpointer)
+                stream.internal_metadata[METADATA_RESPONSE_BRANCHING] = BRANCHING_MODE
             config = merge_configs(
                 getattr(self._graph, "config", None),
                 await self.build_runnable_config(request, context),
@@ -968,6 +1027,51 @@ class ResponsesHostServer:
             checkpoint_ref = (
                 task_storage.recovery_checkpoint_ref if recovering else None
             )
+            selection = None
+            branch_state = None
+            if branching and checkpoint_ref is None:
+                if request.get("previous_response_id"):
+                    selection = await select_branch_checkpoint(
+                        request, context, self._graph
+                    )
+                    if not selection.ordinary_continuation:
+                        assert selection.checkpoint_ref is not None
+                        config = (
+                            HostingRunnableConfig(config)
+                            .with_checkpoint_ref(selection.checkpoint_ref)
+                            .runnable_config
+                        )
+                elif not get_conversation_id(request):
+                    configurable = dict(config.get("configurable") or {})
+                    configurable.update(
+                        thread_id=_scope_thread_id(context.response_id, context),
+                        checkpoint_ns="",
+                    )
+                    configurable.pop("checkpoint_id", None)
+                    config = {**config, "configurable": configurable}
+            config = (
+                HostingRunnableConfig(config)
+                .with_response_context(context)
+                .runnable_config
+            )
+            ordinary_continuation = (
+                selection is not None and selection.ordinary_continuation
+            )
+            if (
+                branching
+                and checkpoint_ref is not None
+                and request.get("previous_response_id")
+            ):
+                ordinary_continuation = any(
+                    item.get("type")
+                    in {"function_call_output", "mcp_approval_response"}
+                    for item in await context.get_input_items()
+                )
+            branch_execution = (
+                branching
+                and not get_conversation_id(request)
+                and not ordinary_continuation
+            )
             if checkpoint_ref is not None:
                 config = (
                     HostingRunnableConfig(config)
@@ -988,11 +1092,15 @@ class ResponsesHostServer:
                     response_key=_scope_thread_id(context.response_id, context),
                     parent_response_id=request.get("previous_response_id"),
                     recovery_ref=checkpoint_ref,
+                    require_ownership=branching,
                 )
                 graph = copy(graph)
                 graph.checkpointer = response_saver
+                graph.config = None
                 if checkpoint_ref is not None:
                     config = response_saver.resume_config(config)
+            if selection is not None and not selection.ordinary_continuation:
+                branch_state = await validate_branch_checkpoint(graph, config)
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -1007,7 +1115,11 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(graph, config)
+                pending = (
+                    ()
+                    if branch_state is not None
+                    else await detect_pending_interrupts(graph, config)
+                )
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1053,6 +1165,10 @@ class ResponsesHostServer:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
+                    if branch_state is not None:
+                        graph_input = _remove_request_instructions(
+                            graph_input, branch_state.values.get("messages", [])
+                        )
 
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(
@@ -1075,7 +1191,7 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None:
+            if checkpoint_ref is not None and not branch_execution:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,
@@ -1154,6 +1270,11 @@ class ResponsesHostServer:
                 response_id=context.response_id,
                 request=request,
             )
+            stream.response["instructions"] = request.get("instructions")
+            if self._enable_response_branching:
+                stream.internal_metadata[METADATA_RESPONSE_BRANCHING] = BRANCHING_MODE
+            else:
+                stream.internal_metadata.pop(METADATA_RESPONSE_BRANCHING, None)
 
         metadata = dict(stream.response.get("metadata") or {})
         metadata[METADATA_STEERABLE_CONVERSATION] = str(
@@ -1174,6 +1295,7 @@ class ResponsesHostServer:
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
         features = self._hosting_features
+        selections = branch_selection_cache()
         with closing(_CheckpointReadContext()) as checkpoint_reads:
             async with state_store_client_scope(bind=False) as factory:
                 events = self.handle_create(request, context, cancellation_signal)
@@ -1184,6 +1306,7 @@ class ResponsesHostServer:
                         with (
                             factory.bind(),
                             checkpoint_reads.bind(),
+                            branch_selection_scope(selections),
                             _hosting_feature_scope(features),
                         ):
                             await _close_resource(close, "handler_iterator", factory)
@@ -1194,6 +1317,7 @@ class ResponsesHostServer:
                         with (
                             factory.bind(),
                             checkpoint_reads.bind(),
+                            branch_selection_scope(selections),
                             _hosting_feature_scope(features),
                         ):
                             try:

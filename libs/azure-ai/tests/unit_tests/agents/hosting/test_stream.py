@@ -83,7 +83,9 @@ async def _drive(items: list[Any]) -> list[Any]:
 
 
 @pytest.mark.parametrize("cached_message_id", ["second", None])
-async def test_recovery_restores_cached_text_once(cached_message_id: str | None) -> None:
+async def test_recovery_restores_cached_text_once(
+    cached_message_id: str | None,
+) -> None:
     stream = ResponseEventStream(response_id="resp-cached")
     stream.emit_created()
     stream.emit_in_progress()

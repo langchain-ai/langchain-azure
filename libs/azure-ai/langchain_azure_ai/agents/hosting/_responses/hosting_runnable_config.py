@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import Any, cast
 
 from azure.ai.agentserver.responses import ResponseContext
@@ -14,6 +15,16 @@ from langchain_core.runnables import RunnableConfig
 from .checkpoint_ref import CheckpointRef
 
 _ROOT_RESPONSE_ID_CONFIG_KEY = "__langchain_azure_root_response_id"
+
+
+def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
+    """Namespace a LangGraph thread by the platform-provided user key."""
+    platform_context = getattr(context, "platform_context", None)
+    user_id_key = getattr(platform_context, "user_id_key", None)
+    if not isinstance(user_id_key, str) or not user_id_key:
+        return thread_id
+    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
+    return f"user-{user_namespace}:{thread_id}"
 
 
 class HostingRunnableConfig:

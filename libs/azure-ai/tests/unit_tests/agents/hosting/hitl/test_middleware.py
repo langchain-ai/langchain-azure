@@ -130,27 +130,44 @@ def _assert_result(key: str, tool_calls: list[str], approve: bool) -> None:
 @pytest.mark.parametrize(
     ("approve", "expected_text"), [(True, "approved"), (False, "rejected")]
 )
+@pytest.mark.parametrize("branching", [False, True])
+@pytest.mark.parametrize("linkage", ["conversation", "previous_response_id"])
 @REAL_INTERRUPT_ASYNC_XFAIL
 def test_responses_host_resumes_hitl_middleware(
-    script: ScriptRegistrar, approve: bool, expected_text: str
+    script: ScriptRegistrar,
+    approve: bool,
+    expected_text: str,
+    branching: bool,
+    linkage: str,
 ) -> None:
     key = f"responses-middleware-{approve}"
     _register_script(script, key, expected_text)
     tool_calls: list[str] = []
-    host = ResponsesHostServer(_middleware_graph(key, tool_calls))
+    host = ResponsesHostServer(
+        _middleware_graph(key, tool_calls), enable_response_branching=branching
+    )
     conversation_id = key
 
     with TestClient(host.app) as client:
         first = client.post(
             "/responses",
-            json={"input": "do it", "conversation": {"id": conversation_id}},
+            json={
+                "input": "do it",
+                **(
+                    {"conversation": conversation_id}
+                    if linkage == "conversation"
+                    else {}
+                ),
+            },
         )
         approval_id = approval_requests(first.json())[0]["id"]
         resumed = client.post(
             "/responses",
             json={
                 "input": [_approval(approval_id, approve)],
-                "conversation": {"id": conversation_id},
+                linkage: conversation_id
+                if linkage == "conversation"
+                else first.json()["id"],
             },
         )
 
