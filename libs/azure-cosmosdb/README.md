@@ -284,7 +284,32 @@ The LangGraph integrations that manage their own client — `CosmosDBSaverSync` 
 
 ## Samples
 
-See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for runnable end-to-end examples of every integration.
+See the [samples/cosmosdb-nosql/](https://github.com/langchain-ai/langchain-azure/tree/main/samples/cosmosdb-nosql) directory for runnable end-to-end examples of every integration.
+
+### Host a persistent LangGraph agent on Azure
+
+Start with the [async checkpointer example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/cosmosdb-nosql/langgraph_checkpointer_async.py)
+for per-thread graph state, or the
+[async store example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/cosmosdb-nosql/langgraph_store_async.py)
+for long-term memory. Hosting with `ResponsesHostServer` or
+`InvocationsHostServer` requires the async `CosmosDBSaver` for Cosmos DB
+checkpoints: both hosts use async graph calls, which are not supported by
+`CosmosDBSaverSync`.
+
+Compile your graph with `checkpointer=checkpointer` (and `store=store` if
+needed), then await `ResponsesHostServer(graph).run_async()` or
+`InvocationsHostServer(graph).run_async()` inside the async context manager
+scope. Keep database clients and async context managers open for the host's
+lifetime. Follow the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+for deployment, and ensure the deployed agent can authenticate to Cosmos DB
+as well as its Foundry project.
+
+Alternatively, Foundry-hosted agents using container protocol `2.0.0` can
+persist graph checkpoints with
+[`FoundryCheckpointSaver` backed by Foundry State Store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/README.md#durable-graph-state),
+without a Cosmos DB checkpointer. This requires the hosted request context;
+use an in-memory or database-backed saver for local development.
 
 ## Changelog
 
