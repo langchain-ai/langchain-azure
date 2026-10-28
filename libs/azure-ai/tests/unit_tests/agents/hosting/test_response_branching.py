@@ -1025,7 +1025,7 @@ def test_branching_preserves_application_checkpoint_configuration(
         b = _post(client, "B", previous_response_id=a["id"], stream=stream)
         c = _post(client, "C", previous_response_id=a["id"], stream=stream)
     assert [_text(item) for item in (a, b, c)] == ["A", "A,B", "A,C"]
-    assert graph.checkpointer is server.graph.checkpointer
+    assert graph.checkpointer is getattr(server.graph.checkpointer, "__wrapped__", None)
     assert graph.config == original_config
 
 

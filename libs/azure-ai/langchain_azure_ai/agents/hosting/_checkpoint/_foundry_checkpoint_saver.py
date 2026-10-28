@@ -40,7 +40,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
 )
 
-from ._storage import get_state_store
+from .._storage import get_state_store
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
