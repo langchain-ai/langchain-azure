@@ -18,6 +18,7 @@ from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponseContext,
     ResponseEventStream,
+    ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
 from azure.ai.agentserver.responses.models import CreateResponse, ResponseObject
@@ -334,3 +335,39 @@ def test_branching_requires_a_checkpointer_and_disabled_steering(
             options=ResponsesServerOptions(steerable_conversations=True),
             enable_response_branching=True,
         )
+
+
+@pytest.mark.parametrize("steerable_conversations", [False, True])
+@pytest.mark.parametrize("provide_options", [False, True])
+def test_branching_rejects_external_host(
+    graph: CompiledStateGraph,
+    steerable_conversations: bool,
+    provide_options: bool,
+) -> None:
+    app = ResponsesAgentServerHost(
+        options=ResponsesServerOptions(steerable_conversations=steerable_conversations),
+        store=InMemoryResponseProvider(),
+    )
+    options = ResponsesServerOptions() if provide_options else None
+    with pytest.raises(ValueError, match="app=None"):
+        ResponsesHostServer(
+            graph,
+            app=app,
+            options=options,
+            enable_response_branching=True,
+        )
+
+
+@pytest.mark.parametrize("steerable_conversations", [False, True])
+def test_external_host_remains_supported_without_branching(
+    graph: CompiledStateGraph, steerable_conversations: bool
+) -> None:
+    app = ResponsesAgentServerHost(
+        options=ResponsesServerOptions(steerable_conversations=steerable_conversations),
+        store=InMemoryResponseProvider(),
+    )
+    server = ResponsesHostServer(graph, app=app)
+    assert server.app is app
+    with TestClient(server.app) as client:
+        response = _create(client, input="A")
+    assert _text(response) == "A"

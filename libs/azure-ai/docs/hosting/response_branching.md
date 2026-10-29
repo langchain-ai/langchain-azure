@@ -538,12 +538,3 @@ If the common continuation rules allow a request to select B, branching restores
 B's persisted exact checkpoint reference and creates an independent child.
 Otherwise, the request is rejected under those rules; branching does not decide
 which parent a conversation request selects.
-
-- **Branching/steering initialization validation:** Validate branching against
-  the effective host/steering configuration, not only the supplied
-  `options.steerable_conversations`. Preserve the existing `app=None` requirement:
-  reject external `app` instances and other unsupported combinations with
-  `ValueError` during initialization. Currently, passing a steering-enabled
-  `ResponsesAgentServerHost` as `app` without `options` bypasses the guard; the SDK
-  still enforces a linear chain and returns HTTP 409
-  `conversation_fork_not_supported` for a second sibling branch.

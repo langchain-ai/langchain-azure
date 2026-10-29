@@ -271,7 +271,8 @@ the latest LangGraph checkpoint for subsequent turns.
 
 To branch from a completed response instead, enable
 `ResponsesHostServer(graph, enable_response_branching=True)` with a
-history-preserving checkpointer and steering disabled. Send
+history-preserving checkpointer, steering disabled, and no externally supplied
+`app`. Send
 `{"input": "Alternative follow-up", "previous_response_id": "<parent-response-id>"}`.
 The host restores that response's exact saved checkpoint, so two requests
 referencing the same parent create independent siblings. Each child saves its

@@ -359,7 +359,8 @@ class ResponsesHostServer:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
             to (e.g. a multi-protocol mixin). In this mode the host-level
             kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself.
+            configured them on ``app`` itself. Response branching requires
+            ``app=None``.
         options: Optional :class:`ResponsesServerOptions` forwarded to
             :class:`ResponsesAgentServerHost`.
         store: Optional :class:`ResponseProviderProtocol`. This provider
@@ -376,8 +377,8 @@ class ResponsesHostServer:
         enable_response_branching: Start ``previous_response_id`` requests from
             the specified completed response's checkpoint instead of the
             conversation head. Defaults to ``False``. Requires a
-            history-preserving checkpointer and steering disabled. Branching
-            from paused graphs is not supported.
+            history-preserving checkpointer, steering disabled, and ``app=None``.
+            Branching from paused graphs is not supported.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -388,7 +389,8 @@ class ResponsesHostServer:
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
             to host custom-state graphs. Also raised if response branching is
-            enabled without a checkpointer or with steering enabled.
+            enabled without a checkpointer, with steering enabled, or with an
+            external ``app``.
     """
 
     def __init__(
@@ -415,11 +417,12 @@ class ResponsesHostServer:
         self._enable_response_branching = enable_response_branching
         if enable_response_branching and (
             not self._graph_has_checkpointer
+            or app is not None
             or (options is not None and options.steerable_conversations)
         ):
             raise ValueError(
-                "Response branching requires a history-preserving checkpointer "
-                "and steerable_conversations=False."
+                "Response branching requires a history-preserving checkpointer, "
+                "steerable_conversations=False, and app=None."
             )
         self._conversation_chain_store = (
             conversation_chain_store
