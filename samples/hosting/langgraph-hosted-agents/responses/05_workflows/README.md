@@ -75,39 +75,6 @@ The Responses endpoint supports streaming via `"stream": true` in the
 body. The stream emits SSE events for every tool round-trip and token
 delta.
 
-### Independent branches from a completed response
-
-To try alternative follow-ups without carrying over a sibling's changes, change
-the host construction in `main.py` to:
-
-```python
-await ResponsesHostServer(graph, enable_response_branching=True).run_async(
-    port=int(os.environ.get("PORT", "8088"))
-)
-```
-
-In a separate client process:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:8088", api_key="local")
-parent = client.responses.create(input="What is the weather in Seattle?")
-first = client.responses.create(
-    input="Suggest an outdoor activity.", previous_response_id=parent.id
-)
-second = client.responses.create(
-    input="Suggest an indoor activity.", previous_response_id=parent.id
-)
-print(first.output_text)
-print(second.output_text)
-```
-
-Both children start from `parent`'s exact finished checkpoint. Keep the parent
-stored (the default), leave steering disabled, and resend any request-level
-`instructions` needed by each child. Local in-memory graph checkpoints do not
-survive restart.
-
 ## Deploying the Agent to Foundry
 
 To host the agent on Foundry, follow the instructions in the [Deploying

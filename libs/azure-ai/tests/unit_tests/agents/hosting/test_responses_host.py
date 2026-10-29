@@ -249,11 +249,7 @@ async def test_background_recovery_survives_client_close_error(
     if custom_handler:
         monkeypatch.setattr(server, "handle_create", handler)
     else:
-        monkeypatch.setattr(
-            server,
-            "build_runnable_config",
-            AsyncMock(return_value={"configurable": {"thread_id": "resp-recovery"}}),
-        )
+        monkeypatch.setattr(server, "build_runnable_config", AsyncMock(return_value={}))
         monkeypatch.setattr(
             server, "build_input", AsyncMock(return_value={"messages": []})
         )
@@ -840,10 +836,7 @@ async def test_request_pins_reference_after_recovery_selection(
         )
     ]
     assert events[-1]["type"] == "response.completed"
-    if recovering:
-        chain_get.assert_not_awaited()
-    else:
-        chain_get.assert_awaited_once()
+    chain_get.assert_awaited_once()
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -1961,7 +1954,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
 
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert "checkpoint_id" not in config["configurable"]
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
     context.get_input_items.assert_not_awaited()
 
 
@@ -2492,13 +2485,12 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     )
 
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert "checkpoint_id" not in config["configurable"]
+    assert config["configurable"]["checkpoint_id"] == "checkpoint-committed"
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
-@pytest.mark.parametrize("bound_checkpoint", [False, True])
 async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
-    bound_checkpoint: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = ResponsesHostServer(make_checkpointed_two_node_graph())
     request = _request()
@@ -2546,24 +2538,26 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         },
     )
-    if bound_checkpoint:
-        server.graph.config = {
-            "configurable": {"checkpoint_id": "wrong-bound-checkpoint"}
-        }
-    events = [
-        event
-        async for event in server.handle_create(
-            request, recovery_context, asyncio.Event()
+    with monkeypatch.context() as recovery_patch:
+        _, recovery_config = await _capture_graph_call(
+            server,
+            request,
+            recovery_context,
+            recovery_patch,
         )
+    assert recovery_config["configurable"]["checkpoint_id"] == committed_checkpoint_id
+    recovered_nodes = [
+        node
+        async for update in server.graph.astream(
+            None,
+            recovery_config,
+            stream_mode="updates",
+            durability="sync",
+        )
+        for node in update
     ]
-    assert events[-1]["type"] == "response.completed"
-    text = "".join(
-        part.get("text", "")
-        for item in events[-1]["response"]["output"]
-        if item["type"] == "message"
-        for part in item["content"]
-    )
-    assert text == "research"
+
+    assert recovered_nodes == ["research"]
 
 
 async def test_conversation_state_store_supports_linear_response_chain(

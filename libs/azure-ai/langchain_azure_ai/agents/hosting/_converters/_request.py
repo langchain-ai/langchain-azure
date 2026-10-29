@@ -21,7 +21,6 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     HumanMessage,
-    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -30,8 +29,6 @@ from langchain_core.messages.tool import ToolCall
 from ._hitl import hitl_call_ids
 
 logger = logging.getLogger(__name__)
-
-_REQUEST_INSTRUCTIONS_PREFIX = "__langchain_azure_request_instructions:"
 
 _ROLE_TO_MESSAGE_CLS: dict[
     str, type[HumanMessage] | type[SystemMessage] | type[AIMessage]
@@ -209,8 +206,6 @@ def build_messages_input(
     *,
     instructions: str | None = None,
     skip_call_ids: Iterable[str] = (),
-    instructions_id: str | None = None,
-    prior_tool_call_ids: Iterable[str] = (),
 ) -> dict[str, list[AnyMessage]]:
     """Build a ``{"messages": [...]}`` LangGraph input from resolved items.
 
@@ -232,28 +227,22 @@ def build_messages_input(
         instructions: Optional system instructions from the request.
         skip_call_ids: Forwarded to :func:`items_to_messages`. Used by the
             HITL resume path to filter out the resume ``function_call_output``.
-        instructions_id: Optional identity for request-scoped instructions.
-        prior_tool_call_ids: Outstanding calls already present in a restored
-            checkpoint. Their current replies are not orphan messages.
 
     Returns:
         The ``{"messages": [...]}`` payload accepted by ``MessagesState`` graphs.
     """
     messages: list[AnyMessage] = []
     if instructions:
-        messages.append(SystemMessage(content=instructions, id=instructions_id))
+        messages.append(SystemMessage(content=instructions))
     messages.extend(
         _filter_incomplete_tool_calls(
-            items_to_messages(items, skip_call_ids=skip_call_ids),
-            prior_tool_call_ids=prior_tool_call_ids,
+            items_to_messages(items, skip_call_ids=skip_call_ids)
         )
     )
     return {"messages": messages}
 
 
-def _filter_incomplete_tool_calls(
-    messages: Sequence[AnyMessage], *, prior_tool_call_ids: Iterable[str] = ()
-) -> list[AnyMessage]:
+def _filter_incomplete_tool_calls(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
     """Drop incomplete tool-call sequences from a message list.
 
     Walks the messages once and keeps only those that participate in a
@@ -275,7 +264,7 @@ def _filter_incomplete_tool_calls(
             if isinstance(call_id, str) and call_id:
                 tool_responses.add(call_id)
 
-    valid_tool_calls = set(prior_tool_call_ids)
+    valid_tool_calls: set[str] = set()
     result: list[AnyMessage] = []
     for msg in messages:
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
@@ -296,21 +285,6 @@ def _filter_incomplete_tool_calls(
         else:
             result.append(msg)
     return result
-
-
-def _remove_request_instructions(
-    graph_input: dict[str, Any], parent_messages: Sequence[AnyMessage]
-) -> dict[str, Any]:
-    removals = [
-        RemoveMessage(id=message.id)
-        for message in parent_messages
-        if isinstance(message, SystemMessage)
-        and message.id is not None
-        and message.id.startswith(_REQUEST_INSTRUCTIONS_PREFIX)
-    ]
-    if not removals:
-        return graph_input
-    return {**graph_input, "messages": removals + list(graph_input.get("messages", []))}
 
 
 def _tool_call_id(tc: Any) -> str | None:

@@ -265,13 +265,21 @@ The Responses host uses one conversation-state source per graph. The policy depe
 | Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
 | Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
 
-By default, checkpointed multi-turn conversations use an explicit
-`conversation.id` or `steerable_conversations=True`. Both modes are linear.
-To create independent children of a completed response instead, set
-`ResponsesHostServer(graph, enable_response_branching=True)` and send
-`previous_response_id`. Each child restores the parent's exact saved checkpoint,
-not the thread's latest state. Branching requires a history-preserving async
-checkpointer, an adapter-owned host, and steering disabled.
+Checkpointed multi-turn conversations use an explicit `conversation.id`
+or run with `steerable_conversations=True`. Both modes are linear and preserve
+the latest LangGraph checkpoint for subsequent turns.
+
+To branch from a completed response instead, enable
+`ResponsesHostServer(graph, enable_response_branching=True)` with a
+history-preserving checkpointer and steering disabled. Send
+`{"input": "Alternative follow-up", "previous_response_id": "<parent-response-id>"}`.
+The host restores that response's exact saved checkpoint, so two requests
+referencing the same parent create independent siblings. Each child saves its
+own checkpoint reference without advancing the shared conversation head.
+The parent response and its checkpoint must still be retained, and the graph
+must have finished; paused-parent branching is not supported.
+This option does not add request-instruction isolation or crash-recovery
+enhancements. When disabled, the existing execution path is unchanged.
 
 For checkpointed graphs, each request resolves its saved input checkpoint reference
 once, including the saved task reference on recovery. Interrupt inspection and
@@ -281,9 +289,8 @@ branches and recover superseded checkpoints. These checks do not change the
 request's input reference. Checkpoints and pending writes
 are persisted at the graph's normal durability boundaries, including intermediate
 steps and any checkpoint saved at completion. After graph execution and its
-required writes finish, ordinary continuation updates the conversation's
-checkpoint reference for the next turn. Response-ID branches retain their own
-checkpoint references without advancing a shared conversation head.
+required writes finish, the host updates the conversation's checkpoint reference
+for the next turn.
 The host applies this behavior through a saver decorator, including for
 `FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
 Requests without a saved input reference use the saver's normal latest selection.
@@ -292,11 +299,7 @@ its checkpointer; mutable configuration may remain shared with the original
 graph.
 `InvocationsHostServer` retains its existing execution path.
 
-The Responses transcript provider is selected by the underlying
-`azure-ai-agentserver-responses` runtime: `FileResponseStore` locally and
-`FoundryStorageProvider` in Foundry-hosted containers. An explicit `store=provider`
-overrides that default; the client's boolean `store` controls retention of each
-response. This transcript store is separate from the LangGraph checkpointer.
+The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 ### Durable graph state
 
