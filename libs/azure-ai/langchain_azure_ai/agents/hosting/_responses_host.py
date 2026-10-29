@@ -33,7 +33,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
 from functools import wraps
@@ -144,6 +143,9 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
+_USER_NAMESPACE_PREFIX = "user-"
+_USER_NAMESPACE_SEPARATOR = ":"
+_USER_NAMESPACE_HASH = hashlib.sha256
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -255,8 +257,25 @@ def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
     user_id_key = getattr(platform_context, "user_id_key", None)
     if not isinstance(user_id_key, str) or not user_id_key:
         return thread_id
-    user_namespace = hashlib.sha256(user_id_key.encode()).hexdigest()
-    return f"user-{user_namespace}:{thread_id}"
+    user_namespace = _USER_NAMESPACE_HASH(user_id_key.encode()).hexdigest()
+    return (
+        f"{_USER_NAMESPACE_PREFIX}{user_namespace}"
+        f"{_USER_NAMESPACE_SEPARATOR}{thread_id}"
+    )
+
+
+def _thread_namespace(thread_id: str) -> str:
+    """Return a hosted thread's user namespace, or an empty string."""
+    prefix, separator, _ = thread_id.partition(_USER_NAMESPACE_SEPARATOR)
+    digest = prefix.removeprefix(_USER_NAMESPACE_PREFIX)
+    if (
+        separator
+        and prefix.startswith(_USER_NAMESPACE_PREFIX)
+        and len(digest) == _USER_NAMESPACE_HASH().digest_size * 2
+        and all(char in "0123456789abcdef" for char in digest)
+    ):
+        return prefix + separator
+    return ""
 
 
 def _response_field(response: Any, name: str) -> str | None:
@@ -773,9 +792,7 @@ class ResponsesHostServer:
         if reference is None:
             raise ValueError("The previous response has no saved graph checkpoint.")
         namespace = _scope_thread_id("", context)
-        if (namespace and not reference.thread_id.startswith(namespace)) or (
-            not namespace and re.match(r"user-[0-9a-f]{64}:", reference.thread_id)
-        ):
+        if _thread_namespace(reference.thread_id) != namespace:
             raise ValueError("The previous response belongs to a different user.")
         return HostingRunnableConfig.create_from_checkpoint(
             reference, context

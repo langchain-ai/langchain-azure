@@ -53,6 +53,8 @@ from langchain_azure_ai.agents.hosting._responses import (
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
     METADATA_STEERABLE_CONVERSATION,
+    _scope_thread_id,
+    _thread_namespace,
 )
 
 from .conftest import (  # noqa: E402
@@ -2086,6 +2088,40 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
 
     assert config["configurable"]["thread_id"] == "conv-request"
     assert config["configurable"]["response_context"] is context
+
+
+@pytest.mark.parametrize("user_id_key", [None, "", "user-a", "user-b"])
+@pytest.mark.parametrize(
+    "thread_id", ["", "thread-1", "thread:child", "user-session-1:thread"]
+)
+def test_scoped_thread_namespace_round_trips(
+    user_id_key: str | None, thread_id: str
+) -> None:
+    context = _context(user_id_key=user_id_key)
+    namespace = _scope_thread_id("", context)
+    assert bool(namespace) == bool(user_id_key)
+    assert _thread_namespace(_scope_thread_id(thread_id, context)) == namespace
+
+
+def test_scoped_thread_namespace_preserves_stored_format() -> None:
+    namespace = "user-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:"
+    thread_id = namespace + "thread-1"
+    assert _scope_thread_id("thread-1", _context(user_id_key="abc")) == thread_id
+    assert _thread_namespace(thread_id) == namespace
+
+
+@pytest.mark.parametrize(
+    "thread_id",
+    [
+        "user-" + "0" * 63 + ":thread",
+        "user-" + "0" * 65 + ":thread",
+        "user-" + "A" * 64 + ":thread",
+        "user-" + "g" * 64 + ":thread",
+        "user-" + "0" * 64,
+    ],
+)
+def test_malformed_user_prefix_is_not_a_namespace(thread_id: str) -> None:
+    assert _thread_namespace(thread_id) == ""
 
 
 async def test_checkpointed_conversation_is_isolated_by_user() -> None:
