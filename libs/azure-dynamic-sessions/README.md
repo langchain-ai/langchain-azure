@@ -8,8 +8,11 @@
 > Azure Container Apps umbrella — and additionally covers Azure Container Apps
 > sandboxes, the stateful counterpart to dynamic sessions.
 >
+> `langchain-azure-compute` is not yet published on public PyPI. With Python
+> 3.11 or later and Git, install this pinned revision in a virtual environment:
+>
 > ```bash
-> pip install "langchain-azure-compute[dynamic-sessions]"
+> python -m pip install "langchain-azure-compute[dynamic-sessions] @ git+https://github.com/langchain-ai/langchain-azure.git@cb9db867b4e4f7dab74995254efe3332a6b6e2f5#subdirectory=libs/azure-compute"
 > ```
 >
 > Then update imports:

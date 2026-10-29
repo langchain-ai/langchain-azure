@@ -5,12 +5,19 @@ compute that runs agent-authored code.
 
 ## Installation
 
-Install only the integration you need:
+`langchain-azure-compute` is not yet published on public PyPI. Use Python
+3.11 or later and Git, and install the integration you need from this
+pinned source revision in a virtual environment:
 
 ```bash
-pip install "langchain-azure-compute[dynamic-sessions]"
-pip install "langchain-azure-compute[sandboxes]"
+python -m pip install "langchain-azure-compute[dynamic-sessions] @ git+https://github.com/langchain-ai/langchain-azure.git@cb9db867b4e4f7dab74995254efe3332a6b6e2f5#subdirectory=libs/azure-compute"
+python -m pip install "langchain-azure-compute[sandboxes] @ git+https://github.com/langchain-ai/langchain-azure.git@cb9db867b4e4f7dab74995254efe3332a6b6e2f5#subdirectory=libs/azure-compute"
 ```
+
+Choose one command for your scenario. These commands pin the integration
+source, not every dependency; Azure resources and permissions are still
+required. Switch to a published package version only after it is available
+and has been validated with your sample.
 
 Extras control *dependencies*, not which modules are present — every module
 ships in the wheel. Each subpackage checks for its own requirements at import
