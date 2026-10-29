@@ -428,7 +428,9 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
         """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")
-        async with _state_store_deletion_scope(self, self._store_name(thread_id)):
+        async with _state_store_deletion_scope(
+            self, self._store_name(thread_id), endpoint=self._endpoint
+        ) as invalidate_aliases:
             store = self._bound_store(thread_id)
             try:
                 properties = await store.get()
@@ -448,6 +450,7 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
                     for key in keys:
                         await store.delete_item(key)
                 else:
+                    invalidate_aliases()
                     await store.delete()
             except FoundryStorageNotFoundError:
                 pass

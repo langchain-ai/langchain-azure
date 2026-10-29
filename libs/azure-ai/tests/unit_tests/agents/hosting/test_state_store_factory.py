@@ -18,6 +18,7 @@ from azure.ai.agentserver.core import (
 )
 from azure.ai.agentserver.core.storage import (
     FoundryStateStore,
+    FoundryStorageEndpoint,
     FoundryStorageNotFoundError,
 )
 from azure.core.pipeline.transport import AioHttpTransport
@@ -37,6 +38,7 @@ from langchain_azure_ai.agents.hosting._storage import (
 @pytest.fixture
 def clients(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     created: list[Any] = []
 
     async def acquire(name: str, *args: Any, **options: Any) -> Any:
@@ -97,10 +99,54 @@ async def test_saver_deletion_resolves_store_again(
             assert item is not None and item.value == {"value": "new"}
 
 
+@pytest.mark.parametrize(
+    "actual_isolation", [False, True], ids=["whole-store", "user-items"]
+)
+@pytest.mark.parametrize("alias", ["consumer", "user"])
+async def test_saver_deletion_invalidates_only_affected_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, actual_isolation: bool, alias: str
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    first = FoundryCheckpointSaver(
+        credential=AsyncMock(), user_isolation=actual_isolation
+    )
+    second = (
+        FoundryCheckpointSaver(credential=AsyncMock(), user_isolation=actual_isolation)
+        if alias == "consumer"
+        else first
+    )
+    config: RunnableConfig = {"configurable": {"thread_id": "shared"}}
+    async with state_store_client_scope():
+        token = set_request_context(FoundryAgentRequestContext(user_id="bob"))
+        try:
+            assert await second.aget_tuple(config) is None
+            async with second._get_or_create_store("shared") as old:
+                pass
+        finally:
+            reset_request_context(token)
+        user = "bob" if alias == "consumer" else "alice"
+        token = set_request_context(FoundryAgentRequestContext(user_id=user))
+        try:
+            await first.adelete_thread("shared")
+        finally:
+            reset_request_context(token)
+        token = set_request_context(FoundryAgentRequestContext(user_id="bob"))
+        try:
+            assert await second.aget_tuple(config) is None
+            async with second._get_or_create_store("shared") as current:
+                assert (current is old) is actual_isolation
+                await current.set_item("new", {"value": "new"})
+        finally:
+            reset_request_context(token)
+
+
+@pytest.mark.parametrize("alias", ["binding", "consumer", "user"])
 async def test_deletion_waits_for_acquisition_and_blocks_replacement(
-    monkeypatch: pytest.MonkeyPatch, clients: list[Any]
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], alias: str
 ) -> None:
     owner = object()
+    borrower = object() if alias == "consumer" else owner
     acquire_started, delete_started = asyncio.Event(), asyncio.Event()
     allow_acquire, allow_delete = asyncio.Event(), asyncio.Event()
     get_or_create = FoundryStateStore.get_or_create
@@ -112,13 +158,22 @@ async def test_deletion_waits_for_acquisition_and_blocks_replacement(
         return store
 
     async def borrow() -> Any:
-        async with get_state_store(owner, FoundryStateStore, "store") as store:
-            return store
+        token = set_request_context(
+            FoundryAgentRequestContext(user_id="bob" if alias == "user" else None)
+        )
+        try:
+            async with get_state_store(borrower, FoundryStateStore, "store") as store:
+                return store
+        finally:
+            reset_request_context(token)
 
     async def delete() -> None:
-        async with state_store_factory._state_store_deletion_scope(owner, "store"):
+        async with state_store_factory._state_store_deletion_scope(
+            owner, "store"
+        ) as invalidate_aliases:
             delete_started.set()
             await allow_delete.wait()
+            invalidate_aliases()
 
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     async with state_store_client_scope():
@@ -149,6 +204,43 @@ async def test_deletion_waits_for_acquisition_and_blocks_replacement(
             await asyncio.gather(*tasks, return_exceptions=True)
     for client in clients:
         client.get.assert_not_awaited()
+        client.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        None,
+        "https://project.test/storage/",
+        FoundryStorageEndpoint(storage_base_url="https://project.test/storage/"),
+    ],
+)
+async def test_whole_store_deletion_only_invalidates_matching_resource(
+    clients: list[Any], endpoint: FoundryStorageEndpoint | str | None
+) -> None:
+    owner = object()
+    bindings = [
+        (object(), "store", endpoint),
+        (object(), "store", "https://other.test"),
+        (owner, "other", endpoint),
+    ]
+    async with state_store_client_scope():
+        for consumer, name, target in bindings:
+            async with get_state_store(
+                consumer, FoundryStateStore, name, endpoint=target
+            ):
+                pass
+        async with state_store_factory._state_store_deletion_scope(
+            owner, "store", endpoint="https://project.test"
+        ) as invalidate_aliases:
+            invalidate_aliases()
+        for index, (consumer, name, target) in enumerate(bindings):
+            async with get_state_store(
+                consumer, FoundryStateStore, name, endpoint=target
+            ) as store:
+                assert (store is clients[index]) is (index != 0)
+        assert len(clients) == 4
+    for client in clients:
         client.aclose.assert_awaited_once()
 
 
@@ -447,7 +539,7 @@ async def test_deletion_scope_rejects_closing_factory(
         async with get_state_store(owner, FoundryStateStore, "store") as first:
             pass
         key = next(iter(factory.clients))
-        lock = factory.locks[key]
+        lock = factory.locks[key[1]]
         if wait_for_lock:
             await lock.acquire()
             deletion = asyncio.create_task(delete())
@@ -525,6 +617,7 @@ async def test_failed_acquisition_closes_owned_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     transports = []
 
     async def fail(*args: Any, **options: Any) -> None:

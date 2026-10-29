@@ -292,8 +292,10 @@ graph.
 Responses handlers check or create factory-managed Foundry checkpoint and
 conversation-chain stores on first use, then reuse their clients without
 additional store-existence checks. Thread deletion through the saver resets
-that handler's client binding and blocks new acquisitions until deletion ends;
-already-borrowed clients can continue item operations. An item operation that
+that handler's client binding and blocks acquisitions for the same store until
+deletion ends. Whole-store deletion invalidates all consumer and user bindings
+for that endpoint and store; isolated deletion retains other users' bindings.
+Already-borrowed clients can continue item operations. An item operation that
 raises `FoundryStorageNotFoundError` invalidates its cached binding and propagates
 the error; the next borrow resolves the store again. Missing item reads returned
 as `None` do not invalidate the binding.
