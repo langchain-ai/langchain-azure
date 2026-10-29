@@ -64,9 +64,18 @@ def cosine_similarity_top_k(
     if len(X) == 0 or len(Y) == 0:
         return [], []
     score_array = cosine_similarity(X, Y)
-    score_threshold = score_threshold or -1.0
+    # `or` would treat an explicit 0 (a perfectly valid threshold/top_k) as
+    # "not provided" and silently fall back to the default, so check for
+    # `None` instead.
+    score_threshold = -1.0 if score_threshold is None else score_threshold
     score_array[score_array < score_threshold] = 0
-    top_k = min(top_k or len(score_array), int(np.count_nonzero(score_array)))
+    max_k = len(score_array) if top_k is None else top_k
+    top_k = min(max_k, int(np.count_nonzero(score_array)))
+    if top_k <= 0:
+        # `np.argpartition(..., -0, axis=None)[-0:]` below would otherwise
+        # slice the *entire* flattened array instead of returning nothing,
+        # since `-0` is just `0` and `arr[0:]` is `arr`.
+        return [], []
     top_k_idxs = np.argpartition(score_array, -top_k, axis=None)[-top_k:]
     top_k_idxs = top_k_idxs[np.argsort(score_array.ravel()[top_k_idxs])][::-1]
     ret_idxs = np.unravel_index(top_k_idxs, score_array.shape)
