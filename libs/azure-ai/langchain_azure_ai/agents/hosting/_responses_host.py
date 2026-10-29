@@ -772,6 +772,8 @@ class ResponsesHostServer:
         return (
             self._enable_response_branching
             and bool(request.get("previous_response_id"))
+            # shortcut: Branches assume no recovery; revisit when branch
+            # recovery is added.
             and not context.is_recovery
         )
 
