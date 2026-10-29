@@ -220,6 +220,12 @@ The adapter must create its own host to configure branching. Unsupported
 combinations, or a saver without the required async methods, raise `ValueError`
 during initialization.
 
+Initialization checks `aget_tuple`, `aput`, and `aput_writes` on the original
+saver before applying the host's checkpoint proxy. For SQLite, use
+`AsyncSqliteSaver`; synchronous `SqliteSaver` is not supported. Custom savers
+must provide usable implementations of these methods. Validation performs no
+storage reads or writes.
+
 The branching flag controls the checkpoint execution strategy for supported
 requests. It must not change the public meanings of `conversation`, `store`,
 or `instructions`.

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -25,14 +26,19 @@ from azure.ai.agentserver.responses.models import CreateResponse, ResponseObject
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.utils import ConfigurableFieldSpec
-from langgraph.checkpoint.base import CheckpointTuple
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import StateSnapshot, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+    _RequestCheckpointSaver,
+)
 from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
 
 
@@ -335,6 +341,61 @@ def test_branching_requires_a_checkpointer_and_disabled_steering(
             options=ResponsesServerOptions(steerable_conversations=True),
             enable_response_branching=True,
         )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("method_name", ["aget_tuple", "aput", "aput_writes"])
+def test_branching_rejects_unimplemented_async_checkpoint_methods(
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    wrapped: bool,
+    method_name: str,
+) -> None:
+    class IncompleteSaver(InMemorySaver):
+        pass
+
+    monkeypatch.setattr(
+        IncompleteSaver, method_name, getattr(BaseCheckpointSaver, method_name)
+    )
+    saver = IncompleteSaver()
+    checkpointer = _RequestCheckpointSaver(saver) if wrapped else saver
+    with pytest.raises(ValueError, match=method_name):
+        ResponsesHostServer(
+            graph.copy({"checkpointer": checkpointer}),
+            enable_response_branching=True,
+        )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_sync_sqlite_saver_is_rejected_only_when_branching_is_enabled(
+    graph: CompiledStateGraph, wrapped: bool, enabled: bool
+) -> None:
+    with SqliteSaver.from_conn_string(":memory:") as saver:
+        checkpointer = _RequestCheckpointSaver(saver) if wrapped else saver
+        with (
+            pytest.raises(ValueError, match="asynchronous.*aput_writes")
+            if enabled
+            else nullcontext()
+        ):
+            ResponsesHostServer(
+                graph.copy({"checkpointer": checkpointer}),
+                enable_response_branching=enabled,
+            )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_branching_accepts_async_sqlite_saver(
+    graph: CompiledStateGraph, wrapped: bool
+) -> None:
+    async with AsyncSqliteSaver.from_conn_string(":memory:") as saver:
+        checkpointer = _RequestCheckpointSaver(saver) if wrapped else saver
+        server = ResponsesHostServer(
+            graph.copy({"checkpointer": checkpointer}),
+            enable_response_branching=True,
+        )
+        assert isinstance(server.graph.checkpointer, _RequestCheckpointSaver)
+        assert server.graph.checkpointer.__wrapped__ is saver
 
 
 @pytest.mark.parametrize("steerable_conversations", [False, True])

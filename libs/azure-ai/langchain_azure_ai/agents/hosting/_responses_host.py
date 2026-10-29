@@ -229,6 +229,24 @@ def _install_recovery_stream_lock_workaround(
     setattr(orchestrator, "_run_resilient_stream_body", run_with_recovery_lock_retry)
 
 
+def _validate_response_branching_checkpointer(checkpointer: object) -> None:
+    """Reject missing async implementations on the original checkpoint saver."""
+    while isinstance(checkpointer, _RequestCheckpointSaver):
+        checkpointer = checkpointer.__wrapped__
+    unsupported = []
+    for name in ("aget_tuple", "aput", "aput_writes"):
+        method = getattr(checkpointer, name, None)
+        if not callable(method) or getattr(method, "__func__", method) is getattr(
+            BaseCheckpointSaver, name
+        ):
+            unsupported.append(name)
+    if unsupported:
+        raise ValueError(
+            "Response branching requires a checkpointer with asynchronous "
+            f"implementations of {', '.join(unsupported)}."
+        )
+
+
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
     return getattr(graph, "checkpointer", None) is not None
 
@@ -377,7 +395,9 @@ class ResponsesHostServer:
         enable_response_branching: Start ``previous_response_id`` requests from
             the specified completed response's checkpoint instead of the
             conversation head. Defaults to ``False``. Requires a
-            history-preserving checkpointer, steering disabled, and ``app=None``.
+            history-preserving checkpointer with asynchronous ``aget_tuple``,
+            ``aput``, and ``aput_writes`` implementations, steering disabled,
+            and ``app=None``.
             Branching from paused graphs is not supported.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
@@ -389,8 +409,8 @@ class ResponsesHostServer:
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
             to host custom-state graphs. Also raised if response branching is
-            enabled without a checkpointer, with steering enabled, or with an
-            external ``app``.
+            enabled without the required async checkpoint implementations,
+            with steering enabled, or with an external ``app``.
     """
 
     def __init__(
@@ -408,6 +428,8 @@ class ResponsesHostServer:
     ) -> None:
         self._validate_graph_schema(graph)
         saver = getattr(graph, "checkpointer", None)
+        if enable_response_branching:
+            _validate_response_branching_checkpointer(saver)
         if isinstance(saver, BaseCheckpointSaver) and not isinstance(
             saver, _RequestCheckpointSaver
         ):
