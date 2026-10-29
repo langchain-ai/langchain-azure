@@ -32,6 +32,7 @@ from azure.ai.agentserver.responses.models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
 from starlette.types import Message
@@ -839,7 +840,10 @@ async def test_request_pins_reference_after_recovery_selection(
         )
     ]
     assert events[-1]["type"] == "response.completed"
-    chain_get.assert_awaited_once()
+    if recovering:
+        chain_get.assert_not_awaited()
+    else:
+        chain_get.assert_awaited_once()
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -1957,7 +1961,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
 
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+    assert "checkpoint_id" not in config["configurable"]
     context.get_input_items.assert_not_awaited()
 
 
@@ -2173,7 +2177,19 @@ async def test_checkpoint_reference_is_isolated_by_user(
     assert second_config["configurable"]["checkpoint_id"] == "checkpoint-user-b"
 
 
-async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
+@pytest.mark.parametrize("checkpointed", [False, True])
+@pytest.mark.parametrize(
+    "saved_checkpoint",
+    [None, {"checkpoint_id": "incomplete"}],
+    ids=["missing", "invalid"],
+)
+async def test_previous_response_id_chain_resolves_root_thread_id(
+    checkpointed: bool,
+    saved_checkpoint: dict[str, str] | None,
+    foundry_state_stores: dict[str, dict[str, Any]],
+) -> None:
+    response_reads: list[str] = []
+
     class _Provider:
         async def get_response(
             self,
@@ -2182,19 +2198,32 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
             context: object = None,
         ) -> dict[str, str | None]:
             del context
+            response_reads.append(response_id)
             responses: dict[str, dict[str, str | None]] = {
                 "resp-2": {"previous_response_id": "resp-1"},
                 "resp-1": {"previous_response_id": None},
             }
             return responses[response_id]
 
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    if saved_checkpoint is not None:
+        foundry_state_stores[_state_store_name("chain-1")] = {
+            CONVERSATION_CHECKPOINT_KEY: saved_checkpoint
+        }
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+    )
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
-        _context(conversation_id=None, provider=_Provider()),
+        _context(
+            conversation_id=None,
+            conversation_chain_id="chain-1",
+            provider=_Provider(),
+        ),
     )
 
     assert config["configurable"]["thread_id"] == "resp-1"
+    assert "checkpoint_id" not in config["configurable"]
+    assert response_reads == ["resp-2", "resp-1"]
 
 
 @pytest.mark.parametrize("as_json", [False, True])
@@ -2391,7 +2420,9 @@ async def test_previous_response_conversation_takes_priority_over_metadata() -> 
     assert HostingRunnableConfig(config).root_response_id is None
 
 
+@pytest.mark.parametrize("recovering", [False, True])
 async def test_previous_response_uses_conversation_state_store(
+    recovering: bool,
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:
     _seed_conversation_checkpoint(
@@ -2401,22 +2432,24 @@ async def test_previous_response_uses_conversation_state_store(
         checkpoint_id="checkpoint-2",
     )
     server = ResponsesHostServer(make_checkpointed_echo_graph())
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            return_value=_response_object(
+                "resp-2",
+                internal_metadata={
+                    METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+                    METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                    METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                },
+            )
+        )
+    )
     context = _context(
         conversation_id=None,
         conversation_chain_id="chain-1",
-        provider=SimpleNamespace(
-            get_response=AsyncMock(
-                return_value=_response_object(
-                    "resp-2",
-                    internal_metadata={
-                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
-                        METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
-                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
-                    },
-                )
-            )
-        ),
+        provider=provider,
     )
+    context.is_recovery = recovering
 
     config = await server.build_runnable_config(
         _request(previous_response_id="resp-2"),
@@ -2426,7 +2459,8 @@ async def test_previous_response_uses_conversation_state_store(
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
     assert config["configurable"]["checkpoint_ns"] == ""
-    assert HostingRunnableConfig(config).root_response_id == "resp-root"
+    assert config["configurable"]["response_context"] is context
+    provider.get_response.assert_not_awaited()
 
 
 async def test_explicit_conversation_uses_conversation_state_store(
@@ -2488,7 +2522,7 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     )
 
     assert config["configurable"]["thread_id"] == "resp-root"
-    assert config["configurable"]["checkpoint_id"] == "checkpoint-committed"
+    assert "checkpoint_id" not in config["configurable"]
     assert config["configurable"]["checkpoint_ns"] == ""
 
 
@@ -2541,26 +2575,20 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
         },
     )
-    with monkeypatch.context() as recovery_patch:
-        _, recovery_config = await _capture_graph_call(
-            server,
-            request,
-            recovery_context,
-            recovery_patch,
+    saver = server.graph.checkpointer
+    assert isinstance(saver, BaseCheckpointSaver)
+    reads = AsyncMock(wraps=saver.aget_tuple)
+    monkeypatch.setattr(saver, "aget_tuple", reads)
+    events = [
+        event
+        async for event in server.handle_create(
+            request, recovery_context, asyncio.Event()
         )
-    assert recovery_config["configurable"]["checkpoint_id"] == committed_checkpoint_id
-    recovered_nodes = [
-        node
-        async for update in server.graph.astream(
-            None,
-            recovery_config,
-            stream_mode="updates",
-            durability="sync",
-        )
-        for node in update
     ]
-
-    assert recovered_nodes == ["research"]
+    assert events[-1]["response"]["status"] == "completed"
+    first_read = reads.await_args_list[0].args[0]["configurable"]
+    assert first_read["thread_id"] == "resp-root"
+    assert first_read["checkpoint_id"] == committed_checkpoint_id
 
 
 async def test_conversation_state_store_supports_linear_response_chain(
