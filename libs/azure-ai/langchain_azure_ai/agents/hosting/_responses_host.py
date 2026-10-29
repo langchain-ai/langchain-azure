@@ -777,19 +777,9 @@ class ResponsesHostServer:
             not namespace and re.match(r"user-[0-9a-f]{64}:", reference.thread_id)
         ):
             raise ValueError("The previous response belongs to a different user.")
-        config = HostingRunnableConfig.create_from_checkpoint(
+        return HostingRunnableConfig.create_from_checkpoint(
             reference, context
         ).runnable_config
-        state = await self._graph.aget_state(config)
-        if (
-            HostingRunnableConfig(state.config).checkpoint_ref != reference
-            or (state.config.get("configurable") or {}).get("checkpoint_ns", "") != ""
-            or state.created_at is None
-        ):
-            raise ValueError("The previous response's graph checkpoint is missing.")
-        if state.next or state.tasks or state.interrupts:
-            raise ValueError("Branching requires a finished parent graph.")
-        return config
 
     async def _resolve_thread_config(
         self,
@@ -1026,6 +1016,21 @@ class ResponsesHostServer:
             checkpoint_reads = _checkpoint_reads.get()
             if checkpoint_reads is not None:
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
+
+            if self._is_response_branch(request, context):
+                state = await self._graph.aget_state(config)
+                if (
+                    HostingRunnableConfig(state.config).checkpoint_ref
+                    != HostingRunnableConfig(config).checkpoint_ref
+                    or (state.config.get("configurable") or {}).get("checkpoint_ns", "")
+                    != ""
+                    or state.created_at is None
+                ):
+                    raise ValueError(
+                        "The previous response's graph checkpoint is missing."
+                    )
+                if state.next or state.tasks or state.interrupts:
+                    raise ValueError("Branching requires a finished parent graph.")
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent

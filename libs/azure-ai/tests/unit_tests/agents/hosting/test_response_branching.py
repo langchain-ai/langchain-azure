@@ -16,16 +16,19 @@ import pytest
 from azure.ai.agentserver.core.platform_headers import USER_ID
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
+    ResponseContext,
     ResponseEventStream,
     ResponsesServerOptions,
 )
-from azure.ai.agentserver.responses.models import ResponseObject
+from azure.ai.agentserver.responses.models import CreateResponse, ResponseObject
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.utils import ConfigurableFieldSpec
+from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import interrupt
+from langgraph.types import StateSnapshot, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -199,6 +202,82 @@ def test_unavailable_parent_fails_without_executing_a_new_root(
 
     assert response["status"] == "failed"
     execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cleanup_phase", ["config", "validation"])
+def test_checkpoint_cleanup_never_starts_a_new_root(
+    graph: CompiledStateGraph, monkeypatch: pytest.MonkeyPatch, cleanup_phase: str
+) -> None:
+    saver = graph.checkpointer
+    assert isinstance(saver, InMemorySaver)
+    server = ResponsesHostServer(
+        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+    )
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert parent["status"] == "completed"
+        if cleanup_phase == "config":
+            build_config = server.build_runnable_config
+
+            async def cleanup_after_config(
+                request: CreateResponse, context: ResponseContext
+            ) -> RunnableConfig:
+                config = await build_config(request, context)
+                await saver.adelete_thread(config["configurable"]["thread_id"])
+                return config
+
+            monkeypatch.setattr(server, "build_runnable_config", cleanup_after_config)
+        else:
+            get_state = server._graph.aget_state
+
+            async def cleanup_after_validation(config: RunnableConfig) -> StateSnapshot:
+                state = await get_state(config)
+                await saver.adelete_thread(config["configurable"]["thread_id"])
+                return state
+
+            monkeypatch.setattr(server._graph, "aget_state", cleanup_after_validation)
+        response = _create(client, input="B", previous_response_id=parent["id"])
+
+    if cleanup_phase == "config":
+        assert response["status"] == "failed"
+    else:
+        assert response["status"] == "completed"
+        assert _text(response) == "A|B"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_custom_saver_config_is_available_before_checkpoint_reads(
+    graph: CompiledStateGraph, enabled: bool
+) -> None:
+    class PartitionSaver(InMemorySaver):
+        @property
+        def config_specs(self) -> list[ConfigurableFieldSpec]:
+            return [ConfigurableFieldSpec(id="partition", annotation=str)]
+
+        async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+            if config["configurable"].get("partition") != "tenant-a":
+                raise ValueError("The checkpoint partition is required.")
+            return await super().aget_tuple(config)
+
+    class PartitionServer(ResponsesHostServer):
+        async def build_runnable_config(
+            self, request: CreateResponse, context: ResponseContext
+        ) -> RunnableConfig:
+            config = await super().build_runnable_config(request, context)
+            config["configurable"]["partition"] = "tenant-a"
+            return config
+
+    server = PartitionServer(
+        graph.copy({"checkpointer": PartitionSaver()}),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enabled,
+    )
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        response = _create(client, input="B", previous_response_id=parent["id"])
+    assert parent["status"] == "completed"
+    assert response["status"] == "completed"
+    assert _text(response) == "A|B"
 
 
 def test_paused_parent_cannot_be_branched() -> None:
