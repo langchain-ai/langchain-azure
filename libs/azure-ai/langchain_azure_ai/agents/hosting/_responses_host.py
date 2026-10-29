@@ -1133,8 +1133,9 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None and not self._is_response_branch(
-                request, context
+            if checkpoint_ref is not None and not (
+                self._enable_response_branching
+                and bool(request.get("previous_response_id"))
             ):
                 await self._conversation_chain_store.set(
                     conversation_chain_id,

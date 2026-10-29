@@ -1914,6 +1914,7 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
     }
 
 
+@pytest.mark.parametrize("enable_response_branching", [False, True])
 @pytest.mark.parametrize(
     "input_items",
     [
@@ -1937,8 +1938,15 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
 async def test_recovery_resumes_from_current_response_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     input_items: list[object],
+    enable_response_branching: bool,
 ) -> None:
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+        enable_response_branching=enable_response_branching,
+    )
+    chain_set = AsyncMock()
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
     context = _context(conversation_id=None, current_text="do not replay")
     context.is_recovery = True
     context.persisted_response = _response_object(
@@ -1949,7 +1957,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
         },
     )
     context.get_input_items.return_value = input_items
-    request = _request()
+    request = _request(previous_response_id="resp-parent")
     graph_input, config = await _capture_graph_call(
         server,
         request,
@@ -1961,6 +1969,14 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
     context.get_input_items.assert_not_awaited()
+    if enable_response_branching:
+        chain_set.assert_not_awaited()
+    else:
+        chain_set.assert_awaited_once_with(
+            context.conversation_chain_id,
+            CONVERSATION_CHECKPOINT_KEY,
+            {"thread_id": "resp-root", "checkpoint_id": "checkpoint-current"},
+        )
 
 
 def test_readiness_endpoint_is_available() -> None:
