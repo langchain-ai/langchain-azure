@@ -791,6 +791,9 @@ class ResponsesHostServer:
     def _is_response_branch(
         self, request: CreateResponse, context: ResponseContext
     ) -> bool:
+        # shortcut: `conversation` is not checked here. A request that sets both
+        # previous_response_id and conversation branches from the parent and ignores
+        # the conversation, instead of returning the HTTP 400 required by the design.
         return (
             self._enable_response_branching
             and bool(request.get("previous_response_id"))
@@ -811,6 +814,9 @@ class ResponsesHostServer:
         parent = await provider.get_response(
             parent_id, context=context.platform_context
         )
+        # shortcut: Ineligible parents (not completed, paused, or owned by another
+        # user) are rejected after response.created, so clients receive
+        # response.failed with server_error rather than a 4xx before execution.
         if parent.get("id") != parent_id or parent.get("status") != "completed":
             raise ValueError("The previous response must be completed.")
         reference = TaskStorageManager.from_stream(
@@ -1073,6 +1079,8 @@ class ResponsesHostServer:
                     raise ValueError(
                         "The previous response's graph checkpoint is missing."
                     )
+                # shortcut: Assume no unanswered tool calls; validate parent outputs
+                # in follow-up.
                 if state.next or state.tasks or state.interrupts:
                     raise ValueError("Branching requires a finished parent graph.")
 

@@ -544,3 +544,13 @@ If the common continuation rules allow a request to select B, branching restores
 B's persisted exact checkpoint reference and creates an independent child.
 Otherwise, the request is rejected under those rules; branching does not decide
 which parent a conversation request selects.
+
+- [ ] Validate stored parent outputs for unanswered tool calls before admitting
+  a branch; reaching `END` with no pending tasks or interrupts is not sufficient.
+- [ ] Reject requests that set both `previous_response_id` and `conversation`
+  with HTTP 400 before execution, instead of ignoring `conversation`.
+- [ ] Move parent eligibility and access checks before `response.created`.
+  Use the common HTTP 4xx/error-code contract for ineligible parents, including
+  `previous_response_not_found` for unretained responses, instead of
+  `response.failed` with `server_error`. Keep missing checkpoint data classified
+  as a backend failure.
