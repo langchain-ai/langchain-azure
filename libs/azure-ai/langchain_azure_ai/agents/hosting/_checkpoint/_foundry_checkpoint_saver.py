@@ -40,7 +40,7 @@ from langchain_azure_ai.agents.hosting import (
     _add_process_hosting_features,
 )
 
-from .._storage import get_state_store
+from .._storage import _state_store_deletion_scope, get_state_store
 
 DEFAULT_STORE_NAME_PREFIX = "langchain_azure_ai.agents.hosting.FoundryCheckpointSaver"
 DEFAULT_ITEM_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -423,33 +423,39 @@ class FoundryCheckpointSaver(BaseCheckpointSaver):
 
         Raises:
             ValueError: ``thread_id`` is empty.
+            RuntimeError: The handler's State Store scope is closing or belongs
+                to another event loop.
         """
         if not thread_id:
             raise ValueError("thread_id must be a non-empty string")
-        store = self._bound_store(thread_id)
-        try:
-            properties = await store.get()
-            if properties.user_isolation:
-                keys: list[str] = []
-                after: str | None = None
-                while True:
-                    page = await store.list_keys(
-                        limit=_PAGE_SIZE,
-                        order="asc",
-                        after=after,
-                    )
-                    keys.extend(key.key for key in page.keys)
-                    if not page.has_more or page.last_id is None:
-                        break
-                    after = page.last_id
-                for key in keys:
-                    await store.delete_item(key)
-            else:
-                await store.delete()
-        except FoundryStorageNotFoundError:
-            pass
-        finally:
-            await store.aclose()
+        async with _state_store_deletion_scope(
+            self, self._store_name(thread_id), endpoint=self._endpoint
+        ) as invalidate_aliases:
+            store = self._bound_store(thread_id)
+            try:
+                properties = await store.get()
+                if properties.user_isolation:
+                    keys: list[str] = []
+                    after: str | None = None
+                    while True:
+                        page = await store.list_keys(
+                            limit=_PAGE_SIZE,
+                            order="asc",
+                            after=after,
+                        )
+                        keys.extend(key.key for key in page.keys)
+                        if not page.has_more or page.last_id is None:
+                            break
+                        after = page.last_id
+                    for key in keys:
+                        await store.delete_item(key)
+                else:
+                    invalidate_aliases()
+                    await store.delete()
+            except FoundryStorageNotFoundError:
+                pass
+            finally:
+                await store.aclose()
 
     @asynccontextmanager
     async def _get_or_create_store(

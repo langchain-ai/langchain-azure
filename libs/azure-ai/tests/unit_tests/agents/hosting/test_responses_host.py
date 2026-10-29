@@ -369,6 +369,7 @@ async def test_handler_context_is_bound_per_iteration_across_tasks(
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     server = ResponsesHostServer(make_echo_graph())
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
     factories = []
     checkpoint_contexts = []
@@ -447,6 +448,7 @@ async def test_cross_task_close_does_not_cancel_handler_tasks(
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     server = ResponsesHostServer(make_echo_graph())
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     held = []
     factories = []
     children: list[asyncio.Task[None]] = []
@@ -531,6 +533,7 @@ async def test_iterator_shutdown_timeout_still_closes_factory(
     monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
     server = ResponsesHostServer(make_echo_graph())
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     closing, release = asyncio.Event(), asyncio.Event()
 
     async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
