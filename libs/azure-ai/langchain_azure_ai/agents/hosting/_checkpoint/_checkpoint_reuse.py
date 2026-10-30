@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy, deepcopy
@@ -28,6 +28,8 @@ from wrapt import ObjectProxy
 
 from .._instructions import (
     _instructions_from_config,
+    _prepare_instruction_writes,
+    _ResponseInstructions,
     _without_request_instructions,
 )
 
@@ -251,10 +253,40 @@ class _RequestCheckpointSaver(ObjectProxy):
     def _overlay_instructions(
         self, config: RunnableConfig, value: CheckpointTuple | None
     ) -> CheckpointTuple | None:
-        instructions = _instructions_from_config(config)
-        if instructions is None:
-            return value
+        instructions = _instructions_from_config(config) or _ResponseInstructions(None)
         return instructions.overlay(value)
+
+    def list(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> Iterator[CheckpointTuple]:
+        instructions = _instructions_from_config(config or {}) or _ResponseInstructions(
+            None
+        )
+        for value in self.__wrapped__.list(
+            config, filter=filter, before=before, limit=limit
+        ):
+            yield instructions.overlay(value)
+
+    async def alist(
+        self,
+        config: RunnableConfig | None,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        instructions = _instructions_from_config(config or {}) or _ResponseInstructions(
+            None
+        )
+        async for value in self.__wrapped__.alist(
+            config, filter=filter, before=before, limit=limit
+        ):
+            yield instructions.overlay(value)
 
     def get(self, config: RunnableConfig) -> Checkpoint | None:
         value = self.get_tuple(config)
@@ -352,7 +384,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         self._invalidate_config(config)
         kwargs = {"task_path": task_path} if self._self_async_task_path else {}
         await self.__wrapped__.aput_writes(
-            config, _without_request_instructions(writes), task_id, **kwargs
+            config, _prepare_instruction_writes(writes), task_id, **kwargs
         )
 
     async def adelete_thread(self, thread_id: str) -> None:
@@ -401,7 +433,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         self._invalidate_config(config)
         kwargs = {"task_path": task_path} if self._self_sync_task_path else {}
         self.__wrapped__.put_writes(
-            config, _without_request_instructions(writes), task_id, **kwargs
+            config, _prepare_instruction_writes(writes), task_id, **kwargs
         )
 
     def delete_thread(self, thread_id: str) -> None:

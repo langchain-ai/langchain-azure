@@ -11,7 +11,7 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import closing
 from copy import copy, deepcopy
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -21,8 +21,20 @@ from azure.ai.agentserver.core import (
     reset_request_context,
     set_request_context,
 )
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.load import load
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    convert_to_messages,
+    message_to_dict,
+    messages_from_dict,
+)
 from langchain_core.runnables import ConfigurableFieldSpec, RunnableConfig
+from langgraph.cache.base import FullKey
+from langgraph.cache.memory import InMemoryCache
 from langgraph.channels import DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
@@ -42,7 +54,10 @@ from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
-from langchain_azure_ai.agents.hosting._instructions import _ResponseInstructions
+from langchain_azure_ai.agents.hosting._instructions import (
+    _InstructionCache,
+    _ResponseInstructions,
+)
 
 from .conftest import make_checkpointed_echo_graph
 from .test_foundry_checkpoint_saver import (
@@ -92,6 +107,183 @@ class _JsonWithBinaryTags:
         if kind == "bytearray":
             return bytearray(data)
         return json.loads(data)
+
+
+class _SavedInstructionResult(BaseModel):
+    messages: tuple[AnyMessage, ...]
+
+
+async def test_task_instruction_references_preserve_payloads_and_raw_cache(
+    backend: BaseCheckpointSaver,
+) -> None:
+    saver = _RequestCheckpointSaver(backend)
+    instruction = _ResponseInstructions.create(
+        "private-request-only", "source-response"
+    ).message
+    assert instruction is not None
+    explicit = SystemMessage(content="explicit-system", id="explicit")
+    messages: list[AnyMessage] = [instruction, explicit]
+    reference = {"id": instruction.id, "label": "keep"}
+    payload: dict[str, Any] = {
+        "messages": tuple(messages),
+        "list": messages,
+        "model": _SavedInstructionResult(messages=tuple(messages)),
+        "wire": [message_to_dict(message) for message in messages],
+        "constructors": [message.to_json() for message in messages],
+        "dumps": [instruction.model_dump(exclude_defaults=True), explicit.model_dump()],
+        "openai": [
+            {"role": "developer", "content": instruction.content, "id": instruction.id},
+            {"role": "system", "content": explicit.content, "id": explicit.id},
+        ],
+        "artifact": ToolMessage(
+            content="tool-result",
+            tool_call_id="call",
+            artifact={"messages": tuple(messages), "reference": reference},
+        ),
+        "ordinary": [AIMessage(content="ordinary-reply", id="ordinary")],
+        "reference": reference,
+    }
+    round_tripped = backend.serde.loads_typed(backend.serde.dumps_typed(payload))
+    checkpoint = _checkpoint("0001", "input")
+    config = await saver.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
+    writes = [("__return__", payload), ("messages", messages)]
+    if isinstance(backend, InMemorySaver):
+        saver.put_writes(config, writes, "prompt-task")
+    else:
+        await saver.aput_writes(config, writes, "prompt-task")
+    raw = await backend.aget_tuple(config)
+    assert raw is not None
+    assert "private-request-only" not in repr(raw)
+    assert raw.pending_writes is not None
+    raw_writes = {channel: value for _, channel, value in raw.pending_writes}
+    assert raw_writes["__return__"]["messages"][0].content == ""
+    assert raw_writes["__return__"]["messages"][0].id != instruction.id
+    assert raw_writes["messages"] == [explicit]
+    assert messages == [instruction, explicit]
+
+    def check(value: CheckpointTuple, current: str | None) -> None:
+        assert value.pending_writes is not None
+        restored = next(
+            item for _, channel, item in value.pending_writes if channel == "__return__"
+        )
+        expected = [*([current] if current else []), "explicit-system"]
+        assert type(restored["messages"]) is type(round_tripped["messages"])
+        assert isinstance(restored["model"], _SavedInstructionResult)
+        assert type(restored["model"].messages) is type(round_tripped["model"].messages)
+        for values in (
+            restored["messages"],
+            restored["list"],
+            restored["model"].messages,
+            messages_from_dict(restored["wire"]),
+            [
+                load(item, allowed_objects="messages")
+                for item in restored["constructors"]
+            ],
+            convert_to_messages(restored["dumps"]),
+            convert_to_messages(restored["openai"]),
+            convert_to_messages(restored["artifact"].artifact["messages"]),
+        ):
+            assert [message.content for message in values] == expected
+            if current:
+                assert values[0].additional_kwargs["__openai_role__"] == "developer"
+        assert restored["reference"] == reference
+        assert restored["artifact"].artifact["reference"] == reference
+        assert [message.content for message in restored["ordinary"]] == [
+            "ordinary-reply"
+        ]
+
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        for current in ("first-only", "second-only", None, ""):
+            selected = _ResponseInstructions.create(
+                current, f"response-{current}"
+            ).with_config(config)
+            value = await saver.aget_tuple(selected)
+            assert value is not None
+            check(value, current)
+            listed = [item async for item in saver.alist(selected, limit=1)]
+            assert listed
+            check(listed[0], current)
+            assert [item async for item in saver.alist(selected, before=selected)] == []
+            assert [
+                item
+                async for item in saver.alist(selected, filter={"source": "absent"})
+            ] == []
+            if isinstance(backend, InMemorySaver):
+                synchronous = saver.get_tuple(selected)
+                assert synchronous is not None
+                check(synchronous, current)
+                check(next(saver.list(selected, limit=1)), current)
+                assert list(saver.list(selected, before=selected)) == []
+                assert list(saver.list(selected, filter={"source": "absent"})) == []
+        assert reads.cache is not None
+    outside = await saver.aget_tuple(config)
+    assert outside is not None
+    check(outside, None)
+    listed_outside = [item async for item in saver.alist(None, limit=1)]
+    check(listed_outside[0], None)
+    assert await backend.aget_tuple(config) == raw
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_task_cache_references_preserve_context_and_forward_expiration(
+    synchronous: bool,
+) -> None:
+    backend: InMemoryCache[Any] = InMemoryCache()
+    cache = _InstructionCache(backend)
+    key: FullKey = (("prompts",), "current")
+    ordinary_key: FullKey = (("ordinary",), "reply")
+    expired_key: FullKey = (("prompts",), "expired")
+    original = _ResponseInstructions.create("private-request-only", "source-response")
+    assert original.message is not None
+    messages = [original.message, HumanMessage(content="user", id="user")]
+    pairs = {
+        key: ([("__return__", messages)], 60),
+        ordinary_key: ([("__return__", [AIMessage(content="ordinary-reply")])], None),
+        expired_key: ([("__return__", messages)], -1),
+    }
+    if synchronous:
+        cache.set(MappingProxyType(pairs))
+    else:
+        await cache.aset(MappingProxyType(pairs))
+    raw = backend.get([key, ordinary_key, expired_key])
+    assert expired_key not in raw
+    assert "private-request-only" not in repr(raw)
+
+    async def read(current: str | None) -> dict[FullKey, Any]:
+        instructions = _ResponseInstructions.create(current, f"response-{current}")
+        with instructions.bind():
+            await asyncio.sleep(0)
+            return (
+                cache.get([key, ordinary_key, expired_key])
+                if synchronous
+                else await cache.aget([key, ordinary_key, expired_key])
+            )
+
+    for current, restored in zip(
+        ("first-only", "second-only", None, ""),
+        await asyncio.gather(
+            read("first-only"), read("second-only"), read(None), read("")
+        ),
+    ):
+        assert expired_key not in restored
+        assert [message.content for message in restored[key][0][1]] == [
+            *([current] if current else []),
+            "user",
+        ]
+        assert [message.content for message in restored[ordinary_key][0][1]] == [
+            "ordinary-reply"
+        ]
+        restored[key][0][1].append(HumanMessage(content="caller-mutated"))
+    assert backend.get([key, ordinary_key]) == raw
+    outside = cache.get([key])
+    assert [message.content for message in outside[key][0][1]] == ["user"]
+    if synchronous:
+        cache.clear([("prompts",)])
+    else:
+        await cache.aclear([("prompts",)])
+    assert cache.get([key]) == {}
+    assert cache.get([ordinary_key]) != {}
 
 
 @pytest.mark.parametrize("synchronous", [False, True])

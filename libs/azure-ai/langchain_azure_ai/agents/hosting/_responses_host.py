@@ -64,6 +64,7 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -109,7 +110,7 @@ from ._storage.state_store_factory import (
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
-    from langgraph.types import Command, Interrupt
+    from langgraph.types import Interrupt
 
 
 @asynccontextmanager
@@ -1104,12 +1105,12 @@ class ResponsesHostServer:
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
-                # checkpointer holds the mid-turn state, so resume it (input
-                # ``None``) rather than re-injecting the original input. If the
-                # response has no checkpoint yet, replay the request through
+                # checkpointer holds the mid-turn state. An empty resume map
+                # preserves completed tasks at an explicitly addressed checkpoint.
+                # If the response has no checkpoint yet, replay the request through
                 # the normal input / HITL parsing path below.
                 logger.debug("Recovery: resuming graph from persisted checkpoint")
-                graph_input = None
+                graph_input = Command(resume={})
 
             else:
                 if recovering:

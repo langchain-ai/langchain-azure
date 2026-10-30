@@ -222,13 +222,13 @@ result = await child.ainvoke(state)
 
 Apply this in each factory that constructs such a child. Without preparation,
 the host cannot guarantee instruction isolation inside that child. The helper
-returns a shallow graph copy and installs transparent message- and task-channel
-adapters on its discoverable subgraphs; calls outside a hosted Responses
-execution keep their ordinary channel behavior. Apply the helper after graph
-configuration that creates copies, such as `with_config`, because LangGraph
-rebuilds the task channel when copying a graph. It does not replace reducers,
-models, or middleware. `Send` workers receive the current instructions when
-their task inputs are read, both on first execution and after recovery,
+returns a shallow graph copy and installs transparent message-channel,
+task-channel, and cache adapters on its discoverable subgraphs. Calls outside a
+hosted Responses execution keep their ordinary channel behavior. Apply the helper
+after graph configuration that creates copies, such as `with_config`, because
+LangGraph rebuilds the task channel when copying a graph. It does not replace
+reducers, models, or middleware. `Send` workers receive the current instructions
+when their task inputs are read, both on first execution and after recovery,
 including when their message payloads are built independently of parent state.
 The adapters leave the caller's payload unchanged and exclude temporary
 instructions from stored task values.
@@ -237,6 +237,17 @@ Saved `Send` payloads can use list or tuple `messages` in dictionaries,
 dataclasses, or Pydantic models, including allowed extra fields. Projection
 preserves these payload types and removes temporary messages from nested tool
 artifacts as well. Ordinary ID references and explicit messages remain intact.
+LangChain constructor records produced by `BaseMessage.to_json()` are removed
+as complete messages, so the remaining serialized history stays loadable.
+
+Completed `@task` results and configured LangGraph caches preserve instruction
+positions using empty message references, without storing instruction text or
+the originating response ID. Reads replace these references with the current
+response's developer message, or remove them when instructions are omitted or
+empty. The host does not rerun completed tasks or inject messages into unmarked
+task results. This also applies to nested and Functional API workflows,
+checkpoint history reads, and calls outside a hosted request. Recovery continues
+the addressed checkpoint without replaying completed task side effects.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore

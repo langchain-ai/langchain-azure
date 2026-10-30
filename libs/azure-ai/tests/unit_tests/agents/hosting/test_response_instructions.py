@@ -31,6 +31,7 @@ from langchain_core.language_models.fake_chat_models import (
     FakeListChatModel,
     FakeMessagesListChatModel,
 )
+from langchain_core.load import load
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -46,15 +47,17 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 from langchain_core.runnables import RunnableConfig
+from langgraph.cache.memory import InMemoryCache
 from langgraph.channels import DeltaChannel, LastValue
 from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.constants import TASKS
+from langgraph.func import entrypoint, task
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, Messages, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.pregel import NodeBuilder, Pregel
-from langgraph.types import Command, Interrupt, Overwrite, Send, interrupt
+from langgraph.types import CachePolicy, Command, Interrupt, Overwrite, Send, interrupt
 from pydantic import BaseModel, PrivateAttr
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
@@ -879,11 +882,14 @@ def test_fresh_send_instructions_do_not_depend_on_checkpointing(
             instructions=instructions,
         )
         assert client.portal is not None
-        client.portal.call(
-            prepared.ainvoke,
-            {"messages": [HumanMessage(content="outside-host")]},
-            {"configurable": {"thread_id": "outside-host"}},
-        )
+
+        async def outside_host() -> None:
+            await prepared.ainvoke(
+                {"messages": [HumanMessage(content="outside-host")]},
+                {"configurable": {"thread_id": "outside-host"}},
+            )
+
+        client.portal.call(outside_host)
     assert [[message.content for message in call] for call in model._calls] == [
         [*([instructions] if instructions else []), "worker-system", "worker-input"],
         ["worker-system", "worker-input"],
@@ -2323,3 +2329,276 @@ def test_statically_discovered_pregel_children_receive_resumed_instructions(
         assert not _contains_instruction(checkpoint.checkpoint)
         assert not _contains_instruction(checkpoint.metadata)
         assert not _contains_instruction(checkpoint.pending_writes)
+
+
+@pytest.mark.parametrize(
+    "message_type",
+    [SystemMessage, SystemMessageChunk, HumanMessage, AIMessage, AIMessageChunk],
+)
+def test_projection_removes_owned_constructor_messages(
+    message_type: type[BaseMessage],
+) -> None:
+    instruction = _ResponseInstructions.create("request-only", "constructor").message
+    assert instruction is not None
+    owned = message_type(content="request-only", id=instruction.id).to_json()
+    explicit = SystemMessage(content="explicit-system", id="explicit").to_json()
+    reference = {
+        "lc": 1,
+        "type": "constructor",
+        "id": ["application", "AuditRecord"],
+        "kwargs": {"id": instruction.id, "label": "keep"},
+    }
+
+    assert _is_request_instruction(owned)
+    projected = _without_request_instructions([owned, explicit, reference])
+    assert projected == [explicit, reference]
+    restored = load(projected[0], allowed_objects="messages")
+    assert isinstance(restored, SystemMessage)
+    assert restored.content == "explicit-system"
+    assert not _is_request_instruction(reference)
+
+
+class _SerializedArchiveState(MessagesState):
+    archive: list[dict[str, Any]]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("instructions", [None, "request-only"])
+def test_constructor_message_archives_round_trip_across_responses(
+    stream: bool, instructions: str | None
+) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    saver = InMemorySaver()
+
+    async def answer(state: _SerializedArchiveState) -> dict[str, Any]:
+        for value in state.get("archive", []):
+            load(value, allowed_objects="messages")
+        return {
+            "messages": [await model.ainvoke(state["messages"])],
+            "archive": [message.to_json() for message in state["messages"]],
+        }
+
+    builder = StateGraph(_SerializedArchiveState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client,
+            stream=stream,
+            input=[
+                {"role": "developer", "content": "explicit-developer"},
+                {"role": "user", "content": "first"},
+            ],
+            instructions=instructions,
+        )
+        _create(
+            client,
+            stream=stream,
+            input="second",
+            previous_response_id=first["id"],
+        )
+    assert [[message.content for message in call] for call in model._calls] == [
+        [*([instructions] if instructions else []), "explicit-developer", "first"],
+        ["explicit-developer", "first", "answer", "second"],
+    ]
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("instructions", [None, "", "current-only"])
+@pytest.mark.parametrize("resume_kind", ["approval", "recovery"])
+@pytest.mark.parametrize("graph_kind", ["root", "subgraph", "functional"])
+@pytest.mark.parametrize("async_task", [False, True])
+def test_cached_task_result_rebinds_current_instructions(
+    stream: bool,
+    instructions: str | None,
+    resume_kind: str,
+    graph_kind: str,
+    async_task: bool,
+) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    task_inputs: list[list[AnyMessage]] = []
+    failed = False
+
+    @task
+    def retain(messages: list[AnyMessage]) -> list[AnyMessage]:
+        task_inputs.append(deepcopy(messages))
+        return messages
+
+    @task
+    async def aretain(messages: list[AnyMessage]) -> list[AnyMessage]:
+        task_inputs.append(deepcopy(messages))
+        return messages
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        nonlocal failed
+        messages = (
+            await aretain(state["messages"])
+            if async_task
+            else await retain(state["messages"])
+        )
+        if resume_kind == "approval":
+            interrupt({"question": "continue?"})
+        elif not failed:
+            failed = True
+            raise RuntimeError("retry after caching the task result")
+        return {"messages": [await model.ainvoke(messages)]}
+
+    saver = InMemorySaver()
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=saver)
+    if graph_kind != "root":
+        child: Pregel = (
+            entrypoint(checkpointer=saver)(answer)
+            if graph_kind == "functional"
+            else builder.compile(checkpointer=True)
+        )
+        child = with_response_instructions(child)
+        parent = StateGraph(MessagesState)
+        parent.add_node("child", child)
+        parent.add_edge(START, "child")
+        parent.add_edge("child", END)
+        graph = parent.compile(checkpointer=saver)
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider)
+    initial = "initial-only" if resume_kind == "approval" else instructions
+    request = cast(
+        CreateResponse,
+        {
+            "model": "test",
+            "input": [
+                {"role": "developer", "content": "explicit-developer"},
+                {"role": "user", "content": "first"},
+            ],
+            "instructions": initial,
+            "stream": stream,
+        },
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client,
+            stream=stream,
+            input=request["input"],
+            instructions=initial,
+            expected_status="failed" if resume_kind == "recovery" else "completed",
+        )
+        if resume_kind == "approval":
+            approval = next(
+                item
+                for item in first["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            _create(
+                client,
+                stream=stream,
+                instructions=instructions,
+                previous_response_id=first["id"],
+                input=[
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ],
+            )
+        else:
+            assert client.portal is not None
+            stored = client.portal.call(provider.get_response, first["id"])
+            assert stored is not None
+            context = ResponseContext(
+                response_id=stored["id"],
+                mode_flags=ResponseModeFlags(
+                    stream=stream, store=True, background=False
+                ),
+                request=request,
+                provider=provider,
+            )
+            context.is_recovery = True
+            context.persisted_response = stored
+
+            async def recover() -> list[Any]:
+                return [
+                    event
+                    async for event in server._handle_create_async_gen(
+                        request, context, asyncio.Event()
+                    )
+                ]
+
+            events = client.portal.call(recover)
+            assert events[-1]["type"] == "response.completed"
+    assert len(task_inputs) == 1
+    assert [[message.content for message in call] for call in model._calls] == [
+        [*([instructions] if instructions else []), "explicit-developer", "first"]
+    ]
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
+        assert "initial-only" not in repr(checkpoint)
+        assert "current-only" not in repr(checkpoint)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_task_cache_rebinds_only_owned_instruction_slots(stream: bool) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    cache: InMemoryCache[Any] = InMemoryCache()
+    calls: list[str] = []
+
+    def prompt_key(messages: list[AnyMessage]) -> str | bytes:
+        return "shared"
+
+    def reply_key() -> str | bytes:
+        return "shared"
+
+    @task(cache_policy=CachePolicy(key_func=prompt_key))
+    def retain(messages: list[AnyMessage]) -> list[AnyMessage]:
+        calls.append("prompt")
+        return messages
+
+    @task(cache_policy=CachePolicy(key_func=reply_key))
+    def reply() -> list[AIMessage]:
+        calls.append("reply")
+        return [AIMessage(content="ordinary-reply")]
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        messages = await retain(state["messages"])
+        ordinary = await reply()
+        assert [message.content for message in ordinary] == ["ordinary-reply"]
+        return {"messages": [await model.ainvoke(messages)]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(cache=cache)
+    server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
+    with TestClient(server.app) as client:
+        for instructions in ("initial-only", "current-only", None):
+            _create(
+                client,
+                stream=stream,
+                input="first",
+                instructions=instructions,
+            )
+        assert client.portal is not None
+
+        async def outside_host() -> None:
+            await server.graph.ainvoke({"messages": [HumanMessage(content="first")]})
+
+        client.portal.call(outside_host)
+    assert graph.cache is cache
+    assert calls == ["prompt", "reply"]
+    assert [[message.content for message in call] for call in model._calls] == [
+        ["initial-only", "first"],
+        ["current-only", "first"],
+        ["first"],
+        ["first"],
+    ]
