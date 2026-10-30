@@ -10,7 +10,7 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 ## Why host your LangGraph application on Foundry?
 
-Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform.
+Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform to help enterprises deliver production-quality AI agents.
 
 - **Managed execution that scales with your application.** Foundry manages compute, session lifecycles, and scaling around your deployed agent. Its session-isolated runtime and hosting libraries support background execution, configurable recovery, stream replay, and optional steering, helping your application handle concurrent demand, interruptions, and new user input.
 
@@ -20,7 +20,7 @@ Microsoft Foundry combines agent hosting with application interfaces, enterprise
 
 - **Production safety and governance.** Foundry brings Entra identities, RBAC, private networking options, and configurable guardrails to hosted agents. Your organization can control who invokes the application, which resources it can access, and the security and safety policies applied during execution.
 
-- **Diagnostics and evaluation integrated with your deployment.** Foundry connects hosted-agent execution with model and tool tracing, Application Insights, and managed evaluation. Teams can assess execution behavior and output quality within the same platform, helping them investigate failures and judge whether application changes are ready for release.
+- **Diagnostics and evaluation integrated with your deployment.** Foundry connects hosted-agent execution with model and tool tracing, Application Insights, and managed evaluation. Teams can use data from real user interactions to assess execution behavior and output quality, investigate failures, validate changes, and continuously optimize their agents before and after release.
 
 ## Before you start
 
