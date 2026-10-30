@@ -1038,20 +1038,17 @@ class ResponsesHostServer:
         if context.shutdown.is_set():
             await context.exit_for_recovery()
 
-        if cancellation_signal.is_set():
+        if cancellation_signal.is_set() and context.client_cancelled:
             yield stream.emit_in_progress()
-            if context.client_cancelled:
-                yield stream.emit_failed(
-                    code="cancelled",
-                    message="Request was cancelled.",
-                )
-            else:
-                yield stream.emit_completed()
+            yield stream.emit_failed(
+                code="cancelled",
+                message="Request was cancelled.",
+            )
             return
 
         yield stream.emit_in_progress()
 
-        if not recovering:
+        if not recovering and not cancellation_signal.is_set():
             # Persist handler admission before any provider or graph I/O.
             yield stream.checkpoint()
 
@@ -1063,6 +1060,14 @@ class ResponsesHostServer:
                 stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
                     root_response_id
                 )
+            if cancellation_signal.is_set() and not context.client_cancelled:
+                reference = HostingRunnableConfig(config).checkpoint_ref
+                if reference is not None:
+                    task_storage.store_checkpoint_ref(reference)
+                if reference is not None or not self._graph_has_checkpointer:
+                    yield stream.emit_completed()
+                    return
+                # A fresh thread must publish its initial checkpoint before stopping.
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's

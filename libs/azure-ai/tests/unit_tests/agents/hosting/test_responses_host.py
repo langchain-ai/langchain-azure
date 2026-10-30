@@ -1993,10 +1993,13 @@ async def test_recovery_resumes_from_current_response_checkpoint(
         internal_metadata={
             METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-current",
             METADATA_LANGGRAPH_THREAD_ID: "resp-root",
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
         },
     )
     context.get_input_items.return_value = input_items
     request = _request(previous_response_id="resp-parent")
+    stream = server._new_stream(request, context)
+    monkeypatch.setattr(server, "_new_stream", lambda *args: stream)
     graph_input, config = await _capture_graph_call(
         server,
         request,
@@ -2007,6 +2010,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert graph_input is None
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
+    assert stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == "resp-root"
     context.get_input_items.assert_not_awaited()
     chain_get.assert_not_awaited()
     provider.get_response.assert_not_awaited()

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
@@ -15,6 +16,10 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from azure.ai.agentserver.core.platform_headers import USER_ID
+from azure.ai.agentserver.core.tasks import (
+    resilient_tasks_enabled,
+    set_resilient_tasks_enabled,
+)
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponseContext,
@@ -22,6 +27,7 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
+from azure.ai.agentserver.responses._id_generator import IdGenerator
 from azure.ai.agentserver.responses.models import CreateResponse, ResponseObject
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -39,7 +45,10 @@ from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _RequestCheckpointSaver,
 )
-from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
+from langchain_azure_ai.agents.hosting._responses import (
+    METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
+    TaskStorageManager,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -253,6 +262,171 @@ def test_response_linkage_leaves_the_parent_conversation_head_unchanged(
     assert child["status"] == continued["status"] == "completed"
     assert _text(child) == "A|B"
     assert _text(continued) == "A|C"
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+@pytest.mark.parametrize("before_graph_start", [False, True])
+@pytest.mark.parametrize("conversation", [False, True])
+@pytest.mark.parametrize("parent_completed", [False, True])
+def test_steering_preserves_the_selected_context(
+    monkeypatch: pytest.MonkeyPatch,
+    checkpointed: bool,
+    before_graph_start: bool,
+    conversation: bool,
+    parent_completed: bool,
+) -> None:
+    # shortcut: SDK drain guard reads old input; remove after its fix.
+    monkeypatch.setattr(
+        "azure.ai.agentserver.responses.hosting._response_task_lifecycle._task_input_deleted",
+        AsyncMock(return_value=False),
+    )
+    started = asyncio.Event()
+    seen: dict[str, list[tuple[str, str]]] = {}
+
+    async def answer(state: MessagesState, config: RunnableConfig) -> dict[str, Any]:
+        human = [
+            str(message.content)
+            for message in state["messages"]
+            if isinstance(message, HumanMessage)
+        ]
+        seen[human[-1]] = [
+            (message.type, str(message.content)) for message in state["messages"]
+        ]
+        if human[-1] == "B":
+            started.set()
+            await asyncio.wait_for(
+                config["configurable"]["response_cancellation_signal"].wait(), 5
+            )
+        return {"messages": [AIMessage(content="|".join(human))]}
+
+    class SteeringServer(ResponsesHostServer):
+        async def handle_create(
+            self,
+            request: CreateResponse,
+            context: ResponseContext,
+            cancellation_signal: asyncio.Event,
+        ) -> AsyncIterator[Any]:
+            async for event in super().handle_create(
+                request, context, cancellation_signal
+            ):
+                yield event
+                if (
+                    before_graph_start
+                    and request.get("input") == "B"
+                    and isinstance(event, dict)
+                    and event.get("type") == "response.created"
+                ):
+                    started.set()
+                    await asyncio.wait_for(cancellation_signal.wait(), 5)
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=InMemorySaver() if checkpointed else None)
+    provider = InMemoryResponseProvider()
+    server = SteeringServer(
+        graph,
+        store=provider,
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+    monkeypatch.setattr(
+        provider,
+        "delete_response",
+        AsyncMock(side_effect=AssertionError("This scenario never deletes responses")),
+    )
+    chain_get = AsyncMock(wraps=server._conversation_chain_store.get)
+    chain_set = AsyncMock(wraps=server._conversation_chain_store.set)
+    monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+
+    async def scenario() -> tuple[
+        dict[str, Any] | None, dict[str, Any], dict[str, Any]
+    ]:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://testserver",
+        ) as client:
+
+            async def create(
+                text: str,
+                parent: str | None = None,
+                response_id: str | None = None,
+                stream: bool = False,
+            ) -> dict[str, Any]:
+                body: dict[str, Any] = {
+                    "input": text,
+                    "stream": stream,
+                    "agent_session_id": "steering-test",
+                }
+                if response_id is not None:
+                    body["response_id"] = response_id
+                if conversation:
+                    body["conversation"] = "conv-steering"
+                elif parent is not None:
+                    body["previous_response_id"] = parent
+                response = await asyncio.wait_for(
+                    client.post("/responses", json=body), 5
+                )
+                assert response.status_code == 200, response.text
+                if stream:
+                    events = [
+                        json.loads(line.removeprefix("data: "))
+                        for line in response.text.splitlines()
+                        if line.startswith("data: ") and line != "data: [DONE]"
+                    ]
+                    return cast(dict[str, Any], events[-1]["response"])
+                return cast(dict[str, Any], response.json())
+
+            parent = await create("A") if parent_completed else None
+            parent_id = parent["id"] if parent is not None else None
+            superseded_id = IdGenerator.new_response_id(parent_id)
+            superseded = asyncio.create_task(
+                create("B", parent_id, superseded_id, stream=True)
+            )
+            try:
+                await asyncio.wait_for(started.wait(), 5)
+                child = await create("C", superseded_id, stream=True)
+                return parent, await superseded, child
+            finally:
+                if not superseded.done():
+                    superseded.cancel()
+                await asyncio.gather(superseded, return_exceptions=True)
+
+    was_enabled = resilient_tasks_enabled()
+    set_resilient_tasks_enabled(True)
+    try:
+        with TestClient(server.app) as client:
+            assert client.portal is not None
+            parent, superseded, child = client.portal.call(scenario)
+            assert superseded["status"] == "completed", superseded
+            assert child["status"] == "completed", child
+            expected_human = (["A"] if parent_completed else []) + ["B", "C"]
+            if checkpointed and before_graph_start:
+                expected_human.remove("B")
+            assert [
+                text for role, text in seen["C"] if role == "human"
+            ] == expected_human
+            assert seen["C"].count(("ai", "A")) == int(parent_completed)
+            assert ("B" not in seen) == before_graph_start
+            stored_superseded = client.portal.call(
+                provider.get_response, superseded["id"]
+            )
+            if not conversation:
+                metadata = ResponseEventStream(
+                    response_id=superseded["id"], response=stored_superseded
+                ).internal_metadata
+                assert metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == (
+                    parent["id"] if parent is not None else superseded["id"]
+                )
+            if parent is not None and checkpointed and before_graph_start:
+                stored_parent = client.portal.call(provider.get_response, parent["id"])
+                assert _config(stored_parent) == _config(stored_superseded)
+            if not conversation:
+                chain_get.assert_not_awaited()
+                chain_set.assert_not_awaited()
+    finally:
+        set_resilient_tasks_enabled(was_enabled)
 
 
 def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -> None:
