@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping, Sequence
 from copy import copy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from operator import add
 from typing import Any
 
@@ -106,6 +106,18 @@ def _without_request_instructions(value: Any) -> Any:
             is not getattr(value, name)
         }
         return value.model_copy(update=updates) if updates else value
+    if is_dataclass(value) and not isinstance(value, type):
+        result_dataclass = value
+        for item in fields(value):
+            original = getattr(value, item.name)
+            projected = _without_request_instructions(original)
+            if projected is original:
+                continue
+            if result_dataclass is value:
+                result_dataclass = copy(value)
+            # Preserve frozen/slots and init=False fields without rerunning init.
+            object.__setattr__(result_dataclass, item.name, projected)
+        return result_dataclass
     return value
 
 

@@ -10,6 +10,7 @@ import json
 from collections import deque
 from collections.abc import Sequence
 from copy import deepcopy
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -198,6 +199,10 @@ def _contains_instruction(value: Any) -> bool:
         return _contains_instruction(value.arg)
     if isinstance(value, Interrupt):
         return _contains_instruction(value.value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _contains_instruction(getattr(value, item.name)) for item in fields(value)
+        )
     return False
 
 
@@ -424,6 +429,66 @@ def test_send_task_payloads_do_not_persist_request_instructions() -> None:
         assert not _contains_instruction(checkpoint.pending_writes)
 
 
+@dataclass
+class _DataclassTaskInput:
+    messages: list[AnyMessage]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_dataclass_send_resume_does_not_inherit_request_instructions(
+    stream: bool,
+) -> None:
+    capture = _CaptureMessages()
+    model = FakeListChatModel(responses=["answer"], callbacks=[capture])
+    dispatched: list[_DataclassTaskInput] = []
+
+    def dispatch(state: MessagesState) -> Command:
+        payload = _DataclassTaskInput(state["messages"])
+        dispatched.append(payload)
+        return Command(goto=Send("answer", payload))
+
+    async def answer(state: _DataclassTaskInput) -> dict[str, Any]:
+        interrupt({"question": "continue?"})
+        return {"messages": [await model.ainvoke(state.messages)]}
+
+    saver = InMemorySaver()
+    builder = StateGraph(MessagesState)
+    builder.add_node("dispatch", dispatch)
+    builder.add_node("answer", answer, input_schema=_DataclassTaskInput)
+    builder.add_edge(START, "dispatch")
+    builder.add_edge("answer", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client, stream=stream, input="first", instructions="request-only"
+        )
+        approval = next(
+            item for item in first["output"] if item["type"] == "mcp_approval_request"
+        )
+        _create(
+            client,
+            stream=stream,
+            previous_response_id=first["id"],
+            input=[
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+            ],
+        )
+    assert [message.content for message in capture.calls[0]] == ["first"]
+    assert [message.content for message in dispatched[0].messages] == [
+        "request-only",
+        "first",
+    ]
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
+
+
 def test_existing_agent_middleware_and_system_prompt_remain_in_place() -> None:
     capture = _CaptureMessages()
     observed: list[list[BaseMessage]] = []
@@ -628,6 +693,44 @@ def test_projection_preserves_explicit_messages_and_original_task_payloads() -> 
     assert result[4][1].id == "approval-test"
     assert messages == [instruction, explicit]
     assert packet.arg["messages"] is messages
+
+
+def test_projection_cleans_nested_dataclasses_without_mutating_runtime_state() -> None:
+    @dataclass(frozen=True, slots=True)
+    class FrozenPayload:
+        nested: _DataclassTaskInput
+        messages: list[AnyMessage] = field(init=False)
+        unchanged: object = field(default_factory=object, init=False)
+
+        def __post_init__(self) -> None:
+            object.__setattr__(self, "messages", self.nested.messages)
+
+    instruction = _ResponseInstructions.create("request-only", "response-test").message
+    assert instruction is not None
+    explicit = SystemMessage(content="request-only", id="explicit")
+    messages: list[AnyMessage] = [instruction, explicit]
+    nested = _DataclassTaskInput(messages)
+    payload = FrozenPayload(nested)
+    packet = Send("model", payload)
+
+    projected = _without_request_instructions(packet)
+
+    assert projected is not packet
+    assert type(projected.arg) is FrozenPayload
+    assert projected.arg is not payload
+    assert projected.arg.nested is not nested
+    assert projected.arg.nested.messages == [explicit]
+    assert projected.arg.messages == [explicit]
+    assert projected.arg.unchanged is payload.unchanged
+    assert packet.arg is payload
+    assert payload.nested is nested
+    assert payload.messages is messages
+    assert nested.messages is messages
+    assert messages == [instruction, explicit]
+
+    clean = FrozenPayload(_DataclassTaskInput([explicit]))
+    assert _without_request_instructions(clean) is clean
+    assert _without_request_instructions(FrozenPayload) is FrozenPayload
 
 
 def _merge_message_deltas(state: Messages, updates: Sequence[Messages]) -> Messages:
