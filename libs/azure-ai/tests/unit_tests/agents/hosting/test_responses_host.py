@@ -53,6 +53,8 @@ from langchain_azure_ai.agents.hosting._responses import (
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
     METADATA_STEERABLE_CONVERSATION,
+    _scope_thread_id,
+    _thread_namespace,
 )
 
 from .conftest import (  # noqa: E402
@@ -1912,6 +1914,7 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
     }
 
 
+@pytest.mark.parametrize("enable_response_branching", [False, True])
 @pytest.mark.parametrize(
     "input_items",
     [
@@ -1935,8 +1938,15 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
 async def test_recovery_resumes_from_current_response_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     input_items: list[object],
+    enable_response_branching: bool,
 ) -> None:
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+        enable_response_branching=enable_response_branching,
+    )
+    chain_set = AsyncMock()
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
     context = _context(conversation_id=None, current_text="do not replay")
     context.is_recovery = True
     context.persisted_response = _response_object(
@@ -1947,7 +1957,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
         },
     )
     context.get_input_items.return_value = input_items
-    request = _request()
+    request = _request(previous_response_id="resp-parent")
     graph_input, config = await _capture_graph_call(
         server,
         request,
@@ -1959,6 +1969,14 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
     context.get_input_items.assert_not_awaited()
+    if enable_response_branching:
+        chain_set.assert_not_awaited()
+    else:
+        chain_set.assert_awaited_once_with(
+            context.conversation_chain_id,
+            CONVERSATION_CHECKPOINT_KEY,
+            {"thread_id": "resp-root", "checkpoint_id": "checkpoint-current"},
+        )
 
 
 def test_readiness_endpoint_is_available() -> None:
@@ -2089,6 +2107,40 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
 
     assert config["configurable"]["thread_id"] == "conv-request"
     assert config["configurable"]["response_context"] is context
+
+
+@pytest.mark.parametrize("user_id_key", [None, "", "user-a", "user-b"])
+@pytest.mark.parametrize(
+    "thread_id", ["", "thread-1", "thread:child", "user-session-1:thread"]
+)
+def test_scoped_thread_namespace_round_trips(
+    user_id_key: str | None, thread_id: str
+) -> None:
+    context = _context(user_id_key=user_id_key)
+    namespace = _scope_thread_id("", context)
+    assert bool(namespace) == bool(user_id_key)
+    assert _thread_namespace(_scope_thread_id(thread_id, context)) == namespace
+
+
+def test_scoped_thread_namespace_preserves_stored_format() -> None:
+    namespace = "user-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:"
+    thread_id = namespace + "thread-1"
+    assert _scope_thread_id("thread-1", _context(user_id_key="abc")) == thread_id
+    assert _thread_namespace(thread_id) == namespace
+
+
+@pytest.mark.parametrize(
+    "thread_id",
+    [
+        "user-" + "0" * 63 + ":thread",
+        "user-" + "0" * 65 + ":thread",
+        "user-" + "A" * 64 + ":thread",
+        "user-" + "g" * 64 + ":thread",
+        "user-" + "0" * 64,
+    ],
+)
+def test_malformed_user_prefix_is_not_a_namespace(thread_id: str) -> None:
+    assert _thread_namespace(thread_id) == ""
 
 
 async def test_checkpointed_conversation_is_isolated_by_user() -> None:
