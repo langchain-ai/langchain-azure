@@ -29,6 +29,7 @@ from azure.ai.agentserver.responses import (
 )
 from azure.ai.agentserver.responses._id_generator import IdGenerator
 from azure.ai.agentserver.responses.models import CreateResponse, ResponseObject
+from azure.ai.agentserver.responses.models.runtime import ResponseModeFlags
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.utils import ConfigurableFieldSpec
@@ -529,6 +530,66 @@ def test_checkpoint_cleanup_never_starts_a_new_root(
     else:
         assert response["status"] == "completed"
         assert _text(response) == "A|B"
+
+
+@pytest.mark.parametrize("failure", ["deleted", "config_override"])
+def test_superseded_turn_does_not_publish_an_unavailable_checkpoint(
+    graph: CompiledStateGraph, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider)
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert client.portal is not None
+        if failure == "deleted":
+            stored_parent = client.portal.call(provider.get_response, parent["id"])
+            saver = graph.checkpointer
+            assert isinstance(saver, InMemorySaver)
+            client.portal.call(
+                saver.adelete_thread,
+                _config(stored_parent)["configurable"]["thread_id"],
+            )
+        else:
+            build_config = server.build_runnable_config
+
+            async def missing_checkpoint(
+                request: CreateResponse, context: ResponseContext
+            ) -> RunnableConfig:
+                config = await build_config(request, context)
+                config["configurable"]["checkpoint_id"] = "missing-checkpoint"
+                return config
+
+            monkeypatch.setattr(server, "build_runnable_config", missing_checkpoint)
+
+        async def superseded() -> tuple[list[Any], ResponseEventStream]:
+            request = CreateResponse(input="B", previous_response_id=parent["id"])
+            context = ResponseContext(
+                response_id=IdGenerator.new_response_id(parent["id"]),
+                mode_flags=ResponseModeFlags(
+                    stream=False, store=True, background=False
+                ),
+                request=request,
+                provider=provider,
+                previous_response_id=parent["id"],
+            )
+            stream = server._new_stream(request, context)
+            monkeypatch.setattr(server, "_new_stream", lambda *args: stream)
+            cancellation_signal = asyncio.Event()
+            cancellation_signal.set()
+            events = [
+                event
+                async for event in server.handle_create(
+                    request, context, cancellation_signal
+                )
+            ]
+            return events, stream
+
+        execute = AsyncMock(wraps=server.build_input)
+        monkeypatch.setattr(server, "build_input", execute)
+        events, stream = client.portal.call(superseded)
+    assert events[-1]["type"] == "response.failed"
+    execute.assert_not_awaited()
+    assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
 
 
 @pytest.mark.parametrize("enabled", [False, True])
