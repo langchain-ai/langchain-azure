@@ -21,14 +21,16 @@ from azure.ai.agentserver.core import (
     reset_request_context,
     set_request_context,
 )
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import ConfigurableFieldSpec, RunnableConfig
 from langgraph.channels import DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.constants import TASKS
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command, Send, interrupt
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import TypedDict
 
@@ -134,6 +136,94 @@ async def test_instruction_placement_tracks_only_actual_root_checkpoint_reads(
     await backend.adelete_thread(config["configurable"]["thread_id"])
     assert await read(config) is None
     assert instructions.checkpoint_restored is False
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("location", ["checkpoint", "pending_writes"])
+@pytest.mark.parametrize("messages_source", ["snapshot", "replay", "child"])
+async def test_send_overlay_is_isolated_from_saved_state_and_cache(
+    synchronous: bool, location: str, messages_source: str
+) -> None:
+    backend = InMemorySaver()
+    checkpoint = _checkpoint("0001", "input")
+    config = _config()
+    if messages_source != "snapshot":
+        del checkpoint["channel_values"]["messages"]
+    if messages_source == "child":
+        config["configurable"]["checkpoint_ns"] = "child:task"
+    messages = [
+        SystemMessage(content="explicit-system", id="explicit"),
+        HumanMessage(content="saved-user", id="user"),
+    ]
+    packet = Send("worker", {"messages": messages, "label": "keep"})
+    business_packet = Send("business-data", {"messages": messages})
+    checkpoint["channel_values"]["business_packet"] = business_packet
+    checkpoint["channel_versions"]["business_packet"] = 1
+    if location == "checkpoint":
+        checkpoint["channel_values"][TASKS] = [packet]
+        checkpoint["channel_versions"][TASKS] = 1
+    config = await backend.aput(config, checkpoint, {}, checkpoint["channel_versions"])
+    if location == "pending_writes":
+        await backend.aput_writes(
+            config,
+            [(TASKS, packet), ("business_packet", business_packet)],
+            "dispatch-task",
+        )
+    saver = _RequestCheckpointSaver(backend)
+
+    async def read(instruction: str | None) -> CheckpointTuple:
+        selected = _ResponseInstructions.create(
+            instruction, f"response-{instruction}"
+        ).with_config(config)
+        result = (
+            saver.get_tuple(selected)
+            if synchronous
+            else await saver.aget_tuple(selected)
+        )
+        assert result is not None
+        return result
+
+    def task(value: CheckpointTuple) -> Send:
+        if location == "checkpoint":
+            return value.checkpoint["channel_values"][TASKS][0]
+        assert value.pending_writes is not None
+        return next(
+            write for _, channel, write in value.pending_writes if channel == TASKS
+        )
+
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        first = await read("first-instruction")
+        second = await read("second-instruction")
+        omitted = await read(None)
+        if not synchronous:
+            assert reads.cache is not None
+
+    for value, expected in (
+        (first, ["first-instruction", "explicit-system", "saved-user"]),
+        (second, ["second-instruction", "explicit-system", "saved-user"]),
+        (omitted, ["explicit-system", "saved-user"]),
+    ):
+        restored = task(value)
+        assert restored.node == packet.node
+        assert restored.arg["label"] == "keep"
+        assert [message.content for message in restored.arg["messages"]] == expected
+        assert (
+            value.checkpoint["channel_values"]["business_packet"].arg["messages"]
+            == messages
+        )
+        if location == "pending_writes":
+            assert value.pending_writes is not None
+            assert all(
+                task_id == "dispatch-task" for task_id, _, _ in value.pending_writes
+            )
+            assert value.pending_writes[1][2].arg["messages"] == messages
+        if messages_source != "snapshot":
+            assert "messages" not in value.checkpoint["channel_values"]
+    saved = await backend.aget_tuple(config)
+    assert saved is not None
+    assert task(saved).arg["messages"] == messages
+    assert packet.arg["messages"] is messages
 
 
 @pytest.mark.parametrize(

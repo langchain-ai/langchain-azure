@@ -16,6 +16,7 @@ from langchain_core.messages import AnyMessage, BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.channels import BinaryOperatorAggregate
 from langgraph.checkpoint.base import CheckpointTuple, DeltaChannelHistory
+from langgraph.constants import TASKS
 from langgraph.types import Command, Interrupt, Overwrite, Send
 from pydantic import BaseModel
 
@@ -163,22 +164,84 @@ class _ResponseInstructions:
             *(message for message in messages if not _is_request_instruction(message)),
         ]
 
+    def _overlay_sends(self, value: Any) -> Any:
+        if isinstance(value, list):
+            result = [self._overlay_sends(item) for item in value]
+            return (
+                value
+                if all(left is right for left, right in zip(result, value))
+                else result
+            )
+        if not isinstance(value, Send):
+            return value
+        argument = value.arg
+        if isinstance(argument, dict):
+            messages = argument.get("messages")
+        elif (
+            isinstance(argument, BaseModel)
+            and "messages" in type(argument).model_fields
+        ):
+            messages = getattr(argument, "messages")
+        elif (
+            is_dataclass(argument)
+            and not isinstance(argument, type)
+            and any(item.name == "messages" for item in fields(argument))
+        ):
+            messages = getattr(argument, "messages")
+        else:
+            return value
+        if not isinstance(messages, list):
+            return value
+        messages = self.prepend(messages)
+        if isinstance(argument, dict):
+            argument = {**argument, "messages": messages}
+        elif isinstance(argument, BaseModel):
+            argument = argument.model_copy(update={"messages": messages})
+        else:
+            argument = copy(argument)
+            object.__setattr__(argument, "messages", messages)
+        result_send = copy(value)
+        result_send.arg = argument
+        return result_send
+
     def overlay(self, value: CheckpointTuple | None) -> CheckpointTuple | None:
         if value is None or self.message is None:
             return value
         channel_values = value.checkpoint["channel_values"]
         namespace = (value.config.get("configurable") or {}).get("checkpoint_ns", "")
-        if "messages" not in channel_values:
-            if namespace or "messages" in value.checkpoint["channel_versions"]:
-                return value
-        checkpoint = value.checkpoint.copy()
-        checkpoint["channel_values"] = {
-            **channel_values,
-            "messages": self.prepend(
+        updates: dict[str, Any] = {}
+        if "messages" in channel_values or (
+            not namespace and "messages" not in value.checkpoint["channel_versions"]
+        ):
+            updates["messages"] = self.prepend(
                 _checkpoint_messages(channel_values.get("messages", []))
-            ),
-        }
-        return value._replace(checkpoint=checkpoint)
+            )
+        sends = channel_values.get(TASKS)
+        overlaid_sends = self._overlay_sends(sends)
+        if overlaid_sends is not sends:
+            updates[TASKS] = overlaid_sends
+        checkpoint = value.checkpoint
+        if updates:
+            checkpoint = {
+                **checkpoint,
+                "channel_values": {**channel_values, **updates},
+            }
+        pending_writes = value.pending_writes
+        if pending_writes:
+            overlaid_writes = [
+                (task_id, channel, self._overlay_sends(write))
+                if channel == TASKS
+                else (task_id, channel, write)
+                for task_id, channel, write in pending_writes
+            ]
+            if any(
+                left[2] is not right[2]
+                for left, right in zip(overlaid_writes, pending_writes)
+            ):
+                pending_writes = overlaid_writes
+        if checkpoint is value.checkpoint and pending_writes is value.pending_writes:
+            return value
+        return value._replace(checkpoint=checkpoint, pending_writes=pending_writes)
 
     def overlay_history(
         self, histories: Mapping[str, DeltaChannelHistory]

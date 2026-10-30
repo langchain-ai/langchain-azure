@@ -34,22 +34,27 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
     convert_to_openai_messages,
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.channels import DeltaChannel
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.constants import TASKS
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.message import Messages, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt, Overwrite, Send, interrupt
+from pydantic import BaseModel, PrivateAttr
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._instructions import (
+    _is_request_instruction,
     _ResponseInstructions,
     _without_request_instructions,
 )
@@ -326,8 +331,8 @@ def test_instructions_and_explicit_messages_preserve_developer_roles(
 
 
 def _contains_instruction(value: Any) -> bool:
-    if isinstance(value, BaseMessage):
-        return value.content == "request-only"
+    if _is_request_instruction(value):
+        return True
     if isinstance(value, dict):
         return any(_contains_instruction(item) for item in value.values())
     if isinstance(value, (list, tuple)):
@@ -336,6 +341,11 @@ def _contains_instruction(value: Any) -> bool:
         return _contains_instruction(value.arg)
     if isinstance(value, Interrupt):
         return _contains_instruction(value.value)
+    if isinstance(value, BaseModel):
+        return any(
+            _contains_instruction(getattr(value, name))
+            for name in type(value).model_fields
+        )
     if is_dataclass(value) and not isinstance(value, type):
         return any(
             _contains_instruction(getattr(value, item.name)) for item in fields(value)
@@ -574,27 +584,41 @@ class _DataclassTaskInput:
     messages: list[AnyMessage]
 
 
+class _PydanticTaskInput(BaseModel):
+    messages: list[AnyMessage]
+
+
 @pytest.mark.parametrize("stream", [False, True])
-def test_dataclass_send_resume_does_not_inherit_request_instructions(
-    stream: bool,
+@pytest.mark.parametrize("instructions", [None, "", "resumed-instruction"])
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+@pytest.mark.parametrize(
+    "task_schema",
+    [_ReplacingMessagesState, _DataclassTaskInput, _PydanticTaskInput],
+    ids=["dict", "dataclass", "pydantic"],
+)
+def test_saved_send_resume_uses_only_current_request_instructions(
+    stream: bool, instructions: str | None, schema: type, task_schema: type
 ) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
-    dispatched: list[_DataclassTaskInput] = []
+    dispatched: list[Any] = []
 
     def dispatch(state: MessagesState) -> Command:
-        payload = _DataclassTaskInput(state["messages"])
+        payload = task_schema(messages=state["messages"])
         dispatched.append(payload)
         return Command(goto=Send("answer", payload))
 
-    async def answer(state: _DataclassTaskInput) -> dict[str, Any]:
+    async def answer(
+        state: _ReplacingMessagesState | _DataclassTaskInput | _PydanticTaskInput,
+    ) -> dict[str, Any]:
         interrupt({"question": "continue?"})
-        return {"messages": [await model.ainvoke(state.messages)]}
+        messages = state["messages"] if isinstance(state, dict) else state.messages
+        return {"messages": [await model.ainvoke(messages)]}
 
     saver = InMemorySaver()
-    builder = StateGraph(MessagesState)
-    builder.add_node("dispatch", dispatch)
-    builder.add_node("answer", answer, input_schema=_DataclassTaskInput)
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("dispatch", dispatch, input_schema=schema)
+    builder.add_node("answer", answer, input_schema=task_schema)
     builder.add_edge(START, "dispatch")
     builder.add_edge("answer", END)
     server = ResponsesHostServer(
@@ -618,15 +642,84 @@ def test_dataclass_send_resume_does_not_inherit_request_instructions(
                     "approve": True,
                 }
             ],
+            **({"instructions": instructions} if instructions is not None else {}),
         )
-    assert [message.content for message in capture.calls[0]] == ["first"]
-    assert [message.content for message in dispatched[0].messages] == [
+    expected = [instructions, "first"] if instructions else ["first"]
+    assert [message.content for message in capture.calls[0]] == expected
+    if instructions:
+        assert capture.calls[0][0].additional_kwargs == {"__openai_role__": "developer"}
+    original_messages = (
+        dispatched[0]["messages"]
+        if isinstance(dispatched[0], dict)
+        else dispatched[0].messages
+    )
+    assert [message.content for message in original_messages] == [
         "request-only",
         "first",
     ]
     for checkpoint in saver.list(None):
         assert not _contains_instruction(checkpoint.checkpoint)
         assert not _contains_instruction(checkpoint.pending_writes)
+
+
+def test_send_overlay_preserves_frozen_payloads_and_explicit_messages() -> None:
+    @dataclass(frozen=True, slots=True)
+    class FrozenTaskInput:
+        original: list[AnyMessage]
+        messages: list[AnyMessage] = field(init=False)
+
+        def __post_init__(self) -> None:
+            object.__setattr__(self, "messages", self.original)
+
+    class FrozenTaskModel(BaseModel, frozen=True):
+        messages: list[AnyMessage]
+        _resource: Any = PrivateAttr(default_factory=object)
+
+    messages: list[AnyMessage] = [
+        SystemMessage(content="request-only", id="explicit-system"),
+        SystemMessage(
+            content="explicit-developer",
+            id="explicit-developer",
+            additional_kwargs={"__openai_role__": "developer"},
+        ),
+        HumanMessage(content="saved-user", id="saved-user"),
+    ]
+    frozen = FrozenTaskInput(messages)
+    model = FrozenTaskModel(messages=messages)
+    packets = [Send("worker", frozen), Send("worker", model)]
+    untouched = Send("worker", {"messages": "opaque-business-input"})
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"][TASKS] = [*packets, untouched]
+    original = CheckpointTuple(
+        config={"configurable": {"checkpoint_ns": "child:task"}},
+        checkpoint=checkpoint,
+        metadata={},
+    )
+    instructions = _ResponseInstructions.create("request-only", "response-test")
+    first = instructions.overlay(original)
+    assert first is not None
+    for overlaid in (first, instructions.overlay(first)):
+        assert overlaid is not None
+        restored = overlaid.checkpoint["channel_values"][TASKS]
+        for packet, source in zip(restored, packets):
+            assert packet is not source
+            assert packet.node == source.node
+            assert type(packet.arg) is type(source.arg)
+            assert packet.arg.messages[1:] == messages
+            assert (
+                sum(_is_request_instruction(item) for item in packet.arg.messages) == 1
+            )
+            assert packet.arg.messages[0].additional_kwargs == {
+                "__openai_role__": "developer"
+            }
+            assert source.arg.messages == messages
+        assert restored[0].arg.original is frozen.original
+        assert restored[1].arg._resource is model._resource
+        assert restored[-1] is untouched
+        assert "messages" not in overlaid.checkpoint["channel_values"]
+    assert checkpoint["channel_values"][TASKS] == [*packets, untouched]
+    assert not _contains_instruction(original.checkpoint)
+    assert _ResponseInstructions.create(None, "omitted").overlay(original) is original
 
 
 def test_existing_agent_middleware_and_system_prompt_remain_in_place() -> None:
