@@ -64,6 +64,7 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Overwrite
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -1063,7 +1064,7 @@ class ResponsesHostServer:
             instructions = _ResponseInstructions.create(
                 request.get("instructions"), context.response_id
             )
-            config = instructions.with_config(config)
+            config = instructions.with_config(config, graph=self._graph)
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1160,21 +1161,29 @@ class ResponsesHostServer:
                         and instructions.message is not None
                         and isinstance(graph_input.get("messages"), list)
                         and isinstance(
-                            self._graph.channels.get("messages"),
+                            message_channel := self._graph.channels.get("messages"),
                             (BinaryOperatorAggregate, DeltaChannel),
                         )
                     ):
-                        if instructions.checkpoint_restored is None:
-                            # Interrupt inspection may have caught a failed read.
-                            await self._graph.aget_state(config)
+                        state = await self._graph.aget_state(config)
                         if instructions.checkpoint_restored:
+                            channel = message_channel.from_checkpoint(
+                                _without_request_instructions(
+                                    state.values.get("messages", [])
+                                )
+                            )
+                            channel.update(
+                                [_without_request_instructions(graph_input["messages"])]
+                            )
                             graph_input = {
                                 **graph_input,
-                                "messages": _without_request_instructions(
-                                    graph_input["messages"]
+                                # Reduce once before overlaying the instructions.
+                                "messages": Overwrite(
+                                    instructions.prepend(channel.get())
                                 ),
                             }
 
+            instructions.resuming = graph_input is None or resume_command is not None
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(
                 self._graph.astream(

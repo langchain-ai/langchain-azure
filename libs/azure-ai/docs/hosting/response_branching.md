@@ -199,10 +199,13 @@ preserved. This isolation also applies when branching is disabled and does not
 register middleware. Existing unmarked instructions in older checkpoints are
 not migrated.
 
-For ordinary request input with accumulating message channels, instructions are
-injected through either initial graph input or restored checkpoint state, never
-both. This does not depend on the messages reducer deduplicating by message ID.
-Replacing channels retain the instruction in their request input.
+At request boundaries, the host applies a message channel's reducer to restored
+history and current input before overlaying the current instructions. Replacing
+reducers retain the instructions, and accumulating reducers do not require
+message-ID deduplication. DeltaChannel history is replayed before the overlay,
+so historical message removals and overwrites cannot clear current instructions.
+Fresh subgraph invocations receive instructions through their input; resumed
+subgraphs receive them through restored state, without injecting both.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore

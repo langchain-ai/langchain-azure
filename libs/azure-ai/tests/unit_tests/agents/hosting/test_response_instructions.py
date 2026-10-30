@@ -35,6 +35,7 @@ from langchain_core.messages import (
     AnyMessage,
     BaseMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
     convert_to_openai_messages,
@@ -45,7 +46,7 @@ from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.constants import TASKS
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.graph.message import Messages, add_messages
+from langgraph.graph.message import REMOVE_ALL_MESSAGES, Messages, add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Interrupt, Overwrite, Send, interrupt
 from pydantic import BaseModel, PrivateAttr
@@ -53,6 +54,9 @@ from starlette.testclient import TestClient
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+    _RequestCheckpointSaver,
+)
 from langchain_azure_ai.agents.hosting._instructions import (
     _is_request_instruction,
     _ResponseInstructions,
@@ -85,6 +89,32 @@ class _AppendingMessagesState(TypedDict):
 
 class _ReplacingMessagesState(TypedDict):
     messages: list[AnyMessage]
+
+
+def _replace_messages(
+    previous: list[AnyMessage], current: list[AnyMessage]
+) -> list[AnyMessage]:
+    return current
+
+
+class _ReplacingReducerMessagesState(TypedDict):
+    messages: Annotated[list[AnyMessage], _replace_messages]
+
+
+def _replace_message_deltas(
+    previous: list[AnyMessage], updates: Sequence[list[AnyMessage]]
+) -> list[AnyMessage]:
+    return updates[-1] if updates else previous
+
+
+class _DeltaReplacingSnapshotState(TypedDict):
+    messages: Annotated[
+        list[AnyMessage], DeltaChannel(_replace_message_deltas, snapshot_frequency=1)
+    ]
+
+
+class _DeltaReplacingReplayState(TypedDict):
+    messages: Annotated[list[AnyMessage], DeltaChannel(_replace_message_deltas)]
 
 
 def _graph(
@@ -170,8 +200,17 @@ def test_current_instructions_precede_complete_context_without_inheritance(
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize(
+    "replacing_schema",
+    [
+        _ReplacingMessagesState,
+        _ReplacingReducerMessagesState,
+        _DeltaReplacingSnapshotState,
+        _DeltaReplacingReplayState,
+    ],
+)
 def test_replacing_message_updates_keep_their_current_instructions(
-    stream: bool, overwrite: bool
+    stream: bool, overwrite: bool, replacing_schema: type
 ) -> None:
     class OverwritingHost(ResponsesHostServer):
         async def build_input(
@@ -188,7 +227,7 @@ def test_replacing_message_updates_keep_their_current_instructions(
 
     capture = _CaptureMessages()
     host_type = OverwritingHost if overwrite else ResponsesHostServer
-    schema = _AppendingMessagesState if overwrite else _ReplacingMessagesState
+    schema = _AppendingMessagesState if overwrite else replacing_schema
     server = host_type(
         _graph(capture, InMemorySaver(), schema=schema),
         store=InMemoryResponseProvider(),
@@ -772,9 +811,18 @@ def test_existing_agent_middleware_and_system_prompt_remain_in_place() -> None:
 
 
 @pytest.mark.parametrize("instructions", [None, "resumed-instruction"])
-@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+@pytest.mark.parametrize(
+    "schema",
+    [
+        MessagesState,
+        _AppendingMessagesState,
+        _DeltaReplacingSnapshotState,
+        _DeltaReplacingReplayState,
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True])
 def test_interrupt_resume_uses_only_the_new_response_instructions(
-    instructions: str | None, schema: type
+    instructions: str | None, schema: type, nested: bool
 ) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
@@ -793,9 +841,14 @@ def test_interrupt_resume_uses_only_the_new_response_instructions(
     builder.add_edge(START, "pause")
     builder.add_edge("pause", "answer")
     builder.add_edge("answer", END)
-    server = ResponsesHostServer(
-        builder.compile(checkpointer=saver), store=InMemoryResponseProvider()
-    )
+    graph = builder.compile(checkpointer=True if nested else saver)
+    if nested:
+        parent: StateGraph = StateGraph(schema)
+        parent.add_node("child", graph, input_schema=schema)
+        parent.add_edge(START, "child")
+        parent.add_edge("child", END)
+        graph = parent.compile(checkpointer=saver)
+    server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
     with TestClient(server.app) as client:
         first = _create(
             client, stream=False, input="first", instructions="request-only"
@@ -1000,6 +1053,170 @@ class _DeltaAppendingReplayState(TypedDict):
     messages: Annotated[list[AnyMessage], DeltaChannel(_append_message_deltas)]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("schema", [_DeltaSnapshotState, _DeltaReplayState])
+@pytest.mark.parametrize("reset", ["remove_all", "overwrite"])
+def test_delta_history_resets_do_not_clear_current_instructions(
+    stream: bool, schema: type, reset: str
+) -> None:
+    capture = _CaptureMessages()
+    model = FakeListChatModel(responses=["answer"], callbacks=[capture])
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        message = await model.ainvoke(state["messages"])
+        return {
+            "messages": (
+                [RemoveMessage(id=REMOVE_ALL_MESSAGES), message]
+                if reset == "remove_all"
+                else Overwrite([message])
+            )
+        }
+
+    saver = InMemorySaver()
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("answer", answer, input_schema=schema)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        first = _create(client, stream=stream, input="first", instructions="turn-A")
+        second = _create(
+            client,
+            stream=stream,
+            input="second",
+            instructions="turn-B",
+            previous_response_id=first["id"],
+        )
+        _create(
+            client,
+            stream=stream,
+            input="third",
+            previous_response_id=second["id"],
+        )
+    assert [[message.content for message in call] for call in capture.calls] == [
+        ["turn-A", "first"],
+        ["turn-B", "answer", "second"],
+        ["answer", "third"],
+    ]
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("branching", [False, True])
+@pytest.mark.parametrize(
+    "child_schema",
+    [
+        _AppendingMessagesState,
+        _DeltaAppendingSnapshotState,
+        _DeltaAppendingReplayState,
+    ],
+)
+def test_persistent_appending_subgraphs_receive_current_instructions_once(
+    stream: bool, branching: bool, child_schema: type
+) -> None:
+    capture = _CaptureMessages()
+    child = _graph(capture, None, schema=child_schema).copy({"checkpointer": True})
+    saver = InMemorySaver()
+    builder = StateGraph(_ReplacingMessagesState)
+    builder.add_node("child", child)
+    builder.add_edge(START, "child")
+    builder.add_edge("child", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver),
+        store=InMemoryResponseProvider(),
+        enable_response_branching=branching,
+    )
+    with TestClient(server.app) as client:
+        first = _create(client, stream=stream, input="first", instructions="turn-A")
+        second = _create(
+            client,
+            stream=stream,
+            input="second",
+            instructions="turn-B",
+            previous_response_id=first["id"],
+        )
+        _create(
+            client,
+            stream=stream,
+            input="third",
+            previous_response_id=second["id"],
+        )
+        if branching:
+            _create(
+                client,
+                stream=stream,
+                input="sibling",
+                instructions="turn-S",
+                previous_response_id=first["id"],
+            )
+    assert [[message.content for message in call] for call in capture.calls[:3]] == [
+        ["turn-A", "first"],
+        ["first", "answer", "turn-B", "second"],
+        ["first", "answer", "second", "answer", "third"],
+    ]
+    if branching:
+        # Private subgraph history is not rewound; request instructions are isolated.
+        assert [
+            message.content
+            for message in capture.calls[3]
+            if _is_request_instruction(message)
+        ] == ["turn-S"]
+        assert capture.calls[3][-1].content == "sibling"
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("schema", [_DeltaSnapshotState, _DeltaReplayState])
+async def test_delta_checkpoint_reads_overlay_after_history_without_mutation(
+    synchronous: bool, schema: type
+) -> None:
+    explicit = SystemMessage(content="explicit-system", id="explicit")
+    saved = HumanMessage(content="saved-user", id="saved")
+    saver = InMemorySaver()
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node(
+        "reset",
+        lambda state: {
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), explicit, saved]
+        },
+        input_schema=schema,
+    )
+    builder.add_edge(START, "reset")
+    builder.add_edge("reset", END)
+    graph = builder.compile(checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "delta-instructions"}}
+    await graph.ainvoke({"messages": [HumanMessage(content="initial")]}, config)
+    config = (await graph.aget_state(config)).config
+    original = deepcopy(
+        saver.get_delta_channel_history(config=config, channels=["messages"])
+    )
+    wrapped = graph.copy({"checkpointer": _RequestCheckpointSaver(saver)})
+    for current in ("turn-A", "turn-B", None):
+        instructions = _ResponseInstructions.create(current, f"response-{current}")
+        selected = instructions.with_config(config, graph=wrapped)
+        state = (
+            wrapped.get_state(selected)
+            if synchronous
+            else await wrapped.aget_state(selected)
+        )
+        assert [message.content for message in state.values["messages"]] == [
+            *([current] if current else []),
+            "explicit-system",
+            "saved-user",
+        ]
+    assert (
+        saver.get_delta_channel_history(config=config, channels=["messages"])
+        == original
+    )
+    assert (await graph.aget_state(config)).values["messages"] == [explicit, saved]
+
+
 @pytest.mark.parametrize(
     "schema",
     [
@@ -1061,8 +1278,14 @@ def test_delta_messages_keep_history_without_persisting_instructions(
         assert not _contains_instruction(checkpoint.pending_writes)
 
 
-@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
-def test_recovery_reapplies_instructions_without_replaying_input(schema: type) -> None:
+@pytest.mark.parametrize(
+    "schema",
+    [MessagesState, _AppendingMessagesState, _DeltaSnapshotState, _DeltaReplayState],
+)
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_recovery_reapplies_instructions_without_duplicating_input(
+    schema: type, depth: int
+) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
     failed = False
@@ -1087,7 +1310,15 @@ def test_recovery_reapplies_instructions_without_replaying_input(schema: type) -
     builder.add_edge("retry", "second")
     builder.add_edge("second", END)
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(builder.compile(checkpointer=saver), store=provider)
+    graph = builder.compile(checkpointer=True if depth else saver)
+    for level in range(depth):
+        parent: StateGraph = StateGraph(schema)
+        name = f"child-{level}"
+        parent.add_node(name, graph, input_schema=schema)
+        parent.add_edge(START, name)
+        parent.add_edge(name, END)
+        graph = parent.compile(checkpointer=saver if level == depth - 1 else True)
+    server = ResponsesHostServer(graph, store=provider)
     request = cast(
         CreateResponse,
         {"input": "first", "instructions": "request-only", "stream": False},
@@ -1118,11 +1349,15 @@ def test_recovery_reapplies_instructions_without_replaying_input(schema: type) -
 
         events = client.portal.call(recover)
     assert events[-1]["type"] == "response.completed"
-    assert [message.content for message in capture.calls[1]] == [
+    assert [message.content for message in capture.calls[-1]] == [
         "request-only",
         "first",
         "answer",
     ]
+    assert all(
+        sum(_is_request_instruction(message) for message in call) == 1
+        for call in capture.calls
+    )
     for checkpoint in saver.list(None):
         assert not _contains_instruction(checkpoint.checkpoint)
         assert not _contains_instruction(checkpoint.pending_writes)

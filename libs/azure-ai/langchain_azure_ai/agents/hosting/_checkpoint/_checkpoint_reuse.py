@@ -257,7 +257,7 @@ class _RequestCheckpointSaver(ObjectProxy):
             return value
         if not (config.get("configurable") or {}).get("checkpoint_ns", ""):
             instructions.checkpoint_restored = value is not None
-        return instructions.overlay(value)
+        return instructions.overlay(value, config=config)
 
     def get(self, config: RunnableConfig) -> Checkpoint | None:
         value = self.get_tuple(config)
@@ -271,7 +271,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         )
         instructions = _instructions_from_config(config)
         return (
-            instructions.overlay_history(histories)
+            instructions.overlay_history(histories, config=config)
             if instructions is not None
             else histories
         )
@@ -284,7 +284,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         )
         instructions = _instructions_from_config(config)
         return (
-            instructions.overlay_history(histories)
+            instructions.overlay_history(histories, config=config)
             if instructions is not None
             else histories
         )

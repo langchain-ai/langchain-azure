@@ -10,15 +10,18 @@ from collections.abc import Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from operator import add
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AnyMessage, BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.channels import BinaryOperatorAggregate
+from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
 from langgraph.checkpoint.base import CheckpointTuple, DeltaChannelHistory
 from langgraph.constants import TASKS
 from langgraph.types import Command, Interrupt, Overwrite, Send
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 _INSTRUCTIONS_CONFIG_KEY = "__langchain_azure_response_instructions"
 _INSTRUCTIONS_ID_PREFIX = "__langchain_azure_response_instructions:"
@@ -128,6 +131,8 @@ class _ResponseInstructions:
 
     message: SystemMessage | None
     checkpoint_restored: bool | None = field(default=None, init=False)
+    resuming: bool = field(default=True, init=False)
+    _message_channels: dict[str, DeltaChannel] = field(default_factory=dict, init=False)
 
     @classmethod
     def create(cls, instructions: object, response_id: str) -> _ResponseInstructions:
@@ -147,7 +152,21 @@ class _ResponseInstructions:
             )
         )
 
-    def with_config(self, config: RunnableConfig) -> RunnableConfig:
+    def with_config(
+        self, config: RunnableConfig, *, graph: CompiledStateGraph | None = None
+    ) -> RunnableConfig:
+        if graph is not None and self.message is not None:
+            self._message_channels = {
+                namespace: channel
+                for namespace, child in [
+                    ("", graph),
+                    *graph.get_subgraphs(recurse=True),
+                ]
+                if isinstance(
+                    channel := getattr(child, "channels", {}).get("messages"),
+                    DeltaChannel,
+                )
+            }
         return {
             **config,
             "configurable": {
@@ -204,14 +223,24 @@ class _ResponseInstructions:
         result_send.arg = argument
         return result_send
 
-    def overlay(self, value: CheckpointTuple | None) -> CheckpointTuple | None:
+    def _overlays_messages(self, config: RunnableConfig) -> bool:
+        configurable = config.get("configurable") or {}
+        # Fresh input carries instructions into subgraphs; resumes restore them.
+        return not configurable.get("checkpoint_ns") or self.resuming
+
+    def overlay(
+        self, value: CheckpointTuple | None, *, config: RunnableConfig | None = None
+    ) -> CheckpointTuple | None:
         if value is None or self.message is None:
             return value
         channel_values = value.checkpoint["channel_values"]
         namespace = (value.config.get("configurable") or {}).get("checkpoint_ns", "")
         updates: dict[str, Any] = {}
-        if "messages" in channel_values or (
-            not namespace and "messages" not in value.checkpoint["channel_versions"]
+        if self._overlays_messages(config or value.config) and (
+            "messages" in channel_values
+            or (
+                not namespace and "messages" not in value.checkpoint["channel_versions"]
+            )
         ):
             updates["messages"] = self.prepend(
                 _checkpoint_messages(channel_values.get("messages", []))
@@ -244,16 +273,34 @@ class _ResponseInstructions:
         return value._replace(checkpoint=checkpoint, pending_writes=pending_writes)
 
     def overlay_history(
-        self, histories: Mapping[str, DeltaChannelHistory]
+        self, histories: Mapping[str, DeltaChannelHistory], *, config: RunnableConfig
     ) -> Mapping[str, DeltaChannelHistory]:
-        if self.message is None or "messages" not in histories:
+        if (
+            self.message is None
+            or "messages" not in histories
+            or not self._overlays_messages(config)
+        ):
             return histories
         history = histories["messages"]
+        namespace = (config.get("configurable") or {}).get("checkpoint_ns", "")
+        namespace = "|".join(
+            part.split(":")[0] for part in namespace.split("|") if not part.isdigit()
+        )
+        channel = self._message_channels.get(namespace)
+        if channel is None:
+            raise ValueError(
+                f"Cannot resolve the messages reducer for namespace {namespace!r}."
+            )
+        restored = channel.from_checkpoint(
+            _checkpoint_messages(history.get("seed", []))
+        )
+        restored.replay_writes(history["writes"])
         return {
             **histories,
             "messages": {
                 **history,
-                "seed": self.prepend(_checkpoint_messages(history.get("seed", []))),
+                "seed": self.prepend(_checkpoint_messages(restored.get())),
+                "writes": [],
             },
         }
 
