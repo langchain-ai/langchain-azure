@@ -314,23 +314,40 @@ def _response_conversation_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _response_root_id(response: Any) -> str | None:
-    """Read a cached root from JSON or legacy dictionary metadata."""
+def _response_internal_metadata(response: Any) -> dict[str, Any]:
+    """Read JSON or legacy dictionary metadata without copying response items."""
     metadata = getattr(response, "metadata", None)
     if metadata is None and hasattr(response, "get"):
         metadata = response.get("metadata")
     if not isinstance(metadata, dict):
-        return None
+        return {}
     internal = metadata.get("_internal_metadata")
     if isinstance(internal, str):
         try:
             internal = json.loads(internal)
         except ValueError:
-            return None
-    if not isinstance(internal, dict):
-        return None
-    value = internal.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
+            return {}
+    return internal if isinstance(internal, dict) else {}
+
+
+def _response_root_id(response: Any) -> str | None:
+    """Read a cached root from JSON or legacy dictionary metadata."""
+    value = _response_internal_metadata(response).get(
+        METADATA_LANGGRAPH_ROOT_RESPONSE_ID
+    )
     return value if isinstance(value, str) and value else None
+
+
+def _conversation_chain_key(
+    request: CreateResponse, context: ResponseContext
+) -> str | None:
+    """Return the chain-store key only for explicit conversation linkage."""
+    # shortcut: keep conversation heads for response links, align after OpenAI tests.
+    if request.get("previous_response_id") or not (
+        get_conversation_id(request) or context.conversation_id
+    ):
+        return None
+    return _scope_thread_id(context.conversation_chain_id, context)
 
 
 @experimental()
@@ -387,14 +404,17 @@ class ResponsesHostServer:
             When omitted, Agent Server uses :class:`FileResponseStore` locally
             and :class:`FoundryStorageProvider` when hosted on Foundry.
         conversation_chain_store: Optional :class:`ConversationChainStoreProtocol`
-            for dictionaries shared across turns. Implementations choose their
+            for dictionaries shared across explicit conversation turns. Requests
+            using only ``previous_response_id`` do not access this store.
+            Implementations choose their
             serialization and durability model and must support concurrent calls,
             atomic replacement, and explicit failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
-        enable_response_branching: Start ``previous_response_id`` requests from
-            the specified completed response's checkpoint instead of the
-            conversation head. Defaults to ``False``. Requires a
+        enable_response_branching: Require ``previous_response_id`` parents to
+            have completed graphs and validate branching capabilities. Both flag
+            values select the referenced response's exact checkpoint.
+            Defaults to ``False``. Requires a
             history-preserving checkpointer with asynchronous ``aget_tuple``,
             ``aput``, and ``aput_writes`` implementations, steering disabled,
             and ``app=None``.
@@ -734,15 +754,12 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         The logical thread is namespaced by the platform-provided user key.
-        For ``previous_response_id`` chains, a cached root response ID is reused
-        when available; otherwise the root response is resolved through the
-        Responses provider when possible. Checkpointed graphs
-        additionally restore the exact ``(thread_id, checkpoint_id)`` saved
-        for this user and conversation chain. With any checkpoint saver,
-        that reference fixes the request's input. Latest-checkpoint queries
+        Checkpointed graphs restore the exact ``(thread_id, checkpoint_id)``
+        saved on the referenced response or explicit conversation. Recovered
+        responses first use their own saved progress. Only explicit conversation
+        requests access the conversation chain store. Latest-checkpoint queries
         still reach storage to preserve historical-branch protection.
-        When response branching is enabled, new ``previous_response_id``
-        requests instead select that completed response's saved checkpoint.
+        Without a checkpointer, cached root IDs avoid response-chain traversal.
         The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
@@ -759,25 +776,25 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        if self._is_response_branch(request, context):
-            return await self._response_branch_config(request, context)
+        if self._graph_has_checkpointer:
+            if context.is_recovery and context.persisted_response is not None:
+                reference = TaskStorageManager(
+                    _response_internal_metadata(context.persisted_response)
+                ).checkpoint_ref
+                if reference is not None:
+                    return HostingRunnableConfig.create_from_checkpoint(
+                        reference, context
+                    ).runnable_config
+            if request.get("previous_response_id"):
+                return await self._response_checkpoint_config(request, context)
         hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
             return hosting_config.runnable_config
 
-        previous_response_id = request.get("previous_response_id")
-        conversation_id = get_conversation_id(request) or context.conversation_id
-        if (
-            not context.is_recovery
-            and not (isinstance(previous_response_id, str) and previous_response_id)
-            and not (isinstance(conversation_id, str) and conversation_id)
-        ):
+        conversation_chain_id = _conversation_chain_key(request, context)
+        if conversation_chain_id is None:
             return hosting_config.runnable_config
 
-        conversation_chain_id = _scope_thread_id(
-            context.conversation_chain_id,
-            context,
-        )
         checkpoint_ref = CheckpointRef.from_dict(
             await self._conversation_chain_store.get(
                 conversation_chain_id,
@@ -802,7 +819,7 @@ class ResponsesHostServer:
             and not context.is_recovery
         )
 
-    async def _response_branch_config(
+    async def _response_checkpoint_config(
         self, request: CreateResponse, context: ResponseContext
     ) -> RunnableConfig:
         parent_id = request.get("previous_response_id")
@@ -810,26 +827,32 @@ class ResponsesHostServer:
             raise ValueError("previous_response_id must be a nonempty string.")
         provider = getattr(context, "_provider", None)
         if provider is None:
-            raise RuntimeError("Response branching requires a response provider.")
+            raise RuntimeError("Response continuation requires a response provider.")
         parent = await provider.get_response(
             parent_id, context=context.platform_context
         )
         # shortcut: Ineligible parents (not completed, paused, or owned by another
         # user) are rejected after response.created, so clients receive
         # response.failed with server_error rather than a 4xx before execution.
-        if parent.get("id") != parent_id or parent.get("status") != "completed":
+        if _response_field(parent, "id") != parent_id:
+            raise ValueError("The response provider returned a different parent.")
+        if self._is_response_branch(request, context) and (
+            _response_field(parent, "status") != "completed"
+        ):
             raise ValueError("The previous response must be completed.")
-        reference = TaskStorageManager.from_stream(
-            ResponseEventStream(response_id=parent_id, response=parent)
+        reference = TaskStorageManager(
+            _response_internal_metadata(parent)
         ).checkpoint_ref
         if reference is None:
             raise ValueError("The previous response has no saved graph checkpoint.")
         namespace = _scope_thread_id("", context)
         if _thread_namespace(reference.thread_id) != namespace:
             raise ValueError("The previous response belongs to a different user.")
-        return HostingRunnableConfig.create_from_checkpoint(
-            reference, context
-        ).runnable_config
+        config = HostingRunnableConfig.create_from_checkpoint(reference, context)
+        root_response_id = _response_root_id(parent)
+        if root_response_id is not None:
+            config = config.with_root_response_id(root_response_id)
+        return config.runnable_config
 
     async def _resolve_thread_config(
         self,
@@ -1007,10 +1030,7 @@ class ResponsesHostServer:
         recovering = bool(context.is_recovery)
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
-        conversation_chain_id = _scope_thread_id(
-            context.conversation_chain_id,
-            context,
-        )
+        conversation_chain_id = _conversation_chain_key(request, context)
         yield stream.emit_created()
 
         # Shutdown and request cancellation are independent. Check shutdown
@@ -1067,7 +1087,9 @@ class ResponsesHostServer:
             if checkpoint_reads is not None:
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
-            if self._is_response_branch(request, context):
+            if self._graph_has_checkpointer and (
+                checkpoint_ref is None and request.get("previous_response_id")
+            ):
                 state = await self._graph.aget_state(config)
                 if (
                     HostingRunnableConfig(state.config).checkpoint_ref
@@ -1076,12 +1098,12 @@ class ResponsesHostServer:
                     != ""
                     or state.created_at is None
                 ):
-                    raise ValueError(
-                        "The previous response's graph checkpoint is missing."
-                    )
+                    raise ValueError("The response's graph checkpoint is missing.")
                 # shortcut: Assume no unanswered tool calls; validate parent outputs
                 # in follow-up.
-                if state.next or state.tasks or state.interrupts:
+                if self._is_response_branch(request, context) and (
+                    state.next or state.tasks or state.interrupts
+                ):
                     raise ValueError("Branching requires a finished parent graph.")
 
             if checkpoint_ref is not None:
@@ -1129,11 +1151,12 @@ class ResponsesHostServer:
                     ref = HostingRunnableConfig(config).checkpoint_ref
                     if ref is not None:
                         task_storage.store_checkpoint_ref(ref)
-                        await self._conversation_chain_store.set(
-                            conversation_chain_id,
-                            CONVERSATION_CHECKPOINT_KEY,
-                            ref.to_dict(),
-                        )
+                        if conversation_chain_id is not None:
+                            await self._conversation_chain_store.set(
+                                conversation_chain_id,
+                                CONVERSATION_CHECKPOINT_KEY,
+                                ref.to_dict(),
+                            )
                     yield stream.emit_completed()
                     return
 
@@ -1163,10 +1186,7 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None and not (
-                self._enable_response_branching
-                and bool(request.get("previous_response_id"))
-            ):
+            if checkpoint_ref is not None and conversation_chain_id is not None:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,
