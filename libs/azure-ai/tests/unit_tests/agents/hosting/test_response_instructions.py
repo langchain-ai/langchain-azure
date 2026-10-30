@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, fields, is_dataclass
 from operator import add
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NamedTuple, cast
 
 import pytest
 from azure.ai.agentserver.responses import (
@@ -33,13 +33,17 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     AnyMessage,
     BaseMessage,
     HumanMessage,
     RemoveMessage,
     SystemMessage,
+    SystemMessageChunk,
     ToolMessage,
     convert_to_openai_messages,
+    message_to_dict,
+    messages_from_dict,
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.channels import DeltaChannel, LastValue
@@ -402,7 +406,7 @@ def _contains_instruction(value: Any) -> bool:
         return True
     if isinstance(value, dict):
         return any(_contains_instruction(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, deque)):
         return any(_contains_instruction(item) for item in value)
     if isinstance(value, Send):
         return _contains_instruction(value.arg)
@@ -412,7 +416,7 @@ def _contains_instruction(value: Any) -> bool:
         return any(
             _contains_instruction(getattr(value, name))
             for name in type(value).model_fields
-        )
+        ) or _contains_instruction(value.model_extra)
     if is_dataclass(value) and not isinstance(value, type):
         return any(
             _contains_instruction(getattr(value, item.name)) for item in fields(value)
@@ -657,13 +661,27 @@ class _PydanticTaskInput(BaseModel):
     messages: list[AnyMessage]
 
 
+class _PydanticTupleTaskInput(BaseModel, frozen=True):
+    messages: tuple[AnyMessage, ...]
+
+
+class _PydanticExtraTaskInput(BaseModel, extra="allow", frozen=True):
+    label: str = "keep"
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("instructions", [None, "", "resumed-instruction"])
 @pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
 @pytest.mark.parametrize(
     "task_schema",
-    [_ReplacingMessagesState, _DataclassTaskInput, _PydanticTaskInput],
-    ids=["dict", "dataclass", "pydantic"],
+    [
+        _ReplacingMessagesState,
+        _DataclassTaskInput,
+        _PydanticTaskInput,
+        _PydanticTupleTaskInput,
+        _PydanticExtraTaskInput,
+    ],
+    ids=["dict", "dataclass", "pydantic", "pydantic-tuple", "pydantic-extra"],
 )
 def test_saved_send_resume_uses_only_current_request_instructions(
     stream: bool, instructions: str | None, schema: type, task_schema: type
@@ -678,10 +696,24 @@ def test_saved_send_resume_uses_only_current_request_instructions(
         return Command(goto=Send("answer", payload))
 
     async def answer(
-        state: _ReplacingMessagesState | _DataclassTaskInput | _PydanticTaskInput,
+        state: (
+            _ReplacingMessagesState
+            | _DataclassTaskInput
+            | _PydanticTaskInput
+            | _PydanticTupleTaskInput
+            | _PydanticExtraTaskInput
+        ),
     ) -> dict[str, Any]:
         interrupt({"question": "continue?"})
-        messages = state["messages"] if isinstance(state, dict) else state.messages
+        messages: list[AnyMessage] | tuple[AnyMessage, ...]
+        if isinstance(state, dict):
+            messages = state["messages"]
+        elif isinstance(state, _PydanticExtraTaskInput):
+            extra = state.model_extra
+            assert extra is not None
+            messages = extra["messages"]
+        else:
+            messages = state.messages
         return {"messages": [await model.ainvoke(messages)]}
 
     saver = InMemorySaver()
@@ -1051,6 +1083,259 @@ def test_projection_cleans_nested_dataclasses_without_mutating_runtime_state() -
     assert _without_request_instructions(FrozenPayload) is FrozenPayload
 
 
+def test_projection_cleans_pydantic_extras_without_mutating_runtime_state() -> None:
+    class Payload(BaseModel, extra="allow", frozen=True):
+        messages: list[AnyMessage]
+        _resource: Any = PrivateAttr(default_factory=object)
+
+    instruction = _ResponseInstructions.create("request-only", "response-extra").message
+    assert instruction is not None
+    explicit = HumanMessage(content="saved-user")
+    messages: list[AnyMessage] = [instruction, explicit]
+    original = Payload.model_validate(
+        {
+            "messages": messages,
+            "nested": {"messages": messages},
+            "label": "keep",
+        }
+    )
+    projected = _without_request_instructions(original)
+    assert type(projected) is Payload
+    assert projected.messages == [explicit]
+    assert projected.model_extra == {
+        "nested": {"messages": [explicit]},
+        "label": "keep",
+    }
+    assert projected._resource is original._resource
+    assert original.messages == [instruction, explicit]
+    assert original.model_extra == {
+        "nested": {"messages": [instruction, explicit]},
+        "label": "keep",
+    }
+    assert _without_request_instructions(projected) is projected
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        {},
+        {"type": "message_reference"},
+        {"role": "audit_reference"},
+        {"content": "keep"},
+        {"type": "message_reference", "content": "keep"},
+        {"role": "audit_reference", "content": "keep"},
+    ],
+)
+def test_projection_preserves_business_references_to_instruction_ids(
+    label: dict[str, str],
+) -> None:
+    instruction = _ResponseInstructions.create("request-only", "response-ref").message
+    assert instruction is not None
+    reference = {"id": instruction.id, **label, "label": "keep"}
+    explicit = HumanMessage(content="saved-user")
+    original = {
+        "messages": [instruction, explicit],
+        "reference": reference,
+    }
+    projected = _without_request_instructions(original)
+    assert projected == {"messages": [explicit], "reference": reference}
+    assert projected["reference"] is reference
+    assert original["messages"] == [instruction, explicit]
+    assert not _is_request_instruction(reference)
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("extra_data", [False, True])
+@pytest.mark.parametrize(
+    "message_type",
+    [
+        SystemMessage,
+        SystemMessageChunk,
+        HumanMessage,
+        AIMessage,
+        AIMessageChunk,
+        RemoveMessage,
+    ],
+)
+def test_projection_removes_owned_serialized_messages(
+    serialized: bool, extra_data: bool, message_type: type[BaseMessage]
+) -> None:
+    instruction = _ResponseInstructions.create("request-only", "response-wire").message
+    assert instruction is not None
+    assert instruction.id is not None
+    message = (
+        RemoveMessage(id=instruction.id)
+        if message_type is RemoveMessage
+        else message_type(content="request-only", id=instruction.id)
+    )
+    if extra_data:
+        message = message.model_copy(update={"data": {"label": "keep"}})
+    owned = message_to_dict(message) if serialized else message.model_dump()
+    explicit = SystemMessage(content="explicit-system", id="explicit")
+    projected = _without_request_instructions(
+        {"messages": [owned, explicit.model_dump()]}
+    )
+    assert projected == {"messages": [explicit.model_dump()]}
+    assert _is_request_instruction(owned)
+
+
+@pytest.mark.parametrize("role", ["system", "developer", "user", "assistant"])
+@pytest.mark.parametrize("typed", [False, True])
+def test_projection_removes_owned_openai_messages(role: str, typed: bool) -> None:
+    instruction = _ResponseInstructions.create(
+        "request-only", "response-openai"
+    ).message
+    assert instruction is not None
+    message = {
+        "role": role,
+        "content": "request-only",
+        "id": instruction.id,
+        **({"type": "message"} if typed else {}),
+    }
+    assert _without_request_instructions({"messages": [message]}) == {"messages": []}
+
+
+def test_projection_removes_developer_dumps_without_default_fields() -> None:
+    instruction = _ResponseInstructions.create(
+        "request-only", "response-minimal"
+    ).message
+    assert instruction is not None
+    serialized = instruction.model_dump(exclude_defaults=True)
+    assert "type" not in serialized
+    assert _without_request_instructions({"messages": [serialized]}) == {"messages": []}
+
+
+@pytest.mark.parametrize("serialized", [False, True])
+def test_projection_preserves_explicit_messages_with_owned_nested_data(
+    serialized: bool,
+) -> None:
+    instruction = _ResponseInstructions.create("request-only", "response-data").message
+    assert instruction is not None
+    explicit = SystemMessage(content="explicit-system", id="explicit").model_copy(
+        update={"data": instruction.model_dump()}
+    )
+    original = message_to_dict(explicit) if serialized else explicit.model_dump()
+    expected = deepcopy(original)
+    if serialized:
+        expected["data"]["data"] = []
+    else:
+        expected["data"] = []
+    projected = _without_request_instructions({"messages": [original]})
+    assert projected == {"messages": [expected]}
+    assert not _is_request_instruction(original)
+    assert explicit.model_extra == {"data": instruction.model_dump()}
+
+
+@pytest.mark.parametrize("representation", ["role", "type", "serialized"])
+def test_projection_removes_owned_removal_references(representation: str) -> None:
+    instruction = _ResponseInstructions.create(
+        "request-only", "response-remove"
+    ).message
+    assert instruction is not None
+    assert instruction.id is not None
+    if representation == "serialized":
+        removal: dict[str, Any] = {
+            "type": "remove",
+            "data": {"id": instruction.id},
+        }
+        assert messages_from_dict([removal]) == [RemoveMessage(id=instruction.id)]
+    else:
+        removal = {representation: "remove", "id": instruction.id}
+    explicit = HumanMessage(content="saved-user")
+    assert _without_request_instructions({"messages": [removal, explicit]}) == {
+        "messages": [explicit]
+    }
+
+
+def test_projection_distinguishes_message_tuples_from_write_tuples() -> None:
+    class Write(NamedTuple):
+        channel: str
+        value: tuple[AnyMessage, ...]
+
+    instruction = _ResponseInstructions.create("request-only", "response-tuple").message
+    assert instruction is not None
+    explicit = HumanMessage(content="saved-user")
+    messages = (instruction, explicit)
+    original = _PydanticTupleTaskInput(messages=messages)
+    projected = _without_request_instructions(original)
+    assert projected.messages == (explicit,)
+    assert original.messages == messages
+    assert _without_request_instructions(projected) is projected
+    writes = [
+        ("messages", messages),
+        ("messages", instruction),
+        ("reference", ("messages", instruction.id)),
+        ("task", "messages", messages),
+        ("update", Command(update=[("messages", messages)])),
+        ("overwrite", Command(update={"messages": Overwrite(messages)})),
+        ("interrupt", Interrupt({"messages": messages}, id="approval-tuple")),
+    ]
+    assert _without_request_instructions(writes) == [
+        ("messages", (explicit,)),
+        ("messages", []),
+        ("reference", ("messages", instruction.id)),
+        ("task", "messages", (explicit,)),
+        ("update", Command(update=[("messages", (explicit,))])),
+        ("overwrite", Command(update={"messages": Overwrite((explicit,))})),
+        ("interrupt", Interrupt({"messages": (explicit,)}, id="approval-tuple")),
+    ]
+    projected_write = _without_request_instructions(Write("messages", messages))
+    assert type(projected_write) is Write
+    assert projected_write == Write("messages", (explicit,))
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_saved_tool_artifacts_exclude_instructions_without_losing_references(
+    synchronous: bool,
+) -> None:
+    instruction = _ResponseInstructions.create(
+        "request-only", "response-artifact"
+    ).message
+    assert instruction is not None
+    explicit = SystemMessage(content="request-only", id="explicit")
+    reference = {"id": instruction.id, "label": "keep"}
+    artifact = {"messages": [instruction, explicit], "reference": reference}
+    tool = ToolMessage(content="tool-result", tool_call_id="call-1", artifact=artifact)
+    backend = InMemorySaver()
+    saver = _RequestCheckpointSaver(backend)
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "instruction-artifacts", "checkpoint_ns": ""}
+    }
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"]["messages"] = [tool]
+    checkpoint["channel_versions"]["messages"] = 1
+    if synchronous:
+        config = saver.put(
+            config,
+            checkpoint,
+            {"source": "loop", "step": 0, "parents": {}},
+            checkpoint["channel_versions"],
+        )
+        saver.put_writes(config, [("messages", [tool])], "tool-task")
+    else:
+        config = await saver.aput(
+            config,
+            checkpoint,
+            {"source": "loop", "step": 0, "parents": {}},
+            checkpoint["channel_versions"],
+        )
+        await saver.aput_writes(config, [("messages", [tool])], "tool-task")
+    restored = await backend.aget_tuple(config)
+    assert restored is not None
+    saved = restored.checkpoint["channel_values"]["messages"][0]
+    assert not _contains_instruction(saved)
+    assert saved.artifact == {
+        "messages": [explicit.model_dump()],
+        "reference": reference,
+    }
+    assert saved.content == "tool-result"
+    assert saved.tool_call_id == "call-1"
+    assert restored.pending_writes is not None
+    assert restored.pending_writes[0][2][0].artifact == saved.artifact
+    assert tool.artifact is artifact
+    assert artifact["messages"] == [instruction, explicit]
+
+
 def _merge_message_deltas(state: Messages, updates: Sequence[Messages]) -> Messages:
     for update in updates:
         state = add_messages(state, update)
@@ -1081,6 +1366,52 @@ class _DeltaAppendingSnapshotState(TypedDict):
 
 class _DeltaAppendingReplayState(TypedDict):
     messages: Annotated[list[AnyMessage], DeltaChannel(_append_message_deltas)]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_tuple_delta_updates_do_not_persist_current_instructions(stream: bool) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    forwarded: list[tuple[AnyMessage, ...]] = []
+
+    def forward(state: MessagesState) -> dict[str, Any]:
+        update = tuple(state["messages"])
+        forwarded.append(update)
+        return {"messages": update}
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        return {"messages": [await model.ainvoke(state["messages"])]}
+
+    saver = InMemorySaver()
+    builder = StateGraph(_DeltaAppendingReplayState)
+    builder.add_node("forward", forward, input_schema=_DeltaAppendingReplayState)
+    builder.add_node("answer", answer, input_schema=_DeltaAppendingReplayState)
+    builder.add_edge(START, "forward")
+    builder.add_edge("forward", "answer")
+    builder.add_edge("answer", END)
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=saver), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client, stream=stream, input="first", instructions="request-only"
+        )
+        second = _create(
+            client,
+            stream=stream,
+            input="second",
+            previous_response_id=first["id"],
+        )
+    assert first["status"] == second["status"] == "completed"
+    assert [message.content for message in model._calls[0]] == [
+        "request-only",
+        "first",
+        "first",
+    ]
+    assert not any(_is_request_instruction(message) for message in model._calls[1])
+    assert forwarded[0][0].content == "request-only"
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.pending_writes)
 
 
 @pytest.mark.parametrize("stream", [False, True])

@@ -200,7 +200,8 @@ register middleware. Existing unmarked instructions in older checkpoints are
 not migrated.
 
 The host exposes current instructions through a request-scoped view of the
-graph's `messages` channel. The actual message reducer processes ordinary input,
+graph's `messages` channel. Prepared message channels must be list-valued.
+The actual message reducer processes ordinary input,
 checkpoint history, and pending writes without temporary instructions. Reads
 then prepend the current developer message. Replacing reducers retain the
 instructions, accumulating reducers do not duplicate them, and DeltaChannel
@@ -226,6 +227,11 @@ on its discoverable subgraphs; calls outside a hosted Responses execution keep
 their ordinary channel behavior. It does not replace reducers, models, or
 middleware. Saved `Send` payloads are overlaid separately so workers also receive
 the current instructions after recovery.
+
+Saved `Send` payloads can use list or tuple `messages` in dictionaries,
+dataclasses, or Pydantic models, including allowed extra fields. Projection
+preserves these payload types and removes temporary messages from nested tool
+artifacts as well. Ordinary ID references and explicit messages remain intact.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore

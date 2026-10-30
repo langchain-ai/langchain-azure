@@ -25,6 +25,24 @@ from wrapt import ObjectProxy
 
 _INSTRUCTIONS_CONFIG_KEY = "__langchain_azure_response_instructions"
 _INSTRUCTIONS_ID_PREFIX = "__langchain_azure_response_instructions:"
+_MESSAGE_TYPES = frozenset(
+    {
+        "ai",
+        "chat",
+        "function",
+        "human",
+        "remove",
+        "system",
+        "tool",
+        "AIMessageChunk",
+        "ChatMessageChunk",
+        "FunctionMessageChunk",
+        "HumanMessageChunk",
+        "SystemMessageChunk",
+        "ToolMessageChunk",
+    }
+)
+_MESSAGE_KINDS = _MESSAGE_TYPES | {"assistant", "developer", "user"}
 _GraphT = TypeVar("_GraphT", bound=Pregel)
 
 
@@ -32,10 +50,33 @@ def _is_request_instruction(value: Any) -> bool:
     if isinstance(value, BaseMessage):
         message_id = value.id
     elif isinstance(value, dict):
-        data = value.get("data")
-        if isinstance(data, dict) and value.get("type") == "system":
-            return _is_request_instruction(data)
-        message_id = value.get("id")
+        message_type = value.get("type")
+        kind = (
+            value.get("role")
+            if message_type is None
+            or (isinstance(message_type, str) and message_type == "message")
+            else message_type
+        )
+        additional_kwargs = value.get("additional_kwargs")
+        if (
+            kind is None
+            and isinstance(additional_kwargs, dict)
+            and additional_kwargs.get("__openai_role__") == "developer"
+        ):
+            kind = "developer"
+        if not isinstance(kind, str) or kind not in _MESSAGE_KINDS:
+            return False
+        if "content" in value or (kind == "remove" and "id" in value):
+            message_id = value.get("id")
+        elif isinstance(message_type, str) and message_type in _MESSAGE_TYPES:
+            data = value.get("data")
+            if not isinstance(data, dict) or (
+                "content" not in data and message_type != "remove"
+            ):
+                return False
+            message_id = data.get("id")
+        else:
+            return False
     else:
         return False
     return isinstance(message_id, str) and message_id.startswith(
@@ -43,15 +84,13 @@ def _is_request_instruction(value: Any) -> bool:
     )
 
 
-def _without_request_instructions(value: Any) -> Any:
+def _without_request_instructions(value: Any, *, message_sequence: bool = False) -> Any:
     """Project only host-origin messages out of snapshots and task payloads."""
     if _is_request_instruction(value):
         return []
-    if isinstance(value, BaseMessage):
-        return value
     if isinstance(value, (list, deque)):
         result = [
-            _without_request_instructions(item)
+            _without_request_instructions(item, message_sequence=message_sequence)
             for item in value
             if not _is_request_instruction(item)
         ]
@@ -63,13 +102,29 @@ def _without_request_instructions(value: Any) -> Any:
             deque(result, maxlen=value.maxlen) if isinstance(value, deque) else result
         )
     if isinstance(value, tuple):
-        result_tuple = tuple(_without_request_instructions(item) for item in value)
-        if all(left is right for left, right in zip(result_tuple, value)):
+        message_value_index = -1
+        if len(value) == 2 and isinstance(value[0], str) and value[0] == "messages":
+            message_value_index = 1
+        elif len(value) == 3 and isinstance(value[1], str) and value[1] == "messages":
+            message_value_index = 2
+        message_tuple = message_sequence and not hasattr(value, "_fields")
+        result_tuple = tuple(
+            _without_request_instructions(
+                item,
+                message_sequence=message_tuple or index == message_value_index,
+            )
+            for index, item in enumerate(value)
+            if not (message_tuple and _is_request_instruction(item))
+        )
+        if len(result_tuple) == len(value) and all(
+            left is right for left, right in zip(result_tuple, value)
+        ):
             return value
         return type(value)(*result_tuple) if hasattr(value, "_fields") else result_tuple
     if isinstance(value, dict):
         result_dict = {
-            key: _without_request_instructions(item) for key, item in value.items()
+            key: _without_request_instructions(item, message_sequence=key == "messages")
+            for key, item in value.items()
         }
         return (
             value
@@ -91,23 +146,33 @@ def _without_request_instructions(value: Any) -> Any:
             return value
         return replace(value, update=update, resume=resume, goto=goto)
     if isinstance(value, (Interrupt, Overwrite)):
-        overwritten = _without_request_instructions(value.value)
+        overwritten = _without_request_instructions(
+            value.value, message_sequence=message_sequence
+        )
         return (
             value if overwritten is value.value else replace(value, value=overwritten)
         )
     if isinstance(value, BaseModel):
+        values = {name: getattr(value, name) for name in type(value).model_fields}
+        values.update(value.model_extra or {})
         updates = {
             name: projected
-            for name in type(value).model_fields
-            if (projected := _without_request_instructions(getattr(value, name)))
-            is not getattr(value, name)
+            for name, original in values.items()
+            if (
+                projected := _without_request_instructions(
+                    original, message_sequence=name == "messages"
+                )
+            )
+            is not original
         }
         return value.model_copy(update=updates) if updates else value
     if is_dataclass(value) and not isinstance(value, type):
         result_dataclass = value
         for item in fields(value):
             original = getattr(value, item.name)
-            projected = _without_request_instructions(original)
+            projected = _without_request_instructions(
+                original, message_sequence=item.name == "messages"
+            )
             if projected is original:
                 continue
             if result_dataclass is value:
@@ -183,9 +248,9 @@ class _ResponseInstructions:
         argument = value.arg
         if isinstance(argument, dict):
             messages = argument.get("messages")
-        elif (
-            isinstance(argument, BaseModel)
-            and "messages" in type(argument).model_fields
+        elif isinstance(argument, BaseModel) and (
+            "messages" in type(argument).model_fields
+            or "messages" in (argument.model_extra or {})
         ):
             messages = getattr(argument, "messages")
         elif (
@@ -196,9 +261,10 @@ class _ResponseInstructions:
             messages = getattr(argument, "messages")
         else:
             return value
-        if not isinstance(messages, list):
+        if not isinstance(messages, (list, tuple)):
             return value
-        messages = self.prepend(messages)
+        overlaid = self.prepend(messages)
+        messages = tuple(overlaid) if isinstance(messages, tuple) else overlaid
         if isinstance(argument, dict):
             argument = {**argument, "messages": messages}
         elif isinstance(argument, BaseModel):
@@ -295,7 +361,7 @@ class _InstructionMessagesChannel(ObjectProxy):
 
     def update(self, values: Sequence[Any]) -> bool:
         if _active_instructions.get() is not None:
-            values = _without_request_instructions(values)
+            values = _without_request_instructions(values, message_sequence=True)
         return self.__wrapped__.update(values)
 
 
