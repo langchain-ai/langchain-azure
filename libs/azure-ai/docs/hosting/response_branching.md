@@ -191,9 +191,13 @@ is outside the current branching scope, even if its response status is
 
 ### Instructions, checkpoints, and routing
 
-Do not inherit a previous response's top-level `instructions` through a graph
-checkpoint. Distinguish request-scoped instructions from actual system or
-developer message items supplied in conversation history.
+The host overlays the current response's top-level `instructions` as a
+temporary developer message and excludes it from durable checkpoints and
+pending writes. It does not inherit or restore a previous response's top-level
+instructions. Explicit system/developer input messages and ordinary history are
+preserved. This isolation also applies when branching is disabled and does not
+register middleware. Existing unmarked instructions in older checkpoints are
+not migrated.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore
@@ -488,13 +492,13 @@ The branching helpers and saver wrapper are internal, not public extension point
 
 ## Implementation gaps and verification
 
-This revision changes the specification only. Implementation gaps and unverified
-behavior are distinguished below; neither indicates completed support.
+The table below distinguishes verified behavior from remaining implementation
+gaps and unverified behavior. It does not establish full target compatibility.
 
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
-| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
+| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | Implemented and verified through the host's HTTP endpoints, including sibling branches, nested checkpoints, streaming, tools, approval continuation, and DeltaChannel history. |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
 tool replies, approval decisions, and resume state between children, is deferred.

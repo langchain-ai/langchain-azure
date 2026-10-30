@@ -89,6 +89,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._instructions import _ResponseInstructions
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -600,6 +601,10 @@ class ResponsesHostServer:
                 - ``langgraph_checkpoint`` mode passes only the current request input;
                     prior state is restored by LangGraph through ``thread_id``.
 
+                Top-level ``instructions`` is a temporary developer message for
+                this response. The saver excludes it from durable graph history;
+                explicit system/developer input messages are retained.
+
                 Override in a subclass to support custom-state graphs.
 
         Args:
@@ -615,14 +620,16 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = request.get("instructions")
+        instructions = _ResponseInstructions.create(
+            request.get("instructions"), context.response_id
+        )
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
                 current_items,
-                instructions=instructions if isinstance(instructions, str) else None,
                 skip_call_ids=skip_call_ids or frozenset(),
             )
+            graph_input["messages"] = instructions.prepend(graph_input["messages"])
             self._log_conversation_input_built(
                 mode=mode,
                 request=request,
@@ -645,9 +652,9 @@ class ResponsesHostServer:
         ]
         graph_input = build_messages_input(
             history_items + current_items,
-            instructions=instructions if isinstance(instructions, str) else None,
             skip_call_ids=skip_call_ids or frozenset(),
         )
+        graph_input["messages"] = instructions.prepend(graph_input["messages"])
         self._log_conversation_input_built(
             mode=mode,
             request=request,
@@ -1052,6 +1059,9 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
+            config = _ResponseInstructions.create(
+                request.get("instructions"), context.response_id
+            ).with_config(config)
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1246,6 +1256,7 @@ class ResponsesHostServer:
                 request=request,
             )
 
+        stream.response["instructions"] = request.get("instructions")
         metadata = dict(stream.response.get("metadata") or {})
         metadata[METADATA_STEERABLE_CONVERSATION] = str(
             self._steerable_conversations
