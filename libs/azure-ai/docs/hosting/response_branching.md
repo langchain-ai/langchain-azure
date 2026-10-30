@@ -191,63 +191,9 @@ is outside the current branching scope, even if its response status is
 
 ### Instructions, checkpoints, and routing
 
-The host overlays the current response's top-level `instructions` as a
-temporary developer message and excludes it from durable checkpoints and
-pending writes. It does not inherit or restore a previous response's top-level
-instructions. Explicit system/developer input messages and ordinary history are
-preserved. This isolation also applies when branching is disabled and does not
-register middleware. Existing unmarked instructions in older checkpoints are
-not migrated.
-
-The host exposes current instructions through a request-scoped view of the
-graph's `messages` channel. Prepared message channels must be list-valued.
-The actual message reducer processes ordinary input,
-checkpoint history, and pending writes without temporary instructions. Reads
-then prepend the current developer message. Replacing reducers retain the
-instructions, accumulating reducers do not duplicate them, and DeltaChannel
-removals and overwrites cannot clear them. The same read behavior applies to
-fresh invocations and interrupted or failed executions being resumed.
-
-The host prepares its root graph and statically discoverable local compiled
-subgraphs automatically. Subgraphs created inside runtime factories or hidden
-behind tools or other indirection require explicit preparation before they are
-invoked:
-
-```python
-from langchain_azure_ai.agents.hosting import with_response_instructions
-
-child = with_response_instructions(child_builder.compile(checkpointer=True))
-result = await child.ainvoke(state)
-```
-
-Apply this in each factory that constructs such a child. Without preparation,
-the host cannot guarantee instruction isolation inside that child. The helper
-returns a shallow graph copy and installs transparent message-channel,
-task-channel, and cache adapters on its discoverable subgraphs. Calls outside a
-hosted Responses execution keep their ordinary channel behavior. Apply the helper
-after graph configuration that creates copies, such as `with_config`, because
-LangGraph rebuilds the task channel when copying a graph. It does not replace
-reducers, models, or middleware. `Send` workers receive the current instructions
-when their task inputs are read, both on first execution and after recovery,
-including when their message payloads are built independently of parent state.
-The adapters leave the caller's payload unchanged and exclude temporary
-instructions from stored task values.
-
-Saved `Send` payloads can use list or tuple `messages` in dictionaries,
-dataclasses, or Pydantic models, including allowed extra fields. Projection
-preserves these payload types and removes temporary messages from nested tool
-artifacts as well. Ordinary ID references and explicit messages remain intact.
-LangChain constructor records produced by `BaseMessage.to_json()` are removed
-as complete messages, so the remaining serialized history stays loadable.
-
-Completed `@task` results and configured LangGraph caches preserve instruction
-positions using empty message references, without storing instruction text or
-the originating response ID. Reads replace these references with the current
-response's developer message, or remove them when instructions are omitted or
-empty. The host does not rerun completed tasks or inject messages into unmarked
-task results. This also applies to nested and Functional API workflows,
-checkpoint history reads, and calls outside a hosted request. Recovery continues
-the addressed checkpoint without replaying completed task side effects.
+Do not inherit a previous response's top-level `instructions` through a graph
+checkpoint. Distinguish request-scoped instructions from actual system or
+developer message items supplied in conversation history.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore
@@ -542,13 +488,13 @@ The branching helpers and saver wrapper are internal, not public extension point
 
 ## Implementation gaps and verification
 
-The table below distinguishes verified behavior from remaining implementation
-gaps and unverified behavior. It does not establish full target compatibility.
+This revision changes the specification only. Implementation gaps and unverified
+behavior are distinguished below; neither indicates completed support.
 
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
-| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | HTTP endpoints verify sibling branches, prepared nested graphs, streaming, tools, approvals, DeltaChannel history, and concurrent requests. SDK handler tests verify input-checkpoint recovery. Runtime or indirect children require the explicit preparation described above. |
+| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
 tool replies, approval decisions, and resume state between children, is deferred.
