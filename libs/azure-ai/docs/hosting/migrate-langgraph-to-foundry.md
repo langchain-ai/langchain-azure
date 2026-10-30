@@ -8,6 +8,20 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 > **Note:** This guide covers application hosting and runtime configuration. Moving existing LangGraph threads and checkpoints to another storage backend requires a separate data migration.
 
+## Why host your LangGraph application on Foundry?
+
+Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform.
+
+- **Managed execution that scales with your application.** Foundry manages compute, session lifecycles, and scaling around your deployed agent. Its session-isolated runtime and hosting libraries support background execution, configurable recovery, stream replay, and optional steering, helping your application handle concurrent demand, interruptions, and new user input.
+
+- **Protocol integration built into Foundry hosting.** Expose your agent through OpenAI-compatible Responses for compatible clients, or Invocations for custom inputs and outputs. Foundry's LangGraph hosting adapters handle request conversion, response mapping, and streaming, reducing the custom integration code between your agent and client applications.
+
+- **Managed memory, knowledge, and tools for your workflows.** Foundry Memory, Foundry IQ, and Toolbox can extend your LangGraph workflows with long-term context, enterprise knowledge, and business tools. These integrations let your application retain useful context, ground answers in organizational data, and act through connected systems.
+
+- **Production safety and governance.** Foundry brings Entra identities, RBAC, private networking options, and configurable guardrails to hosted agents. Your organization can control who invokes the application, which resources it can access, and the security and safety policies applied during execution.
+
+- **Diagnostics and evaluation integrated with your deployment.** Foundry connects hosted-agent execution with model and tool tracing, Application Insights, and managed evaluation. Teams can assess execution behavior and output quality within the same platform, helping them investigate failures and judge whether application changes are ready for release.
+
 ## Before you start
 
 The following prerequisites apply before you prepare and deploy your application:
