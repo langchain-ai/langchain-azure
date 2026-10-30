@@ -1046,14 +1046,6 @@ class ResponsesHostServer:
                 stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
                     root_response_id
                 )
-            if cancellation_signal.is_set() and not context.client_cancelled:
-                reference = HostingRunnableConfig(config).checkpoint_ref
-                if reference is not None:
-                    task_storage.store_checkpoint_ref(reference)
-                if reference is not None or not self._graph_has_checkpointer:
-                    yield stream.emit_completed()
-                    return
-                # A fresh thread must publish its initial checkpoint before stopping.
             # Attach transient execution state after the overridable config
             # hook. The public Responses handler contract supplies this exact
             # Event as its third argument; keeping it out of build_runnable_config's
@@ -1096,6 +1088,15 @@ class ResponsesHostServer:
                     or state.created_at is None
                 ):
                     raise ValueError("The response's graph checkpoint is missing.")
+
+            if cancellation_signal.is_set() and not context.client_cancelled:
+                reference = HostingRunnableConfig(config).checkpoint_ref
+                if reference is not None:
+                    task_storage.store_checkpoint_ref(reference)
+                if reference is not None or not self._graph_has_checkpointer:
+                    yield stream.emit_completed()
+                    return
+                # A fresh thread must publish its initial checkpoint before stopping.
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
