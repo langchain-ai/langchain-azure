@@ -95,7 +95,7 @@ class _JsonWithBinaryTags:
 
 
 @pytest.mark.parametrize("synchronous", [False, True])
-async def test_instruction_placement_tracks_only_actual_root_checkpoint_reads(
+async def test_request_instructions_do_not_change_raw_checkpoint_reads(
     synchronous: bool,
 ) -> None:
     backend = InMemorySaver()
@@ -117,25 +117,22 @@ async def test_instruction_placement_tracks_only_actual_root_checkpoint_reads(
             else await saver.aget_tuple(selected)
         )
 
-    assert instructions.checkpoint_restored is None
     assert await read(child_config) is None
-    assert instructions.checkpoint_restored is None
     assert await read(config) is None
-    assert instructions.checkpoint_restored is False
 
     checkpoint = _checkpoint("0001", "input")
     await backend.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
-    restored = await read(config)
-    assert restored is not None
-    assert instructions.checkpoint_restored is True
+    with instructions.bind():
+        restored = await read(config)
+        assert restored is not None
+        assert restored.checkpoint == checkpoint
     assert await read(child_config) is None
-    assert instructions.checkpoint_restored is True
 
     other_instructions = _ResponseInstructions.create("other", "other-response")
-    assert other_instructions.checkpoint_restored is None
+    with other_instructions.bind():
+        assert await read(config) == restored
     await backend.adelete_thread(config["configurable"]["thread_id"])
     assert await read(config) is None
-    assert instructions.checkpoint_restored is False
 
 
 @pytest.mark.parametrize("synchronous", [False, True])

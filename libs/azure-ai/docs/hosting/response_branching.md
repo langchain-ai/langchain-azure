@@ -199,13 +199,33 @@ preserved. This isolation also applies when branching is disabled and does not
 register middleware. Existing unmarked instructions in older checkpoints are
 not migrated.
 
-At request boundaries, the host applies a message channel's reducer to restored
-history and current input before overlaying the current instructions. Replacing
-reducers retain the instructions, and accumulating reducers do not require
-message-ID deduplication. DeltaChannel history is replayed before the overlay,
-so historical message removals and overwrites cannot clear current instructions.
-Fresh subgraph invocations receive instructions through their input; resumed
-subgraphs receive them through restored state, without injecting both.
+The host exposes current instructions through a request-scoped view of the
+graph's `messages` channel. The actual message reducer processes ordinary input,
+checkpoint history, and pending writes without temporary instructions. Reads
+then prepend the current developer message. Replacing reducers retain the
+instructions, accumulating reducers do not duplicate them, and DeltaChannel
+removals and overwrites cannot clear them. The same read behavior applies to
+fresh invocations and interrupted or failed executions being resumed.
+
+The host prepares its root graph and statically discoverable local compiled
+subgraphs automatically. Subgraphs created inside runtime factories or hidden
+behind tools or other indirection require explicit preparation before they are
+invoked:
+
+```python
+from langchain_azure_ai.agents.hosting import with_response_instructions
+
+child = with_response_instructions(child_builder.compile(checkpointer=True))
+result = await child.ainvoke(state)
+```
+
+Apply this in each factory that constructs such a child. Without preparation,
+the host cannot guarantee instruction isolation inside that child. The helper
+returns a shallow graph copy and installs transparent message-channel adapters
+on its discoverable subgraphs; calls outside a hosted Responses execution keep
+their ordinary channel behavior. It does not replace reducers, models, or
+middleware. Saved `Send` payloads are overlaid separately so workers also receive
+the current instructions after recovery.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore
@@ -506,7 +526,7 @@ gaps and unverified behavior. It does not establish full target compatibility.
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
-| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | Implemented and verified through the host's HTTP endpoints, including sibling branches, nested checkpoints, streaming, tools, approval continuation, and DeltaChannel history. |
+| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | HTTP endpoints verify sibling branches, prepared nested graphs, streaming, tools, approvals, DeltaChannel history, and concurrent requests. SDK handler tests verify input-checkpoint recovery. Runtime or indirect children require the explicit preparation described above. |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
 tool replies, approval decisions, and resume state between children, is deferred.

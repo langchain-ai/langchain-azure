@@ -6,33 +6,26 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import copy
-from dataclasses import dataclass, field, fields, is_dataclass, replace
-from operator import add
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, fields, is_dataclass, replace
+from typing import Any, TypeVar
 
 from langchain_core.messages import AnyMessage, BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
-from langgraph.checkpoint.base import CheckpointTuple, DeltaChannelHistory
+from langgraph.channels.base import BaseChannel
+from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.constants import TASKS
+from langgraph.pregel import Pregel
 from langgraph.types import Command, Interrupt, Overwrite, Send
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-    from langgraph.graph.state import CompiledStateGraph
+from wrapt import ObjectProxy
 
 _INSTRUCTIONS_CONFIG_KEY = "__langchain_azure_response_instructions"
 _INSTRUCTIONS_ID_PREFIX = "__langchain_azure_response_instructions:"
-
-
-def _checkpoint_messages(value: Any) -> list[AnyMessage]:
-    # The public channel decoder also unwraps DeltaChannel snapshots.
-    messages = BinaryOperatorAggregate(list, add).from_checkpoint(value).get()
-    if not isinstance(messages, list):
-        raise ValueError("Request instructions require a list-valued messages channel.")
-    return messages
+_GraphT = TypeVar("_GraphT", bound=Pregel)
 
 
 def _is_request_instruction(value: Any) -> bool:
@@ -130,9 +123,6 @@ class _ResponseInstructions:
     """Keep one response's instructions separate from durable history."""
 
     message: SystemMessage | None
-    checkpoint_restored: bool | None = field(default=None, init=False)
-    resuming: bool = field(default=True, init=False)
-    _message_channels: dict[str, DeltaChannel] = field(default_factory=dict, init=False)
 
     @classmethod
     def create(cls, instructions: object, response_id: str) -> _ResponseInstructions:
@@ -152,21 +142,7 @@ class _ResponseInstructions:
             )
         )
 
-    def with_config(
-        self, config: RunnableConfig, *, graph: CompiledStateGraph | None = None
-    ) -> RunnableConfig:
-        if graph is not None and self.message is not None:
-            self._message_channels = {
-                namespace: channel
-                for namespace, child in [
-                    ("", graph),
-                    *graph.get_subgraphs(recurse=True),
-                ]
-                if isinstance(
-                    channel := getattr(child, "channels", {}).get("messages"),
-                    DeltaChannel,
-                )
-            }
+    def with_config(self, config: RunnableConfig) -> RunnableConfig:
         return {
             **config,
             "configurable": {
@@ -174,6 +150,17 @@ class _ResponseInstructions:
                 _INSTRUCTIONS_CONFIG_KEY: self,
             },
         }
+
+    @contextmanager
+    def bind(self) -> Iterator[None]:
+        token = _active_instructions.set(self)
+        try:
+            yield
+        finally:
+            _active_instructions.reset(token)
+
+    def wrap_stream(self, stream: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        return _InstructionStream(stream, self)
 
     def prepend(self, messages: Sequence[AnyMessage]) -> list[AnyMessage]:
         if self.message is None:
@@ -223,28 +210,11 @@ class _ResponseInstructions:
         result_send.arg = argument
         return result_send
 
-    def _overlays_messages(self, config: RunnableConfig) -> bool:
-        configurable = config.get("configurable") or {}
-        # Fresh input carries instructions into subgraphs; resumes restore them.
-        return not configurable.get("checkpoint_ns") or self.resuming
-
-    def overlay(
-        self, value: CheckpointTuple | None, *, config: RunnableConfig | None = None
-    ) -> CheckpointTuple | None:
+    def overlay(self, value: CheckpointTuple | None) -> CheckpointTuple | None:
         if value is None or self.message is None:
             return value
         channel_values = value.checkpoint["channel_values"]
-        namespace = (value.config.get("configurable") or {}).get("checkpoint_ns", "")
         updates: dict[str, Any] = {}
-        if self._overlays_messages(config or value.config) and (
-            "messages" in channel_values
-            or (
-                not namespace and "messages" not in value.checkpoint["channel_versions"]
-            )
-        ):
-            updates["messages"] = self.prepend(
-                _checkpoint_messages(channel_values.get("messages", []))
-            )
         sends = channel_values.get(TASKS)
         overlaid_sends = self._overlay_sends(sends)
         if overlaid_sends is not sends:
@@ -272,37 +242,101 @@ class _ResponseInstructions:
             return value
         return value._replace(checkpoint=checkpoint, pending_writes=pending_writes)
 
-    def overlay_history(
-        self, histories: Mapping[str, DeltaChannelHistory], *, config: RunnableConfig
-    ) -> Mapping[str, DeltaChannelHistory]:
-        if (
-            self.message is None
-            or "messages" not in histories
-            or not self._overlays_messages(config)
-        ):
-            return histories
-        history = histories["messages"]
-        namespace = (config.get("configurable") or {}).get("checkpoint_ns", "")
-        namespace = "|".join(
-            part.split(":")[0] for part in namespace.split("|") if not part.isdigit()
-        )
-        channel = self._message_channels.get(namespace)
-        if channel is None:
+
+_active_instructions: ContextVar[_ResponseInstructions | None] = ContextVar(
+    "langchain_azure_response_instructions", default=None
+)
+
+
+class _InstructionStream(AsyncIterator[Any]):
+    """Bind each operation without leaking context to stream consumers."""
+
+    def __init__(
+        self, stream: AsyncIterator[Any], instructions: _ResponseInstructions
+    ) -> None:
+        self._stream = stream
+        self._instructions = instructions
+
+    async def __anext__(self) -> Any:
+        with self._instructions.bind():
+            return await anext(self._stream)
+
+    async def aclose(self) -> None:
+        close = getattr(self._stream, "aclose", None)
+        if close is not None:
+            with self._instructions.bind():
+                await close()
+
+
+class _InstructionMessagesChannel(ObjectProxy):
+    """Keep instructions outside the reducer's value and checkpoint."""
+
+    def __init__(self, channel: BaseChannel) -> None:
+        super().__init__(channel)
+
+    def copy(self) -> _InstructionMessagesChannel:
+        return type(self)(self.__wrapped__.copy())
+
+    def from_checkpoint(self, checkpoint: Any) -> _InstructionMessagesChannel:
+        return type(self)(self.__wrapped__.from_checkpoint(checkpoint))
+
+    def get(self) -> Any:
+        value = self.__wrapped__.get()
+        instructions = _active_instructions.get()
+        if instructions is None:
+            return value
+        if instructions.message is None:
+            return _without_request_instructions(value)
+        if not isinstance(value, list):
             raise ValueError(
-                f"Cannot resolve the messages reducer for namespace {namespace!r}."
+                "Request instructions require a list-valued messages channel."
             )
-        restored = channel.from_checkpoint(
-            _checkpoint_messages(history.get("seed", []))
-        )
-        restored.replay_writes(history["writes"])
-        return {
-            **histories,
-            "messages": {
-                **history,
-                "seed": self.prepend(_checkpoint_messages(restored.get())),
-                "writes": [],
-            },
-        }
+        return instructions.prepend(value)
+
+    def update(self, values: Sequence[Any]) -> bool:
+        if _active_instructions.get() is not None:
+            values = _without_request_instructions(values)
+        return self.__wrapped__.update(values)
+
+
+def with_response_instructions(graph: _GraphT) -> _GraphT:
+    """Enable request-scoped instructions in a compiled graph's message reads.
+
+    ResponsesHostServer applies this automatically to its graph and statically
+    discoverable local subgraphs. Apply it explicitly to subgraphs constructed at
+    runtime or invoked through indirection.
+
+    The returned graph is a shallow copy. Discoverable subgraphs share their
+    existing graph objects and receive transparent message-channel adapters.
+    Outside a hosted Responses request, channel behavior is unchanged.
+
+    Args:
+        graph: A local compiled graph. Its ``messages`` channels, when present,
+            must be list-valued.
+
+    Returns:
+        A compiled graph whose reducers and checkpoints exclude temporary
+        request instructions, while execution reads include the current ones.
+
+    Examples:
+        Prepare a subgraph inside a runtime factory before invoking it::
+
+            child = with_response_instructions(builder.compile(checkpointer=True))
+            result = await child.ainvoke(state)
+    """
+    prepared = graph.copy()
+    for child in [prepared, *(child for _, child in graph.get_subgraphs(recurse=True))]:
+        if not isinstance(child, Pregel):
+            continue
+        channel = child.channels.get("messages")
+        if isinstance(channel, BaseChannel) and not isinstance(
+            channel, _InstructionMessagesChannel
+        ):
+            child.channels = {
+                **child.channels,
+                "messages": _InstructionMessagesChannel(channel),
+            }
+    return prepared
 
 
 def _instructions_from_config(

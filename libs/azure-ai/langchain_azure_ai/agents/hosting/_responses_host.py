@@ -62,9 +62,8 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.types import Overwrite
+from langgraph.graph.state import CompiledStateGraph
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -91,7 +90,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
-from ._instructions import _ResponseInstructions, _without_request_instructions
+from ._instructions import _ResponseInstructions, with_response_instructions
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -110,7 +109,6 @@ from ._storage.state_store_factory import (
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
-    from langgraph.graph.state import CompiledStateGraph
     from langgraph.types import Command, Interrupt
 
 
@@ -430,6 +428,8 @@ class ResponsesHostServer:
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
+        if isinstance(graph, CompiledStateGraph):
+            graph = with_response_instructions(graph)
         saver = getattr(graph, "checkpointer", None)
         if enable_response_branching:
             _validate_response_branching_checkpointer(saver)
@@ -1064,7 +1064,7 @@ class ResponsesHostServer:
             instructions = _ResponseInstructions.create(
                 request.get("instructions"), context.response_id
             )
-            config = instructions.with_config(config, graph=self._graph)
+            config = instructions.with_config(config)
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1156,41 +1156,15 @@ class ResponsesHostServer:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
-                    if (
-                        self._graph_has_checkpointer
-                        and instructions.message is not None
-                        and isinstance(graph_input.get("messages"), list)
-                        and isinstance(
-                            message_channel := self._graph.channels.get("messages"),
-                            (BinaryOperatorAggregate, DeltaChannel),
-                        )
-                    ):
-                        state = await self._graph.aget_state(config)
-                        if instructions.checkpoint_restored:
-                            channel = message_channel.from_checkpoint(
-                                _without_request_instructions(
-                                    state.values.get("messages", [])
-                                )
-                            )
-                            channel.update(
-                                [_without_request_instructions(graph_input["messages"])]
-                            )
-                            graph_input = {
-                                **graph_input,
-                                # Reduce once before overlaying the instructions.
-                                "messages": Overwrite(
-                                    instructions.prepend(channel.get())
-                                ),
-                            }
-
-            instructions.resuming = graph_input is None or resume_command is not None
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(
-                self._graph.astream(
-                    graph_input,
-                    config=config,
-                    stream_mode=self._stream_modes,
-                    durability=self._durability,
+                instructions.wrap_stream(
+                    self._graph.astream(
+                        graph_input,
+                        config=config,
+                        stream_mode=self._stream_modes,
+                        durability=self._durability,
+                    )
                 )
             ) as graph_stream:
                 graph_stream = track_pending_interrupts(graph_stream, active_interrupts)

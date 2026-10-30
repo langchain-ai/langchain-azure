@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy, deepcopy
@@ -21,7 +21,6 @@ from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
-    DeltaChannelHistory,
     get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
@@ -255,39 +254,11 @@ class _RequestCheckpointSaver(ObjectProxy):
         instructions = _instructions_from_config(config)
         if instructions is None:
             return value
-        if not (config.get("configurable") or {}).get("checkpoint_ns", ""):
-            instructions.checkpoint_restored = value is not None
-        return instructions.overlay(value, config=config)
+        return instructions.overlay(value)
 
     def get(self, config: RunnableConfig) -> Checkpoint | None:
         value = self.get_tuple(config)
         return value.checkpoint if value is not None else None
-
-    def get_delta_channel_history(
-        self, *, config: RunnableConfig, channels: Sequence[str]
-    ) -> Mapping[str, DeltaChannelHistory]:
-        histories = self.__wrapped__.get_delta_channel_history(
-            config=config, channels=channels
-        )
-        instructions = _instructions_from_config(config)
-        return (
-            instructions.overlay_history(histories, config=config)
-            if instructions is not None
-            else histories
-        )
-
-    async def aget_delta_channel_history(
-        self, *, config: RunnableConfig, channels: Sequence[str]
-    ) -> Mapping[str, DeltaChannelHistory]:
-        histories = await self.__wrapped__.aget_delta_channel_history(
-            config=config, channels=channels
-        )
-        instructions = _instructions_from_config(config)
-        return (
-            instructions.overlay_history(histories, config=config)
-            if instructions is not None
-            else histories
-        )
 
     async def _aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         configurable = config.get("configurable") or {}
