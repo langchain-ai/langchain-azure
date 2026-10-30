@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping, Sequence
 from copy import copy
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from operator import add
 from typing import Any
 
@@ -121,11 +121,12 @@ def _without_request_instructions(value: Any) -> Any:
     return value
 
 
-@dataclass(frozen=True)
+@dataclass
 class _ResponseInstructions:
     """Keep one response's instructions separate from durable history."""
 
     message: SystemMessage | None
+    checkpoint_restored: bool | None = field(default=None, init=False)
 
     @classmethod
     def create(cls, instructions: object, response_id: str) -> _ResponseInstructions:

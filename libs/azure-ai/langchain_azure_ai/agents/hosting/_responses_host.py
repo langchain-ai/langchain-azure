@@ -62,6 +62,7 @@ except ImportError as exc:
     ) from exc
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_azure_ai._api.base import experimental
@@ -89,7 +90,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
-from ._instructions import _ResponseInstructions
+from ._instructions import _ResponseInstructions, _without_request_instructions
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -1059,9 +1060,10 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
-            config = _ResponseInstructions.create(
+            instructions = _ResponseInstructions.create(
                 request.get("instructions"), context.response_id
-            ).with_config(config)
+            )
+            config = instructions.with_config(config)
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1153,6 +1155,25 @@ class ResponsesHostServer:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
+                    if (
+                        self._graph_has_checkpointer
+                        and instructions.message is not None
+                        and isinstance(graph_input.get("messages"), list)
+                        and isinstance(
+                            self._graph.channels.get("messages"),
+                            (BinaryOperatorAggregate, DeltaChannel),
+                        )
+                    ):
+                        if instructions.checkpoint_restored is None:
+                            # Interrupt inspection may have caught a failed read.
+                            await self._graph.aget_state(config)
+                        if instructions.checkpoint_restored:
+                            graph_input = {
+                                **graph_input,
+                                "messages": _without_request_instructions(
+                                    graph_input["messages"]
+                                ),
+                            }
 
             active_interrupts: list["Interrupt"] = []
             async with _closing_stream(

@@ -40,6 +40,7 @@ from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
+from langchain_azure_ai.agents.hosting._instructions import _ResponseInstructions
 
 from .conftest import make_checkpointed_echo_graph
 from .test_foundry_checkpoint_saver import (
@@ -89,6 +90,50 @@ class _JsonWithBinaryTags:
         if kind == "bytearray":
             return bytearray(data)
         return json.loads(data)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_instruction_placement_tracks_only_actual_root_checkpoint_reads(
+    synchronous: bool,
+) -> None:
+    backend = InMemorySaver()
+    saver = _RequestCheckpointSaver(backend)
+    instructions = _ResponseInstructions.create("request-only", "response-test")
+    config = instructions.with_config(_config())
+    child_config: RunnableConfig = {
+        **config,
+        "configurable": {
+            **(config.get("configurable") or {}),
+            "checkpoint_ns": "child:task",
+        },
+    }
+
+    async def read(selected: RunnableConfig) -> CheckpointTuple | None:
+        return (
+            saver.get_tuple(selected)
+            if synchronous
+            else await saver.aget_tuple(selected)
+        )
+
+    assert instructions.checkpoint_restored is None
+    assert await read(child_config) is None
+    assert instructions.checkpoint_restored is None
+    assert await read(config) is None
+    assert instructions.checkpoint_restored is False
+
+    checkpoint = _checkpoint("0001", "input")
+    await backend.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
+    restored = await read(config)
+    assert restored is not None
+    assert instructions.checkpoint_restored is True
+    assert await read(child_config) is None
+    assert instructions.checkpoint_restored is True
+
+    other_instructions = _ResponseInstructions.create("other", "other-response")
+    assert other_instructions.checkpoint_restored is None
+    await backend.adelete_thread(config["configurable"]["thread_id"])
+    assert await read(config) is None
+    assert instructions.checkpoint_restored is False
 
 
 @pytest.mark.parametrize(

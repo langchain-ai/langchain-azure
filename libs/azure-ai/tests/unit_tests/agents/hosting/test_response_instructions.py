@@ -11,6 +11,7 @@ from collections import deque
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, is_dataclass
+from operator import add
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -73,16 +74,27 @@ class _CaptureMessages(BaseCallbackHandler):
         self.calls.extend(deepcopy(messages))
 
 
+class _AppendingMessagesState(TypedDict):
+    messages: Annotated[list[AnyMessage], add]
+
+
+class _ReplacingMessagesState(TypedDict):
+    messages: list[AnyMessage]
+
+
 def _graph(
-    capture: _CaptureMessages, saver: InMemorySaver | None
+    capture: _CaptureMessages,
+    saver: InMemorySaver | None,
+    *,
+    schema: type = MessagesState,
 ) -> CompiledStateGraph:
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
 
     async def answer(state: MessagesState) -> dict[str, Any]:
         return {"messages": [await model.ainvoke(state["messages"])]}
 
-    builder = StateGraph(MessagesState)
-    builder.add_node("answer", answer)
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("answer", answer, input_schema=schema)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     return builder.compile(checkpointer=saver)
@@ -106,28 +118,33 @@ def _create(client: TestClient, *, stream: bool, **body: Any) -> ResponseObject:
 
 @pytest.mark.parametrize("checkpointed", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("conversation", [False, True])
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
 def test_current_instructions_precede_complete_context_without_inheritance(
-    checkpointed: bool, stream: bool
+    checkpointed: bool, stream: bool, conversation: bool, schema: type
 ) -> None:
     capture = _CaptureMessages()
     saver = InMemorySaver() if checkpointed else None
     server = ResponsesHostServer(
-        _graph(capture, saver), store=InMemoryResponseProvider()
+        _graph(capture, saver, schema=schema), store=InMemoryResponseProvider()
     )
+    linkage = {"conversation": {"id": "conv-instructions"}} if conversation else {}
     with TestClient(server.app) as client:
-        first = _create(client, stream=stream, input="first", instructions="turn-A")
+        first = _create(
+            client, stream=stream, input="first", instructions="turn-A", **linkage
+        )
         second = _create(
             client,
             stream=stream,
             input="second",
             instructions="turn-B",
-            previous_response_id=first["id"],
+            **(linkage or {"previous_response_id": first["id"]}),
         )
         _create(
             client,
             stream=stream,
             input="third",
-            previous_response_id=second["id"],
+            **(linkage or {"previous_response_id": second["id"]}),
         )
 
     assert [message.content for message in capture.calls[0]] == ["turn-A", "first"]
@@ -146,10 +163,112 @@ def test_current_instructions_precede_complete_context_without_inheritance(
     ]
 
 
-def test_instructions_and_explicit_messages_preserve_developer_roles() -> None:
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_replacing_message_updates_keep_their_current_instructions(
+    stream: bool, overwrite: bool
+) -> None:
+    class OverwritingHost(ResponsesHostServer):
+        async def build_input(
+            self,
+            request: CreateResponse,
+            context: ResponseContext,
+            *,
+            skip_call_ids: frozenset[str] | None = None,
+        ) -> dict[str, Any]:
+            payload = await super().build_input(
+                request, context, skip_call_ids=skip_call_ids
+            )
+            return {**payload, "messages": Overwrite(payload["messages"])}
+
+    capture = _CaptureMessages()
+    host_type = OverwritingHost if overwrite else ResponsesHostServer
+    schema = _AppendingMessagesState if overwrite else _ReplacingMessagesState
+    server = host_type(
+        _graph(capture, InMemorySaver(), schema=schema),
+        store=InMemoryResponseProvider(),
+    )
+    with TestClient(server.app) as client:
+        first = _create(client, stream=stream, input="first", instructions="turn-A")
+        second = _create(
+            client,
+            stream=stream,
+            input="second",
+            instructions="turn-B",
+            previous_response_id=first["id"],
+        )
+        _create(
+            client,
+            stream=stream,
+            input="third",
+            previous_response_id=second["id"],
+        )
+    assert [[message.content for message in call] for call in capture.calls] == [
+        ["turn-A", "first"],
+        ["turn-B", "second"],
+        ["third"],
+    ]
+
+
+@pytest.mark.parametrize("lookup_recovers", [False, True])
+def test_instruction_placement_retries_failed_checkpoint_inspection(
+    monkeypatch: pytest.MonkeyPatch, lookup_recovers: bool
+) -> None:
     capture = _CaptureMessages()
     server = ResponsesHostServer(
-        _graph(capture, InMemorySaver()), store=InMemoryResponseProvider()
+        _graph(capture, InMemorySaver(), schema=_AppendingMessagesState),
+        store=InMemoryResponseProvider(),
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client, stream=False, input="first", instructions="request-only"
+        )
+        get_state = server.graph.aget_state
+        inspected = False
+
+        async def inspect(config: RunnableConfig, **kwargs: Any) -> Any:
+            nonlocal inspected
+            if not inspected or not lookup_recovers:
+                inspected = True
+                raise RuntimeError("checkpoint inspection unavailable")
+            return await get_state(config, **kwargs)
+
+        monkeypatch.setattr(server.graph, "aget_state", inspect)
+        result = client.post(
+            "/responses",
+            json={
+                "input": "second",
+                "instructions": "second-instruction",
+                "previous_response_id": first["id"],
+                "stream": False,
+            },
+        )
+        assert result.status_code == 200, result.text
+        response = result.json()
+    assert inspected
+    if lookup_recovers:
+        assert response["status"] == "completed", response
+        assert [message.content for message in capture.calls[1]] == [
+            "second-instruction",
+            "first",
+            "answer",
+            "second",
+        ]
+    else:
+        assert response["status"] == "failed", response
+        assert [[message.content for message in call] for call in capture.calls] == [
+            ["request-only", "first"]
+        ]
+
+
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+def test_instructions_and_explicit_messages_preserve_developer_roles(
+    schema: type,
+) -> None:
+    capture = _CaptureMessages()
+    server = ResponsesHostServer(
+        _graph(capture, InMemorySaver(), schema=schema),
+        store=InMemoryResponseProvider(),
     )
     with TestClient(server.app) as client:
         response = _create(
@@ -166,6 +285,13 @@ def test_instructions_and_explicit_messages_preserve_developer_roles() -> None:
             f"/responses/{response['id']}/input_items", params={"order": "asc"}
         )
         assert items.status_code == 200, items.text
+        _create(
+            client,
+            stream=False,
+            input="second",
+            instructions="request-only",
+            previous_response_id=response["id"],
+        )
 
     messages = convert_to_openai_messages(capture.calls[0])
     assert [message["role"] for message in messages] == [
@@ -185,6 +311,17 @@ def test_instructions_and_explicit_messages_preserve_developer_roles() -> None:
         "system",
         "developer",
         "user",
+    ]
+    assert [
+        (message["role"], message["content"])
+        for message in convert_to_openai_messages(capture.calls[1])
+    ] == [
+        ("developer", "request-only"),
+        ("system", "explicit-system"),
+        ("developer", "explicit-developer"),
+        ("user", "first"),
+        ("assistant", "answer"),
+        ("user", "second"),
     ]
 
 
@@ -306,11 +443,14 @@ def _checkpoint_config(response: ResponseObject) -> RunnableConfig:
     }
 
 
-def test_branch_instructions_do_not_modify_the_parent_or_other_branches() -> None:
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+def test_branch_instructions_do_not_modify_the_parent_or_other_branches(
+    schema: type,
+) -> None:
     capture = _CaptureMessages()
     saver = InMemorySaver()
     provider = InMemoryResponseProvider()
-    graph = _graph(capture, saver)
+    graph = _graph(capture, saver, schema=schema)
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
     with TestClient(server.app) as client:
         parent = _create(
@@ -539,8 +679,9 @@ def test_existing_agent_middleware_and_system_prompt_remain_in_place() -> None:
 
 
 @pytest.mark.parametrize("instructions", [None, "resumed-instruction"])
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
 def test_interrupt_resume_uses_only_the_new_response_instructions(
-    instructions: str | None,
+    instructions: str | None, schema: type
 ) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
@@ -553,9 +694,9 @@ def test_interrupt_resume_uses_only_the_new_response_instructions(
         return {"messages": [await model.ainvoke(state["messages"])]}
 
     saver = InMemorySaver()
-    builder = StateGraph(MessagesState)
-    builder.add_node("pause", pause)
-    builder.add_node("answer", answer)
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("pause", pause, input_schema=schema)
+    builder.add_node("answer", answer, input_schema=schema)
     builder.add_edge(START, "pause")
     builder.add_edge("pause", "answer")
     builder.add_edge("answer", END)
@@ -591,8 +732,9 @@ def test_interrupt_resume_uses_only_the_new_response_instructions(
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
 def test_instructions_cover_every_model_call_in_a_tool_and_reasoning_turn(
-    stream: bool,
+    stream: bool, schema: type
 ) -> None:
     capture = _CaptureMessages()
     responses: list[BaseMessage] = []
@@ -629,14 +771,14 @@ def test_instructions_cover_every_model_call_in_a_tool_and_reasoning_turn(
             ]
         }
 
-    def route(state: MessagesState) -> str:
+    def route(state: MessagesState | _AppendingMessagesState) -> str:
         message = state["messages"][-1]
         return "tool" if isinstance(message, AIMessage) and message.tool_calls else END
 
     saver = InMemorySaver()
-    builder = StateGraph(MessagesState)
-    builder.add_node("answer", answer)
-    builder.add_node("tool", tool)
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("answer", answer, input_schema=schema)
+    builder.add_node("tool", tool, input_schema=schema)
     builder.add_edge(START, "answer")
     builder.add_conditional_edges("answer", route)
     builder.add_edge("tool", "answer")
@@ -749,21 +891,43 @@ class _DeltaReplayState(TypedDict):
     messages: Annotated[list[AnyMessage], DeltaChannel(_merge_message_deltas)]
 
 
-@pytest.mark.parametrize("schema", [_DeltaSnapshotState, _DeltaReplayState])
+def _append_message_deltas(
+    state: list[AnyMessage], updates: Sequence[list[AnyMessage]]
+) -> list[AnyMessage]:
+    return state + [message for update in updates for message in update]
+
+
+class _DeltaAppendingSnapshotState(TypedDict):
+    messages: Annotated[
+        list[AnyMessage], DeltaChannel(_append_message_deltas, snapshot_frequency=1)
+    ]
+
+
+class _DeltaAppendingReplayState(TypedDict):
+    messages: Annotated[list[AnyMessage], DeltaChannel(_append_message_deltas)]
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        _DeltaSnapshotState,
+        _DeltaReplayState,
+        _DeltaAppendingSnapshotState,
+        _DeltaAppendingReplayState,
+    ],
+)
 def test_delta_messages_keep_history_without_persisting_instructions(
     schema: type,
 ) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
 
-    async def answer(
-        state: _DeltaSnapshotState | _DeltaReplayState,
-    ) -> dict[str, Any]:
+    async def answer(state: MessagesState) -> dict[str, Any]:
         return {"messages": [await model.ainvoke(state["messages"])]}
 
     saver = InMemorySaver()
     builder: StateGraph = StateGraph(schema)
-    builder.add_node("answer", answer)
+    builder.add_node("answer", answer, input_schema=schema)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     server = ResponsesHostServer(
@@ -804,7 +968,8 @@ def test_delta_messages_keep_history_without_persisting_instructions(
         assert not _contains_instruction(checkpoint.pending_writes)
 
 
-def test_recovery_reapplies_instructions_without_replaying_input() -> None:
+@pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+def test_recovery_reapplies_instructions_without_replaying_input(schema: type) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
     failed = False
@@ -820,10 +985,10 @@ def test_recovery_reapplies_instructions_without_replaying_input() -> None:
         return {}
 
     saver = InMemorySaver()
-    builder = StateGraph(MessagesState)
-    builder.add_node("first", answer)
-    builder.add_node("retry", fail_once)
-    builder.add_node("second", answer)
+    builder: StateGraph = StateGraph(schema)
+    builder.add_node("first", answer, input_schema=schema)
+    builder.add_node("retry", fail_once, input_schema=schema)
+    builder.add_node("second", answer, input_schema=schema)
     builder.add_edge(START, "first")
     builder.add_edge("first", "retry")
     builder.add_edge("retry", "second")

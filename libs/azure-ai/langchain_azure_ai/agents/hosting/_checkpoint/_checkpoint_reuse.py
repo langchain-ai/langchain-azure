@@ -243,13 +243,21 @@ class _RequestCheckpointSaver(ObjectProxy):
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         value = await self._aget_tuple(config)
-        instructions = _instructions_from_config(config)
-        return instructions.overlay(value) if instructions is not None else value
+        return self._overlay_instructions(config, value)
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         value = self.__wrapped__.get_tuple(config)
+        return self._overlay_instructions(config, value)
+
+    def _overlay_instructions(
+        self, config: RunnableConfig, value: CheckpointTuple | None
+    ) -> CheckpointTuple | None:
         instructions = _instructions_from_config(config)
-        return instructions.overlay(value) if instructions is not None else value
+        if instructions is None:
+            return value
+        if not (config.get("configurable") or {}).get("checkpoint_ns", ""):
+            instructions.checkpoint_restored = value is not None
+        return instructions.overlay(value)
 
     def get(self, config: RunnableConfig) -> Checkpoint | None:
         value = self.get_tuple(config)
