@@ -1,8 +1,6 @@
 # Prepare Foundry resources
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-Prepare a Foundry project and the model or external-service access your application requires. The following example uses a Foundry model deployment and Tavily search. You can reuse existing resources where possible.
+Before hosting your existing LangGraph application on Foundry, prepare the resources it needs. This first step in the [migration guide](../migrate-langgraph-to-foundry.md) covers a Foundry project, model access, and search access. The Deep Research example uses a Foundry model deployment and Tavily search. You can reuse existing resources where possible.
 
 ## Before you start
 
@@ -36,4 +34,4 @@ Before continuing, have the project endpoint, subscription ID, project ARM ID, p
 
 ## Next steps
 
-Previous: [Overview](../migrate-langgraph-to-foundry.md) · Next: [Host and test the agent locally](02-run-locally.md)
+Previous: [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Host and test the agent locally](02-run-locally.md)

@@ -1,8 +1,6 @@
 # Deploy and verify the agent
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-Deploy the application prepared in the previous article, grant its runtime identity access, and verify a hosted request.
+With the [deployment files and configuration ready](03-prepare-deployment.md), you can deploy the application to Foundry. This article walks through deployment, granting the agent's runtime identity access to its project connection, and testing a hosted request. The final check verifies that the deployed agent can use its model and search tool and return the expected output.
 
 ## Before you start
 
@@ -63,4 +61,4 @@ Check the final response status, expected tool calls, and application outputs. F
 
 Choose [persistence and recovery](05-persistence-and-recovery.md) when your application needs them. Use [diagnostics](06-diagnostics.md) to inspect requests and [evaluation](07-evaluation.md) to compare migration results.
 
-Previous: [Prepare the agent for deployment](03-prepare-deployment.md) · Next: [Enable persistence and recovery](05-persistence-and-recovery.md)
+Previous: [Prepare the agent for deployment](03-prepare-deployment.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Enable persistence and recovery](05-persistence-and-recovery.md)

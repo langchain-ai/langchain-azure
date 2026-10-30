@@ -1,8 +1,6 @@
 # Prepare the agent for deployment
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-Once you have verified that the agent runs correctly with the local Responses host, proceed with deploying it to Foundry.
+After [verifying the local host](02-run-locally.md), prepare the files and configuration Foundry will use to build and start the same application. This article covers deployment files, runtime dependencies, upload exclusions, project connections, and environment variables. By the end, the application will be ready for the deployment and runtime-access checks in the next article.
 
 ## Before you start
 
@@ -193,4 +191,4 @@ Restart the local host with the command from [Host and test the agent locally](0
 
 ## Next steps
 
-Previous: [Host and test the agent locally](02-run-locally.md) · Next: [Deploy and verify the agent](04-deploy-and-verify.md)
+Previous: [Host and test the agent locally](02-run-locally.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Deploy and verify the agent](04-deploy-and-verify.md)

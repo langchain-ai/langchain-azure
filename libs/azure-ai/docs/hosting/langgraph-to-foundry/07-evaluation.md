@@ -1,8 +1,6 @@
 # Evaluate the migrated agent
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-Logs and traces help verify that the agent executes as expected, but successful execution does not establish answer quality. Evaluation is therefore important to check whether the migrated agent still produces useful, accurate answers that meet user needs.
+Alongside [execution diagnostics](06-diagnostics.md), evaluate whether the hosted agent still produces useful, accurate answers. This article shows how to connect your existing evaluation runner to the deployed agent and rerun the same cases. Compare scores, failures, and latency with the original application using the same pass criteria.
 
 ## Before you start
 
@@ -43,4 +41,4 @@ Save both runs with the dataset version, evaluation settings, agent version, and
 
 ## Next steps
 
-Previous: [Inspect logs and traces](06-diagnostics.md) · Next: [Migration acceptance checklist](../migrate-langgraph-to-foundry.md#migration-acceptance-checklist)
+Previous: [Inspect logs and traces](06-diagnostics.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Migration acceptance checklist](../migrate-langgraph-to-foundry.md#migration-acceptance-checklist)

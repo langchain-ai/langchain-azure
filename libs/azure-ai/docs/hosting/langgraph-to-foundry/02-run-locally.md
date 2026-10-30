@@ -1,8 +1,6 @@
 # Host and test the agent locally
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-First verify that your existing graph works through the Responses API before adding remote deployment configuration. Keep the current model provider, tools, and prompts.
+With the [resources prepared](01-prepare-resources.md), you can test your existing graph through the local Responses host. In this article, you will add the hosting dependency, load the graph, and verify a representative request before preparing a remote deployment. Keep the current model provider, tools, and prompts.
 
 ## Before you start
 
@@ -93,4 +91,4 @@ Verify that the response has `status: completed`, no error, and the expected sea
 
 ## Next steps
 
-Previous: [Prepare Foundry resources](01-prepare-resources.md) · Next: [Prepare the agent for deployment](03-prepare-deployment.md)
+Previous: [Prepare Foundry resources](01-prepare-resources.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Prepare the agent for deployment](03-prepare-deployment.md)

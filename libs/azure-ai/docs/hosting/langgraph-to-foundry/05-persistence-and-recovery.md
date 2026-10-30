@@ -1,8 +1,6 @@
 # Enable persistence and recovery
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-After verifying the remote deployment, configure durable checkpoints for state that must survive across turns. Unfinished-request recovery is needed when running requests must survive a host failure.
+Once the agent [runs in Foundry](04-deploy-and-verify.md), decide what state and work must survive across turns or host restarts. This article shows how to preserve messages, reports, and task progress with durable checkpoints. It then covers recovery for requests interrupted by a host failure. Apply the parts that match your application's requirements.
 
 ## Before you start
 
@@ -125,4 +123,4 @@ The [recovery guide](https://learn.microsoft.com/azure/foundry/agents/how-to/rec
 
 ## Next steps
 
-Previous: [Deploy and verify the agent](04-deploy-and-verify.md) · Next: [Inspect logs and traces](06-diagnostics.md)
+Previous: [Deploy and verify the agent](04-deploy-and-verify.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Inspect logs and traces](06-diagnostics.md)

@@ -1,8 +1,6 @@
 # Inspect logs and traces
 
-[Overview](../migrate-langgraph-to-foundry.md)
-
-Logs and traces help you understand how the agent runs and diagnose failures or slow requests.
+As you [deploy and test the agent](04-deploy-and-verify.md), logs and traces help explain failures and slow requests. This article shows where to find Responses records, console logs, system events, traces, and persisted graph state. You will also connect Application Insights and check that traces include the expected model and tool operations.
 
 ## Before you start
 
@@ -95,4 +93,4 @@ You can also find these traces in the Azure portal: open the Log Analytics works
 
 ## Next steps
 
-Previous: [Enable persistence and recovery](05-persistence-and-recovery.md) · Next: [Evaluate the migrated agent](07-evaluation.md)
+Previous: [Enable persistence and recovery](05-persistence-and-recovery.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Evaluate the migrated agent](07-evaluation.md)
