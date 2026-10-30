@@ -836,6 +836,7 @@ class ResponsesHostServer:
         # response.failed with server_error rather than a 4xx before execution.
         if _response_field(parent, "id") != parent_id:
             raise ValueError("The response provider returned a different parent.")
+        # shortcut: ordinary parents may be in_progress, revisit with shared checks.
         if self._is_response_branch(request, context) and (
             _response_field(parent, "status") != "completed"
         ):
