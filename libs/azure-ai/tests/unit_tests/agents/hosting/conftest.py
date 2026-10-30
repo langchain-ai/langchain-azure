@@ -286,10 +286,14 @@ def make_recovery_probe_graph(
 
         async def aget_state(self, config: dict[str, Any]) -> Any:
             captured["state_config"] = config
-            if pending_interrupt is None:
-                return SimpleNamespace(tasks=())
-            task = SimpleNamespace(result=None, interrupts=(pending_interrupt,))
-            return SimpleNamespace(tasks=(task,))
+            tasks = (
+                (SimpleNamespace(result=None, interrupts=(pending_interrupt,)),)
+                if pending_interrupt is not None
+                else ()
+            )
+            return SimpleNamespace(
+                config=config, created_at="2026-10-30T00:00:00Z", tasks=tasks
+            )
 
     return cast(CompiledStateGraph, _RecoveryGraph())
 

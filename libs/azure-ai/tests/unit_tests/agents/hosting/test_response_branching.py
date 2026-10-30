@@ -363,11 +363,17 @@ def test_branch_validation_precedes_stream(
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("enable_response_branching", [False, True])
 def test_siblings_and_descendants_use_the_selected_parent(
-    graph: CompiledStateGraph, monkeypatch: pytest.MonkeyPatch, stream: bool
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    enable_response_branching: bool,
 ) -> None:
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    server = ResponsesHostServer(
+        graph, store=provider, enable_response_branching=enable_response_branching
+    )
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
@@ -462,6 +468,105 @@ def test_continuation_reuses_parent_and_selected_checkpoint(
     assert parent_reads.await_args.args == (parent["id"],)
     if branching:
         assert checkpoint_reads == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_response_history_selects_the_parent_without_a_checkpointer(
+    graph: CompiledStateGraph, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    server = ResponsesHostServer(
+        graph.copy({"checkpointer": None}), store=InMemoryResponseProvider()
+    )
+    chain_get = AsyncMock(side_effect=AssertionError("Unexpected chain read"))
+    chain_set = AsyncMock(side_effect=AssertionError("Unexpected chain write"))
+    monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        _create(client, input="B", previous_response_id=parent["id"])
+        child = _create(
+            client, input="C", previous_response_id=parent["id"], stream=stream
+        )
+    assert child["status"] == "completed"
+    assert _text(child) == "A|C"
+    chain_get.assert_not_awaited()
+    chain_set.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_response_linkage_reemits_and_resumes_interrupts_without_chain_access(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    def pause(state: MessagesState) -> dict[str, Any]:
+        decision = interrupt("Approval needed")
+        return {"messages": [AIMessage(content=f"Approved: {decision}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("pause", pause)
+    builder.add_edge(START, "pause")
+    builder.add_edge("pause", END)
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(
+        builder.compile(checkpointer=InMemorySaver()), store=provider
+    )
+    chain_get = AsyncMock(side_effect=AssertionError("Unexpected chain read"))
+    chain_set = AsyncMock(side_effect=AssertionError("Unexpected chain write"))
+    monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A", stream=stream)
+        repeated = _create(
+            client,
+            input="still waiting",
+            previous_response_id=parent["id"],
+            stream=stream,
+        )
+        approval = next(
+            item
+            for item in repeated["output"]
+            if item["type"] == "mcp_approval_request"
+        )
+        child = _create(
+            client,
+            previous_response_id=repeated["id"],
+            stream=stream,
+            input=[
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+            ],
+        )
+        assert client.portal is not None
+        stored_parent = client.portal.call(provider.get_response, parent["id"])
+        stored_repeated = client.portal.call(provider.get_response, repeated["id"])
+    assert parent["status"] == repeated["status"] == child["status"] == "completed"
+    assert (
+        _config(stored_parent)["configurable"]
+        == _config(stored_repeated)["configurable"]
+    )
+    assert _text(child) == "Approved: Approval needed"
+    chain_get.assert_not_awaited()
+    chain_set.assert_not_awaited()
+
+
+@pytest.mark.parametrize("enable_response_branching", [False, True])
+def test_response_linkage_leaves_the_parent_conversation_head_unchanged(
+    graph: CompiledStateGraph, enable_response_branching: bool
+) -> None:
+    server = ResponsesHostServer(
+        graph,
+        store=InMemoryResponseProvider(),
+        enable_response_branching=enable_response_branching,
+    )
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A", conversation="conv-original")
+        child = _create(client, input="B", previous_response_id=parent["id"])
+        continued = _create(client, input="C", conversation="conv-original")
+    assert child["status"] == continued["status"] == "completed"
+    assert _text(child) == "A|B"
+    assert _text(continued) == "A|C"
 
 
 def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -> None:
@@ -1023,7 +1128,9 @@ def test_parent_checkpoint_remains_user_scoped(
     stream: bool,
 ) -> None:
     server = ResponsesHostServer(
-        graph, store=InMemoryResponseProvider(), enable_response_branching=True
+        graph,
+        store=InMemoryResponseProvider(),
+        enable_response_branching=True,
     )
     with TestClient(server.app) as client:
         parent = client.post(
@@ -1206,3 +1313,26 @@ def test_external_host_remains_supported_without_branching(
     with TestClient(server.app) as client:
         response = _create(client, input="A")
     assert _text(response) == "A"
+
+
+@pytest.mark.parametrize("caller", ["user-b", None])
+def test_ordinary_parent_checkpoint_remains_user_scoped(
+    graph: CompiledStateGraph, caller: str | None
+) -> None:
+    server = ResponsesHostServer(
+        graph,
+        store=InMemoryResponseProvider(),
+        enable_response_branching=False,
+    )
+    with TestClient(server.app) as client:
+        parent = client.post(
+            "/responses", json={"input": "A"}, headers={USER_ID: "user-a"}
+        ).json()
+        response = client.post(
+            "/responses",
+            json={"input": "B", "previous_response_id": parent["id"]},
+            headers={USER_ID: caller} if caller is not None else {},
+        ).json()
+    assert parent["status"] == "completed"
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "previous_response_not_found"
