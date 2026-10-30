@@ -29,15 +29,15 @@ Your local `.env` must remain outside source control and source uploads. See [Co
 
 Complete the first four articles to prepare, test, and deploy your application. Then use the remaining articles for persistence and recovery, diagnostics, and evaluation as your application requires.
 
-| Article | Outcome |
-| --- | --- |
-| [1. Prepare Foundry resources](langgraph-to-foundry/01-prepare-resources.md) | The project, model, search access, and required configuration values are ready. |
-| [2. Host and test the agent locally](langgraph-to-foundry/02-run-locally.md) | The existing graph runs through the local Responses host and completes a representative request. |
-| [3. Prepare the agent for deployment](langgraph-to-foundry/03-prepare-deployment.md) | Deployment files, runtime dependencies, upload exclusions, connections, and environment variables are ready. |
-| [4. Deploy and verify the agent](langgraph-to-foundry/04-deploy-and-verify.md) | The deployed agent has the required runtime access and completes a representative hosted request. |
-| [5. Enable persistence and recovery](langgraph-to-foundry/05-persistence-and-recovery.md) | Required state survives across turns and sessions; unfinished-request recovery is verified separately when needed. |
-| [6. Inspect logs and traces](langgraph-to-foundry/06-diagnostics.md) | Logs and correlated traces show the expected model and tool operations for a request. |
-| [7. Evaluate the migrated agent](langgraph-to-foundry/07-evaluation.md) | The existing evaluation cases compare the original and hosted applications against the same criteria. |
+| Stage | Article | Outcome |
+| --- | --- | --- |
+| Prepare | [1. Prepare Foundry resources](langgraph-to-foundry/01-prepare-resources.md) | The project, model, search access, and required configuration values are ready. |
+| Local | [2. Host and test the agent locally](langgraph-to-foundry/02-run-locally.md) | The existing graph runs through the local Responses host and completes a representative request. |
+| Deploy | [3. Prepare the agent for deployment](langgraph-to-foundry/03-prepare-deployment.md) | Deployment files, runtime dependencies, upload exclusions, connections, and environment variables are ready. |
+| Deploy | [4. Deploy and verify the agent](langgraph-to-foundry/04-deploy-and-verify.md) | The deployed agent has the required runtime access and completes a representative hosted request. |
+| Production readiness | [5. Enable persistence and recovery](langgraph-to-foundry/05-persistence-and-recovery.md) | Required state survives across turns and sessions; unfinished-request recovery is verified separately when needed. |
+| Production readiness | [6. Inspect logs and traces](langgraph-to-foundry/06-diagnostics.md) | Logs and correlated traces show the expected model and tool operations for a request. |
+| Production readiness | [7. Evaluate the migrated agent](langgraph-to-foundry/07-evaluation.md) | The existing evaluation cases compare the original and hosted applications against the same criteria. |
 
 ## Migration acceptance checklist
 
