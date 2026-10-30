@@ -222,11 +222,16 @@ result = await child.ainvoke(state)
 
 Apply this in each factory that constructs such a child. Without preparation,
 the host cannot guarantee instruction isolation inside that child. The helper
-returns a shallow graph copy and installs transparent message-channel adapters
-on its discoverable subgraphs; calls outside a hosted Responses execution keep
-their ordinary channel behavior. It does not replace reducers, models, or
-middleware. Saved `Send` payloads are overlaid separately so workers also receive
-the current instructions after recovery.
+returns a shallow graph copy and installs transparent message- and task-channel
+adapters on its discoverable subgraphs; calls outside a hosted Responses
+execution keep their ordinary channel behavior. Apply the helper after graph
+configuration that creates copies, such as `with_config`, because LangGraph
+rebuilds the task channel when copying a graph. It does not replace reducers,
+models, or middleware. `Send` workers receive the current instructions when
+their task inputs are read, both on first execution and after recovery,
+including when their message payloads are built independently of parent state.
+The adapters leave the caller's payload unchanged and exclude temporary
+instructions from stored task values.
 
 Saved `Send` payloads can use list or tuple `messages` in dictionaries,
 dataclasses, or Pydantic models, including allowed extra fields. Projection

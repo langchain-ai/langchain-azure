@@ -365,6 +365,19 @@ class _InstructionMessagesChannel(ObjectProxy):
         return self.__wrapped__.update(values)
 
 
+class _InstructionTasksChannel(_InstructionMessagesChannel):
+    """Overlay fresh and restored Send payloads at the same task-read boundary."""
+
+    def get(self) -> Any:
+        value = self.__wrapped__.get()
+        instructions = _active_instructions.get()
+        if instructions is None:
+            return value
+        if instructions.message is None:
+            return _without_request_instructions(value)
+        return instructions._overlay_sends(value)
+
+
 def with_response_instructions(graph: _GraphT) -> _GraphT:
     """Enable request-scoped instructions in a compiled graph's message reads.
 
@@ -373,7 +386,8 @@ def with_response_instructions(graph: _GraphT) -> _GraphT:
     runtime or invoked through indirection.
 
     The returned graph is a shallow copy. Discoverable subgraphs share their
-    existing graph objects and receive transparent message-channel adapters.
+    existing graph objects and receive transparent message- and task-channel
+    adapters. Apply this helper after configuration that creates graph copies.
     Outside a hosted Responses request, channel behavior is unchanged.
 
     Args:
@@ -390,18 +404,19 @@ def with_response_instructions(graph: _GraphT) -> _GraphT:
             child = with_response_instructions(builder.compile(checkpointer=True))
             result = await child.ainvoke(state)
     """
-    prepared = graph.copy()
+    prepared = graph.copy({"channels": dict(graph.channels)})
     for child in [prepared, *(child for _, child in graph.get_subgraphs(recurse=True))]:
         if not isinstance(child, Pregel):
             continue
-        channel = child.channels.get("messages")
-        if isinstance(channel, BaseChannel) and not isinstance(
-            channel, _InstructionMessagesChannel
+        for key, channel_type in (
+            ("messages", _InstructionMessagesChannel),
+            (TASKS, _InstructionTasksChannel),
         ):
-            child.channels = {
-                **child.channels,
-                "messages": _InstructionMessagesChannel(channel),
-            }
+            channel = child.channels.get(key)
+            if isinstance(channel, BaseChannel) and not isinstance(
+                channel, channel_type
+            ):
+                child.channels = {**child.channels, key: channel_type(channel)}
     return prepared
 
 

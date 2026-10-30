@@ -672,6 +672,7 @@ class _PydanticExtraTaskInput(BaseModel, extra="allow", frozen=True):
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("instructions", [None, "", "resumed-instruction"])
 @pytest.mark.parametrize("schema", [MessagesState, _AppendingMessagesState])
+@pytest.mark.parametrize("forward_parent_messages", [False, True])
 @pytest.mark.parametrize(
     "task_schema",
     [
@@ -684,14 +685,23 @@ class _PydanticExtraTaskInput(BaseModel, extra="allow", frozen=True):
     ids=["dict", "dataclass", "pydantic", "pydantic-tuple", "pydantic-extra"],
 )
 def test_saved_send_resume_uses_only_current_request_instructions(
-    stream: bool, instructions: str | None, schema: type, task_schema: type
+    stream: bool,
+    instructions: str | None,
+    schema: type,
+    task_schema: type,
+    forward_parent_messages: bool,
 ) -> None:
     capture = _CaptureMessages()
     model = FakeListChatModel(responses=["answer"], callbacks=[capture])
     dispatched: list[Any] = []
 
     def dispatch(state: MessagesState) -> Command:
-        payload = task_schema(messages=state["messages"])
+        messages = (
+            state["messages"]
+            if forward_parent_messages
+            else [HumanMessage(content="first")]
+        )
+        payload = task_schema(messages=messages)
         dispatched.append(payload)
         return Command(goto=Send("answer", payload))
 
@@ -754,10 +764,9 @@ def test_saved_send_resume_uses_only_current_request_instructions(
         if isinstance(dispatched[0], dict)
         else dispatched[0].messages
     )
-    assert [message.content for message in original_messages] == [
-        "request-only",
-        "first",
-    ]
+    assert [message.content for message in original_messages] == (
+        ["request-only", "first"] if forward_parent_messages else ["first"]
+    )
     for checkpoint in saver.list(None):
         assert not _contains_instruction(checkpoint.checkpoint)
         assert not _contains_instruction(checkpoint.pending_writes)
@@ -821,6 +830,171 @@ def test_send_overlay_preserves_frozen_payloads_and_explicit_messages() -> None:
     assert checkpoint["channel_values"][TASKS] == [*packets, untouched]
     assert not _contains_instruction(original.checkpoint)
     assert _ResponseInstructions.create(None, "omitted").overlay(original) is original
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("conditional", [False, True])
+@pytest.mark.parametrize("instructions", [None, "", "request-only"])
+def test_fresh_send_instructions_do_not_depend_on_checkpointing(
+    checkpointed: bool, stream: bool, conditional: bool, instructions: str | None
+) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    messages = [
+        SystemMessage(content="worker-system", id="worker-system"),
+        HumanMessage(content="worker-input", id="worker-input"),
+    ]
+    payload = {"messages": messages}
+
+    def route(state: MessagesState) -> list[Send]:
+        return [Send("answer", payload)]
+
+    def dispatch(state: MessagesState) -> Command:
+        return Command(goto=route(state))
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        return {"messages": [await model.ainvoke(state["messages"])]}
+
+    saver = InMemorySaver() if checkpointed else None
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
+    if conditional:
+        builder.add_conditional_edges(START, route)
+    else:
+        builder.add_node("dispatch", dispatch)
+        builder.add_edge(START, "dispatch")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=saver)
+    original_tasks = graph.channels[TASKS]
+    server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
+    assert graph.channels[TASKS] is original_tasks
+    hosted_tasks = server.graph.channels[TASKS]
+    prepared = with_response_instructions(server.graph)
+    assert server.graph.channels[TASKS] is hosted_tasks
+    with TestClient(server.app) as client:
+        _create(
+            client,
+            stream=stream,
+            input="parent-input",
+            instructions=instructions,
+        )
+        assert client.portal is not None
+        client.portal.call(
+            prepared.ainvoke,
+            {"messages": [HumanMessage(content="outside-host")]},
+            {"configurable": {"thread_id": "outside-host"}},
+        )
+    assert [[message.content for message in call] for call in model._calls] == [
+        [*([instructions] if instructions else []), "worker-system", "worker-input"],
+        ["worker-system", "worker-input"],
+    ]
+    assert payload["messages"] is messages
+    assert [message.content for message in messages] == [
+        "worker-system",
+        "worker-input",
+    ]
+    if saver is not None:
+        for checkpoint in saver.list(None):
+            assert not _contains_instruction(checkpoint.checkpoint)
+            assert not _contains_instruction(checkpoint.metadata)
+            assert not _contains_instruction(checkpoint.pending_writes)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize(
+    "task_schema",
+    [
+        _ReplacingMessagesState,
+        _DataclassTaskInput,
+        _PydanticTaskInput,
+        _PydanticTupleTaskInput,
+        _PydanticExtraTaskInput,
+    ],
+    ids=["dict", "dataclass", "pydantic", "pydantic-tuple", "pydantic-extra"],
+)
+def test_send_model_inputs_are_consistent_before_and_after_recovery(
+    stream: bool, nested: bool, task_schema: type
+) -> None:
+    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
+    failed = False
+    messages = [
+        SystemMessage(content="worker-system", id="worker-system"),
+        HumanMessage(content="worker-input", id="worker-input"),
+    ]
+    payload = task_schema(messages=messages)
+
+    def dispatch(state: MessagesState) -> Command:
+        return Command(goto=Send("answer", payload))
+
+    async def answer(state: Any) -> dict[str, Any]:
+        nonlocal failed
+        current = state["messages"] if isinstance(state, dict) else state.messages
+        result = await model.ainvoke(current)
+        if not failed:
+            failed = True
+            raise RuntimeError("retry this Send task")
+        return {"messages": [result]}
+
+    saver = InMemorySaver()
+    builder = StateGraph(MessagesState)
+    builder.add_node("dispatch", dispatch)
+    builder.add_node("answer", answer, input_schema=task_schema)
+    builder.add_edge(START, "dispatch")
+    builder.add_edge("answer", END)
+    provider = InMemoryResponseProvider()
+    graph = builder.compile(checkpointer=True if nested else saver)
+    if nested:
+        parent = StateGraph(MessagesState)
+        parent.add_node("child", graph)
+        parent.add_edge(START, "child")
+        parent.add_edge("child", END)
+        graph = parent.compile(checkpointer=saver)
+    server = ResponsesHostServer(graph, store=provider)
+    request = cast(
+        CreateResponse,
+        {"input": "parent-input", "instructions": "request-only", "stream": stream},
+    )
+    with TestClient(server.app) as client:
+        first = _create(
+            client,
+            stream=stream,
+            expected_status="failed",
+            input="parent-input",
+            instructions="request-only",
+        )
+        assert client.portal is not None
+        stored = client.portal.call(provider.get_response, first["id"])
+        assert stored is not None
+        context = ResponseContext(
+            response_id=stored["id"],
+            mode_flags=ResponseModeFlags(stream=stream, store=True, background=False),
+            request=request,
+            provider=provider,
+        )
+        context.is_recovery = True
+        context.persisted_response = stored
+
+        async def recover() -> list[Any]:
+            return [
+                event
+                async for event in server._handle_create_async_gen(
+                    request, context, asyncio.Event()
+                )
+            ]
+
+        events = client.portal.call(recover)
+    assert events[-1]["type"] == "response.completed"
+    assert [[message.content for message in call] for call in model._calls] == [
+        ["request-only", "worker-system", "worker-input"],
+        ["request-only", "worker-system", "worker-input"],
+    ]
+    original = payload["messages"] if isinstance(payload, dict) else payload.messages
+    assert list(original) == messages
+    for checkpoint in saver.list(None):
+        assert not _contains_instruction(checkpoint.checkpoint)
+        assert not _contains_instruction(checkpoint.metadata)
+        assert not _contains_instruction(checkpoint.pending_writes)
 
 
 def test_existing_agent_middleware_and_system_prompt_remain_in_place() -> None:

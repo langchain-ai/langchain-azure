@@ -428,15 +428,20 @@ class ResponsesHostServer:
         graceful_shutdown_timeout: Optional[int] = None,
     ) -> None:
         self._validate_graph_schema(graph)
-        if isinstance(graph, CompiledStateGraph):
-            graph = with_response_instructions(graph)
         saver = getattr(graph, "checkpointer", None)
         if enable_response_branching:
             _validate_response_branching_checkpointer(saver)
         if isinstance(saver, BaseCheckpointSaver) and not isinstance(
             saver, _RequestCheckpointSaver
         ):
-            graph = graph.copy({"checkpointer": _RequestCheckpointSaver(saver)})
+            graph_updates: dict[str, Any] = {
+                "checkpointer": _RequestCheckpointSaver(saver)
+            }
+            if isinstance(graph, CompiledStateGraph):
+                graph_updates["channels"] = dict(graph.channels)
+            graph = graph.copy(graph_updates)
+        if isinstance(graph, CompiledStateGraph):
+            graph = with_response_instructions(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._enable_response_branching = enable_response_branching
