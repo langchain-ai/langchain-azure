@@ -63,6 +63,8 @@ except ImportError as exc:
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -89,6 +91,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._instructions import _ResponseInstructions
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -107,8 +110,7 @@ from ._storage.state_store_factory import (
 
 if TYPE_CHECKING:
     from azure.ai.agentserver.responses.models import CreateResponse
-    from langgraph.graph.state import CompiledStateGraph
-    from langgraph.types import Command, Interrupt
+    from langgraph.types import Interrupt
 
 
 @asynccontextmanager
@@ -433,7 +435,12 @@ class ResponsesHostServer:
         if isinstance(saver, BaseCheckpointSaver) and not isinstance(
             saver, _RequestCheckpointSaver
         ):
-            graph = graph.copy({"checkpointer": _RequestCheckpointSaver(saver)})
+            graph_updates: dict[str, Any] = {
+                "checkpointer": _RequestCheckpointSaver(saver)
+            }
+            if isinstance(graph, CompiledStateGraph):
+                graph_updates["channels"] = dict(graph.channels)
+            graph = graph.copy(graph_updates)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._enable_response_branching = enable_response_branching
@@ -600,6 +607,11 @@ class ResponsesHostServer:
                 - ``langgraph_checkpoint`` mode passes only the current request input;
                     prior state is restored by LangGraph through ``thread_id``.
 
+                Top-level ``instructions`` is a temporary developer message for
+                this response. Intermediate checkpoints may retain it; the host
+                removes it from the final state when the graph finishes.
+                Explicit system/developer input messages are retained.
+
                 Override in a subclass to support custom-state graphs.
 
         Args:
@@ -615,14 +627,16 @@ class ResponsesHostServer:
         """
         mode = self._resolve_conversation_management()
         current_items = list(await context.get_input_items())
-        instructions = request.get("instructions")
+        instructions = _ResponseInstructions.create(
+            request.get("instructions"), context.response_id
+        )
 
         if mode == "langgraph_checkpoint":
             graph_input = build_messages_input(
                 current_items,
-                instructions=instructions if isinstance(instructions, str) else None,
                 skip_call_ids=skip_call_ids or frozenset(),
             )
+            graph_input["messages"] = instructions.prepend(graph_input["messages"])
             self._log_conversation_input_built(
                 mode=mode,
                 request=request,
@@ -645,9 +659,9 @@ class ResponsesHostServer:
         ]
         graph_input = build_messages_input(
             history_items + current_items,
-            instructions=instructions if isinstance(instructions, str) else None,
             skip_call_ids=skip_call_ids or frozenset(),
         )
+        graph_input["messages"] = instructions.prepend(graph_input["messages"])
         self._log_conversation_input_built(
             mode=mode,
             request=request,
@@ -1052,6 +1066,9 @@ class ResponsesHostServer:
                 .with_cancellation_signal(cancellation_signal)
                 .runnable_config
             )
+            instructions = _ResponseInstructions.create(
+                request.get("instructions"), context.response_id
+            )
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1086,12 +1103,12 @@ class ResponsesHostServer:
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
-                # checkpointer holds the mid-turn state, so resume it (input
-                # ``None``) rather than re-injecting the original input. If the
-                # response has no checkpoint yet, replay the request through
+                # checkpointer holds the mid-turn state. An empty resume map
+                # preserves completed tasks at an explicitly addressed checkpoint.
+                # If the response has no checkpoint yet, replay the request through
                 # the normal input / HITL parsing path below.
                 logger.debug("Recovery: resuming graph from persisted checkpoint")
-                graph_input = None
+                graph_input = Command(resume={})
 
             else:
                 if recovering:
@@ -1143,8 +1160,11 @@ class ResponsesHostServer:
                     graph_input = await self.build_input(
                         request, context, skip_call_ids=consumed_call_ids
                     )
-
             active_interrupts: list["Interrupt"] = []
+            if checkpoint_ref is None:
+                graph_input = await instructions.prepare(
+                    self._graph, config, graph_input
+                )
             async with _closing_stream(
                 self._graph.astream(
                     graph_input,
@@ -1163,6 +1183,20 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
+            if checkpoint_ref is not None and not (
+                context.shutdown.is_set() or cancellation_signal.is_set()
+            ):
+                final_config = (
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
+                final_config = await instructions.finish(self._graph, final_config)
+                clean_ref = HostingRunnableConfig(final_config).checkpoint_ref
+                if clean_ref is not None and clean_ref != checkpoint_ref:
+                    task_storage.store_checkpoint_ref(clean_ref)
+                    checkpoint_ref = clean_ref
+                    yield stream.checkpoint()
             if checkpoint_ref is not None and not (
                 self._enable_response_branching
                 and bool(request.get("previous_response_id"))
@@ -1246,6 +1280,7 @@ class ResponsesHostServer:
                 request=request,
             )
 
+        stream.response["instructions"] = request.get("instructions")
         metadata = dict(stream.response.get("metadata") or {})
         metadata[METADATA_STEERABLE_CONVERSATION] = str(
             self._steerable_conversations

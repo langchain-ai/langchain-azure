@@ -21,6 +21,7 @@ from azure.ai.agentserver.core import (
     reset_request_context,
     set_request_context,
 )
+from langchain_core.messages import SystemMessage
 from langchain_core.runnables import ConfigurableFieldSpec, RunnableConfig
 from langgraph.channels import DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
@@ -40,6 +41,7 @@ from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
+from langchain_azure_ai.agents.hosting._instructions import _ResponseInstructions
 
 from .conftest import make_checkpointed_echo_graph
 from .test_foundry_checkpoint_saver import (
@@ -89,6 +91,37 @@ class _JsonWithBinaryTags:
         if kind == "bytearray":
             return bytearray(data)
         return json.loads(data)
+
+
+async def test_saver_preserves_intermediate_instruction_messages(
+    backend: BaseCheckpointSaver,
+) -> None:
+    saver = _RequestCheckpointSaver(backend)
+    instruction = _ResponseInstructions.create("request-only", "response-test").message
+    assert instruction is not None
+    messages = [instruction, SystemMessage(content="explicit-system")]
+    checkpoint = _checkpoint("0001", "input")
+    checkpoint["channel_values"]["messages"] = messages
+    config = await saver.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
+    constructor = instruction.to_json()
+    writes = [("__return__", [constructor]), ("messages", messages)]
+    if isinstance(backend, InMemorySaver):
+        saver.put_writes(config, writes, "task")
+    else:
+        await saver.aput_writes(config, writes, "task")
+    raw = await backend.aget_tuple(config)
+    assert raw is not None
+    assert raw.checkpoint["channel_values"]["messages"] == messages
+    assert raw.pending_writes is not None
+    assert next(
+        value for _, channel, value in raw.pending_writes if channel == "__return__"
+    ) == [constructor]
+    with closing(_CheckpointReadContext()) as reads, reads.bind():
+        reads.pin(saver, config)
+        assert await saver.aget_tuple(config) == raw
+        assert await saver.aget_tuple(config) == raw
+        assert reads.cache is not None
+    assert await backend.aget_tuple(config) == raw
 
 
 @pytest.mark.parametrize(

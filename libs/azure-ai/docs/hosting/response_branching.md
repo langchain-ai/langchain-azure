@@ -195,6 +195,26 @@ Do not inherit a previous response's top-level `instructions` through a graph
 checkpoint. Distinguish request-scoped instructions from actual system or
 developer message items supplied in conversation history.
 
+The host prepends the current request's instructions as a tagged developer
+message in the root graph's `messages` state. Every new request, including a
+tool-output or approval continuation, replaces that message; omitting
+`instructions`, passing `null`, or passing an empty string removes it.
+Recovery of the same response keeps its original instructions.
+
+Message updates in a tool-output continuation retain the graph reducer's input
+semantics, including a single message object or string.
+
+Intermediate checkpoints may contain the temporary message, including while
+the graph is interrupted. When the graph finishes, the host saves a clean
+final checkpoint before completing the response and publishing its final
+checkpoint reference. Earlier checkpoints are unchanged. Explicit system and
+developer input messages remain part of the conversation history.
+
+Instruction handling runs at request and completion boundaries. The host does
+not wrap graph channels, tasks, caches, or child graphs. Graph authors remain
+responsible for preserving instructions when replacing messages internally,
+and for any private message lists or cached prompt copies.
+
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore
 them, not just the latest checkpoint.
@@ -494,7 +514,7 @@ behavior are distinguished below; neither indicates completed support.
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
-| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
+| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | Covered by request-boundary and final-checkpoint regression tests; historical checkpoints may retain temporary instructions.                                 |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
 tool replies, approval decisions, and resume state between children, is deferred.
