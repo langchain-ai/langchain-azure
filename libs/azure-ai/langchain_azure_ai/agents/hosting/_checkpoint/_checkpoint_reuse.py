@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""Request-local checkpoint read reuse."""
+"""Request-local checkpoint reuse for any LangGraph saver."""
 
 from __future__ import annotations
 
@@ -171,7 +171,7 @@ _checkpoint_reads: ContextVar[_CheckpointReadContext | None] = ContextVar(
 
 
 class _RequestCheckpointSaver(ObjectProxy):
-    """Reuse checkpoint reads without changing the wrapped saver.
+    """Decorate a saver with request-local reads; forward its other capabilities.
 
     Only the shallow copies used by LangGraph's allowlist clones are supported.
     Deep copying and pickling this live runtime proxy are not supported.
