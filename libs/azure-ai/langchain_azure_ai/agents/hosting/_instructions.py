@@ -116,17 +116,23 @@ class _ResponseInstructions:
                 continue
             if isinstance(incoming, Overwrite):
                 incoming = Overwrite(self.prepend(incoming.value))
-            else:
+            elif isinstance(incoming, list):
                 incoming = [
                     message
                     for message in incoming
                     if not _is_request_instruction(message)
                 ]
+            elif _is_request_instruction(incoming):
+                incoming = []
             incoming_updates.append(incoming)
         if incoming_updates:
-            if not previous and not isinstance(graph_input, Command):
+            incoming = incoming_updates[0]
+            if (
+                not previous
+                and not isinstance(graph_input, Command)
+                and isinstance(incoming, (list, Overwrite))
+            ):
                 # Let LangGraph persist the first input before applying its reducer.
-                incoming = incoming_updates[0]
                 updates["messages"] = self.prepend(
                     incoming.value if isinstance(incoming, Overwrite) else incoming
                 )

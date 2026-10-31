@@ -201,6 +201,9 @@ tool-output or approval continuation, replaces that message; omitting
 `instructions`, passing `null`, or passing an empty string removes it.
 Recovery of the same response keeps its original instructions.
 
+Message updates in a tool-output continuation retain the graph reducer's input
+semantics, including a single message object or string.
+
 Intermediate checkpoints may contain the temporary message, including while
 the graph is interrupted. When the graph finishes, the host saves a clean
 final checkpoint before completing the response and publishing its final
