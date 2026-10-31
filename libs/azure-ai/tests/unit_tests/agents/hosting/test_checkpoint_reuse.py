@@ -11,7 +11,7 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import closing
 from copy import copy, deepcopy
-from types import MappingProxyType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -21,28 +21,15 @@ from azure.ai.agentserver.core import (
     reset_request_context,
     set_request_context,
 )
-from langchain_core.load import load
-from langchain_core.messages import (
-    AIMessage,
-    AnyMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-    convert_to_messages,
-    message_to_dict,
-    messages_from_dict,
-)
+from langchain_core.messages import SystemMessage
 from langchain_core.runnables import ConfigurableFieldSpec, RunnableConfig
-from langgraph.cache.base import FullKey
-from langgraph.cache.memory import InMemoryCache
 from langgraph.channels import DeltaChannel
 from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.constants import TASKS
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, Send, interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import TypedDict
 
@@ -54,10 +41,7 @@ from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
-from langchain_azure_ai.agents.hosting._instructions import (
-    _InstructionCache,
-    _ResponseInstructions,
-)
+from langchain_azure_ai.agents.hosting._instructions import _ResponseInstructions
 
 from .conftest import make_checkpointed_echo_graph
 from .test_foundry_checkpoint_saver import (
@@ -109,310 +93,35 @@ class _JsonWithBinaryTags:
         return json.loads(data)
 
 
-class _SavedInstructionResult(BaseModel):
-    messages: tuple[AnyMessage, ...]
-
-
-async def test_task_instruction_references_preserve_payloads_and_raw_cache(
+async def test_saver_preserves_intermediate_instruction_messages(
     backend: BaseCheckpointSaver,
 ) -> None:
     saver = _RequestCheckpointSaver(backend)
-    instruction = _ResponseInstructions.create(
-        "private-request-only", "source-response"
-    ).message
+    instruction = _ResponseInstructions.create("request-only", "response-test").message
     assert instruction is not None
-    explicit = SystemMessage(content="explicit-system", id="explicit")
-    messages: list[AnyMessage] = [instruction, explicit]
-    reference = {"id": instruction.id, "label": "keep"}
-    payload: dict[str, Any] = {
-        "messages": tuple(messages),
-        "list": messages,
-        "model": _SavedInstructionResult(messages=tuple(messages)),
-        "wire": [message_to_dict(message) for message in messages],
-        "constructors": [message.to_json() for message in messages],
-        "dumps": [instruction.model_dump(exclude_defaults=True), explicit.model_dump()],
-        "openai": [
-            {"role": "developer", "content": instruction.content, "id": instruction.id},
-            {"role": "system", "content": explicit.content, "id": explicit.id},
-        ],
-        "artifact": ToolMessage(
-            content="tool-result",
-            tool_call_id="call",
-            artifact={"messages": tuple(messages), "reference": reference},
-        ),
-        "ordinary": [AIMessage(content="ordinary-reply", id="ordinary")],
-        "reference": reference,
-    }
-    round_tripped = backend.serde.loads_typed(backend.serde.dumps_typed(payload))
+    messages = [instruction, SystemMessage(content="explicit-system")]
     checkpoint = _checkpoint("0001", "input")
+    checkpoint["channel_values"]["messages"] = messages
     config = await saver.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
-    writes = [("__return__", payload), ("messages", messages)]
+    constructor = instruction.to_json()
+    writes = [("__return__", [constructor]), ("messages", messages)]
     if isinstance(backend, InMemorySaver):
-        saver.put_writes(config, writes, "prompt-task")
+        saver.put_writes(config, writes, "task")
     else:
-        await saver.aput_writes(config, writes, "prompt-task")
+        await saver.aput_writes(config, writes, "task")
     raw = await backend.aget_tuple(config)
     assert raw is not None
-    assert "private-request-only" not in repr(raw)
+    assert raw.checkpoint["channel_values"]["messages"] == messages
     assert raw.pending_writes is not None
-    raw_writes = {channel: value for _, channel, value in raw.pending_writes}
-    assert raw_writes["__return__"]["messages"][0].content == ""
-    assert raw_writes["__return__"]["messages"][0].id != instruction.id
-    assert raw_writes["messages"] == [explicit]
-    assert messages == [instruction, explicit]
-
-    def check(value: CheckpointTuple, current: str | None) -> None:
-        assert value.pending_writes is not None
-        restored = next(
-            item for _, channel, item in value.pending_writes if channel == "__return__"
-        )
-        expected = [*([current] if current else []), "explicit-system"]
-        assert type(restored["messages"]) is type(round_tripped["messages"])
-        assert isinstance(restored["model"], _SavedInstructionResult)
-        assert type(restored["model"].messages) is type(round_tripped["model"].messages)
-        for values in (
-            restored["messages"],
-            restored["list"],
-            restored["model"].messages,
-            messages_from_dict(restored["wire"]),
-            [
-                load(item, allowed_objects="messages")
-                for item in restored["constructors"]
-            ],
-            convert_to_messages(restored["dumps"]),
-            convert_to_messages(restored["openai"]),
-            convert_to_messages(restored["artifact"].artifact["messages"]),
-        ):
-            assert [message.content for message in values] == expected
-            if current:
-                assert values[0].additional_kwargs["__openai_role__"] == "developer"
-        assert restored["reference"] == reference
-        assert restored["artifact"].artifact["reference"] == reference
-        assert [message.content for message in restored["ordinary"]] == [
-            "ordinary-reply"
-        ]
-
+    assert next(
+        value for _, channel, value in raw.pending_writes if channel == "__return__"
+    ) == [constructor]
     with closing(_CheckpointReadContext()) as reads, reads.bind():
         reads.pin(saver, config)
-        for current in ("first-only", "second-only", None, ""):
-            selected = _ResponseInstructions.create(
-                current, f"response-{current}"
-            ).with_config(config)
-            value = await saver.aget_tuple(selected)
-            assert value is not None
-            check(value, current)
-            listed = [item async for item in saver.alist(selected, limit=1)]
-            assert listed
-            check(listed[0], current)
-            assert [item async for item in saver.alist(selected, before=selected)] == []
-            assert [
-                item
-                async for item in saver.alist(selected, filter={"source": "absent"})
-            ] == []
-            if isinstance(backend, InMemorySaver):
-                synchronous = saver.get_tuple(selected)
-                assert synchronous is not None
-                check(synchronous, current)
-                check(next(saver.list(selected, limit=1)), current)
-                assert list(saver.list(selected, before=selected)) == []
-                assert list(saver.list(selected, filter={"source": "absent"})) == []
+        assert await saver.aget_tuple(config) == raw
+        assert await saver.aget_tuple(config) == raw
         assert reads.cache is not None
-    outside = await saver.aget_tuple(config)
-    assert outside is not None
-    check(outside, None)
-    listed_outside = [item async for item in saver.alist(None, limit=1)]
-    check(listed_outside[0], None)
     assert await backend.aget_tuple(config) == raw
-
-
-@pytest.mark.parametrize("synchronous", [False, True])
-async def test_task_cache_references_preserve_context_and_forward_expiration(
-    synchronous: bool,
-) -> None:
-    backend: InMemoryCache[Any] = InMemoryCache()
-    cache = _InstructionCache(backend)
-    key: FullKey = (("prompts",), "current")
-    ordinary_key: FullKey = (("ordinary",), "reply")
-    expired_key: FullKey = (("prompts",), "expired")
-    original = _ResponseInstructions.create("private-request-only", "source-response")
-    assert original.message is not None
-    messages = [original.message, HumanMessage(content="user", id="user")]
-    pairs = {
-        key: ([("__return__", messages)], 60),
-        ordinary_key: ([("__return__", [AIMessage(content="ordinary-reply")])], None),
-        expired_key: ([("__return__", messages)], -1),
-    }
-    if synchronous:
-        cache.set(MappingProxyType(pairs))
-    else:
-        await cache.aset(MappingProxyType(pairs))
-    raw = backend.get([key, ordinary_key, expired_key])
-    assert expired_key not in raw
-    assert "private-request-only" not in repr(raw)
-
-    async def read(current: str | None) -> dict[FullKey, Any]:
-        instructions = _ResponseInstructions.create(current, f"response-{current}")
-        with instructions.bind():
-            await asyncio.sleep(0)
-            return (
-                cache.get([key, ordinary_key, expired_key])
-                if synchronous
-                else await cache.aget([key, ordinary_key, expired_key])
-            )
-
-    for current, restored in zip(
-        ("first-only", "second-only", None, ""),
-        await asyncio.gather(
-            read("first-only"), read("second-only"), read(None), read("")
-        ),
-    ):
-        assert expired_key not in restored
-        assert [message.content for message in restored[key][0][1]] == [
-            *([current] if current else []),
-            "user",
-        ]
-        assert [message.content for message in restored[ordinary_key][0][1]] == [
-            "ordinary-reply"
-        ]
-        restored[key][0][1].append(HumanMessage(content="caller-mutated"))
-    assert backend.get([key, ordinary_key]) == raw
-    outside = cache.get([key])
-    assert [message.content for message in outside[key][0][1]] == ["user"]
-    if synchronous:
-        cache.clear([("prompts",)])
-    else:
-        await cache.aclear([("prompts",)])
-    assert cache.get([key]) == {}
-    assert cache.get([ordinary_key]) != {}
-
-
-@pytest.mark.parametrize("synchronous", [False, True])
-async def test_request_instructions_do_not_change_raw_checkpoint_reads(
-    synchronous: bool,
-) -> None:
-    backend = InMemorySaver()
-    saver = _RequestCheckpointSaver(backend)
-    instructions = _ResponseInstructions.create("request-only", "response-test")
-    config = instructions.with_config(_config())
-    child_config: RunnableConfig = {
-        **config,
-        "configurable": {
-            **(config.get("configurable") or {}),
-            "checkpoint_ns": "child:task",
-        },
-    }
-
-    async def read(selected: RunnableConfig) -> CheckpointTuple | None:
-        return (
-            saver.get_tuple(selected)
-            if synchronous
-            else await saver.aget_tuple(selected)
-        )
-
-    assert await read(child_config) is None
-    assert await read(config) is None
-
-    checkpoint = _checkpoint("0001", "input")
-    await backend.aput(_config(), checkpoint, {}, checkpoint["channel_versions"])
-    with instructions.bind():
-        restored = await read(config)
-        assert restored is not None
-        assert restored.checkpoint == checkpoint
-    assert await read(child_config) is None
-
-    other_instructions = _ResponseInstructions.create("other", "other-response")
-    with other_instructions.bind():
-        assert await read(config) == restored
-    await backend.adelete_thread(config["configurable"]["thread_id"])
-    assert await read(config) is None
-
-
-@pytest.mark.parametrize("synchronous", [False, True])
-@pytest.mark.parametrize("location", ["checkpoint", "pending_writes"])
-@pytest.mark.parametrize("messages_source", ["snapshot", "replay", "child"])
-async def test_send_overlay_is_isolated_from_saved_state_and_cache(
-    synchronous: bool, location: str, messages_source: str
-) -> None:
-    backend = InMemorySaver()
-    checkpoint = _checkpoint("0001", "input")
-    config = _config()
-    if messages_source != "snapshot":
-        del checkpoint["channel_values"]["messages"]
-    if messages_source == "child":
-        config["configurable"]["checkpoint_ns"] = "child:task"
-    messages = [
-        SystemMessage(content="explicit-system", id="explicit"),
-        HumanMessage(content="saved-user", id="user"),
-    ]
-    packet = Send("worker", {"messages": messages, "label": "keep"})
-    business_packet = Send("business-data", {"messages": messages})
-    checkpoint["channel_values"]["business_packet"] = business_packet
-    checkpoint["channel_versions"]["business_packet"] = 1
-    if location == "checkpoint":
-        checkpoint["channel_values"][TASKS] = [packet]
-        checkpoint["channel_versions"][TASKS] = 1
-    config = await backend.aput(config, checkpoint, {}, checkpoint["channel_versions"])
-    if location == "pending_writes":
-        await backend.aput_writes(
-            config,
-            [(TASKS, packet), ("business_packet", business_packet)],
-            "dispatch-task",
-        )
-    saver = _RequestCheckpointSaver(backend)
-
-    async def read(instruction: str | None) -> CheckpointTuple:
-        selected = _ResponseInstructions.create(
-            instruction, f"response-{instruction}"
-        ).with_config(config)
-        result = (
-            saver.get_tuple(selected)
-            if synchronous
-            else await saver.aget_tuple(selected)
-        )
-        assert result is not None
-        return result
-
-    def task(value: CheckpointTuple) -> Send:
-        if location == "checkpoint":
-            return value.checkpoint["channel_values"][TASKS][0]
-        assert value.pending_writes is not None
-        return next(
-            write for _, channel, write in value.pending_writes if channel == TASKS
-        )
-
-    with closing(_CheckpointReadContext()) as reads, reads.bind():
-        reads.pin(saver, config)
-        first = await read("first-instruction")
-        second = await read("second-instruction")
-        omitted = await read(None)
-        if not synchronous:
-            assert reads.cache is not None
-
-    for value, expected in (
-        (first, ["first-instruction", "explicit-system", "saved-user"]),
-        (second, ["second-instruction", "explicit-system", "saved-user"]),
-        (omitted, ["explicit-system", "saved-user"]),
-    ):
-        restored = task(value)
-        assert restored.node == packet.node
-        assert restored.arg["label"] == "keep"
-        assert [message.content for message in restored.arg["messages"]] == expected
-        assert (
-            value.checkpoint["channel_values"]["business_packet"].arg["messages"]
-            == messages
-        )
-        if location == "pending_writes":
-            assert value.pending_writes is not None
-            assert all(
-                task_id == "dispatch-task" for task_id, _, _ in value.pending_writes
-            )
-            assert value.pending_writes[1][2].arg["messages"] == messages
-        if messages_source != "snapshot":
-            assert "messages" not in value.checkpoint["channel_values"]
-    saved = await backend.aget_tuple(config)
-    assert saved is not None
-    assert task(saved).arg["messages"] == messages
-    assert packet.arg["messages"] is messages
 
 
 @pytest.mark.parametrize(

@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-"""Request-local checkpoint reuse and instruction isolation."""
+"""Request-local checkpoint read reuse."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy, deepcopy
@@ -25,13 +25,6 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
 from wrapt import ObjectProxy
-
-from .._instructions import (
-    _instructions_from_config,
-    _prepare_instruction_writes,
-    _ResponseInstructions,
-    _without_request_instructions,
-)
 
 
 def _reference_config(
@@ -178,7 +171,7 @@ _checkpoint_reads: ContextVar[_CheckpointReadContext | None] = ContextVar(
 
 
 class _RequestCheckpointSaver(ObjectProxy):
-    """Reuse checkpoint reads and isolate request instructions from saved state.
+    """Reuse checkpoint reads without changing the wrapped saver.
 
     Only the shallow copies used by LangGraph's allowlist clones are supported.
     Deep copying and pickling this live runtime proxy are not supported.
@@ -243,56 +236,6 @@ class _RequestCheckpointSaver(ObjectProxy):
         return None
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        value = await self._aget_tuple(config)
-        return self._overlay_instructions(config, value)
-
-    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        value = self.__wrapped__.get_tuple(config)
-        return self._overlay_instructions(config, value)
-
-    def _overlay_instructions(
-        self, config: RunnableConfig, value: CheckpointTuple | None
-    ) -> CheckpointTuple | None:
-        instructions = _instructions_from_config(config) or _ResponseInstructions(None)
-        return instructions.overlay(value)
-
-    def list(
-        self,
-        config: RunnableConfig | None,
-        *,
-        filter: dict[str, Any] | None = None,
-        before: RunnableConfig | None = None,
-        limit: int | None = None,
-    ) -> Iterator[CheckpointTuple]:
-        instructions = _instructions_from_config(config or {}) or _ResponseInstructions(
-            None
-        )
-        for value in self.__wrapped__.list(
-            config, filter=filter, before=before, limit=limit
-        ):
-            yield instructions.overlay(value)
-
-    async def alist(
-        self,
-        config: RunnableConfig | None,
-        *,
-        filter: dict[str, Any] | None = None,
-        before: RunnableConfig | None = None,
-        limit: int | None = None,
-    ) -> AsyncIterator[CheckpointTuple]:
-        instructions = _instructions_from_config(config or {}) or _ResponseInstructions(
-            None
-        )
-        async for value in self.__wrapped__.alist(
-            config, filter=filter, before=before, limit=limit
-        ):
-            yield instructions.overlay(value)
-
-    def get(self, config: RunnableConfig) -> Checkpoint | None:
-        value = self.get_tuple(config)
-        return value.checkpoint if value is not None else None
-
-    async def _aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         configurable = config.get("configurable") or {}
         if not isinstance(configurable.get("thread_id"), str) or not isinstance(
             configurable.get("checkpoint_ns", ""), str
@@ -367,12 +310,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         self._invalidate_config(config)
-        return await self.__wrapped__.aput(
-            config,
-            _without_request_instructions(checkpoint),
-            _without_request_instructions(metadata),
-            new_versions,
-        )
+        return await self.__wrapped__.aput(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(
         self,
@@ -383,9 +321,7 @@ class _RequestCheckpointSaver(ObjectProxy):
     ) -> None:
         self._invalidate_config(config)
         kwargs = {"task_path": task_path} if self._self_async_task_path else {}
-        await self.__wrapped__.aput_writes(
-            config, _prepare_instruction_writes(writes), task_id, **kwargs
-        )
+        await self.__wrapped__.aput_writes(config, writes, task_id, **kwargs)
 
     async def adelete_thread(self, thread_id: str) -> None:
         self._invalidate_threads([thread_id])
@@ -416,12 +352,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
         self._invalidate_config(config)
-        return self.__wrapped__.put(
-            config,
-            _without_request_instructions(checkpoint),
-            _without_request_instructions(metadata),
-            new_versions,
-        )
+        return self.__wrapped__.put(config, checkpoint, metadata, new_versions)
 
     def put_writes(
         self,
@@ -432,9 +363,7 @@ class _RequestCheckpointSaver(ObjectProxy):
     ) -> None:
         self._invalidate_config(config)
         kwargs = {"task_path": task_path} if self._self_sync_task_path else {}
-        self.__wrapped__.put_writes(
-            config, _prepare_instruction_writes(writes), task_id, **kwargs
-        )
+        self.__wrapped__.put_writes(config, writes, task_id, **kwargs)
 
     def delete_thread(self, thread_id: str) -> None:
         self._invalidate_threads([thread_id])

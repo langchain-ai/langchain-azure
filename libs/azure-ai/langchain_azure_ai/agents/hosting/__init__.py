@@ -380,7 +380,6 @@ if TYPE_CHECKING:
     )
 
     from ._checkpoint._foundry_checkpoint_saver import FoundryCheckpointSaver
-    from ._instructions import with_response_instructions
 
 __all__ = [
     "HOSTING_USER_AGENT",
@@ -400,7 +399,6 @@ __all__ = [
     "get_hosting_features",
     "get_hosting_user_agent",
     "get_user_agent",
-    "with_response_instructions",
     "with_user_agent",
 ]
 
@@ -419,7 +417,6 @@ _module_lookup = {
     "ResponsesAgentServerHost": "azure.ai.agentserver.responses",
     "ResponsesHostServer": ("langchain_azure_ai.agents.hosting._responses_host"),
     "ResponsesServerOptions": "azure.ai.agentserver.responses",
-    "with_response_instructions": "langchain_azure_ai.agents.hosting._instructions",
 }
 
 

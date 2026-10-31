@@ -91,7 +91,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
-from ._instructions import _ResponseInstructions, with_response_instructions
+from ._instructions import _ResponseInstructions
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -441,8 +441,6 @@ class ResponsesHostServer:
             if isinstance(graph, CompiledStateGraph):
                 graph_updates["channels"] = dict(graph.channels)
             graph = graph.copy(graph_updates)
-        if isinstance(graph, CompiledStateGraph):
-            graph = with_response_instructions(graph)
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._enable_response_branching = enable_response_branching
@@ -610,8 +608,9 @@ class ResponsesHostServer:
                     prior state is restored by LangGraph through ``thread_id``.
 
                 Top-level ``instructions`` is a temporary developer message for
-                this response. The saver excludes it from durable graph history;
-                explicit system/developer input messages are retained.
+                this response. Intermediate checkpoints may retain it; the host
+                removes it from the final state when the graph finishes.
+                Explicit system/developer input messages are retained.
 
                 Override in a subclass to support custom-state graphs.
 
@@ -1070,7 +1069,6 @@ class ResponsesHostServer:
             instructions = _ResponseInstructions.create(
                 request.get("instructions"), context.response_id
             )
-            config = instructions.with_config(config)
 
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
@@ -1163,14 +1161,16 @@ class ResponsesHostServer:
                         request, context, skip_call_ids=consumed_call_ids
                     )
             active_interrupts: list["Interrupt"] = []
+            if checkpoint_ref is None:
+                graph_input = await instructions.prepare(
+                    self._graph, config, graph_input
+                )
             async with _closing_stream(
-                instructions.wrap_stream(
-                    self._graph.astream(
-                        graph_input,
-                        config=config,
-                        stream_mode=self._stream_modes,
-                        durability=self._durability,
-                    )
+                self._graph.astream(
+                    graph_input,
+                    config=config,
+                    stream_mode=self._stream_modes,
+                    durability=self._durability,
                 )
             ) as graph_stream:
                 graph_stream = track_pending_interrupts(graph_stream, active_interrupts)
@@ -1183,6 +1183,20 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
+            if checkpoint_ref is not None and not (
+                context.shutdown.is_set() or cancellation_signal.is_set()
+            ):
+                final_config = (
+                    HostingRunnableConfig(config)
+                    .with_checkpoint_ref(checkpoint_ref)
+                    .runnable_config
+                )
+                final_config = await instructions.finish(self._graph, final_config)
+                clean_ref = HostingRunnableConfig(final_config).checkpoint_ref
+                if clean_ref is not None and clean_ref != checkpoint_ref:
+                    task_storage.store_checkpoint_ref(clean_ref)
+                    checkpoint_ref = clean_ref
+                    yield stream.checkpoint()
             if checkpoint_ref is not None and not (
                 self._enable_response_branching
                 and bool(request.get("previous_response_id"))
