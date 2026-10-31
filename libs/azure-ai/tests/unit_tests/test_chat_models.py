@@ -541,3 +541,41 @@ def test_to_inference_message_chat_message_list_content() -> None:
     """ChatMessage list content is normalised."""
     msgs = to_inference_message([ChatMessage(role="user", content=["hello"])])
     assert msgs[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_identifying_params_keep_zero_values() -> None:
+    """Falsy but explicit values such as temperature=0 must reach the endpoint."""
+    with mock.patch(
+        "langchain_azure_ai.chat_models.inference.ChatCompletionsClient", autospec=True
+    ):
+        llm = AzureAIChatCompletionsModel(
+            endpoint="https://my-endpoint.inference.ai.azure.com",
+            credential="my-api-key",
+            model_name="my-model",
+            temperature=0,
+            top_p=0,
+            presence_penalty=0,
+            frequency_penalty=0,
+            seed=0,
+        )
+
+    assert llm._identifying_params == {
+        "temperature": 0,
+        "top_p": 0,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "seed": 0,
+    }
+
+
+def test_identifying_params_omit_unset_values() -> None:
+    with mock.patch(
+        "langchain_azure_ai.chat_models.inference.ChatCompletionsClient", autospec=True
+    ):
+        llm = AzureAIChatCompletionsModel(
+            endpoint="https://my-endpoint.inference.ai.azure.com",
+            credential="my-api-key",
+            model_name="my-model",
+        )
+
+    assert llm._identifying_params == {}

@@ -549,17 +549,17 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     @property
     def _identifying_params(self) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
-        if self.temperature:
+        if self.temperature is not None:
             params["temperature"] = self.temperature
-        if self.top_p:
+        if self.top_p is not None:
             params["top_p"] = self.top_p
-        if self.presence_penalty:
+        if self.presence_penalty is not None:
             params["presence_penalty"] = self.presence_penalty
-        if self.frequency_penalty:
+        if self.frequency_penalty is not None:
             params["frequency_penalty"] = self.frequency_penalty
-        if self.max_tokens:
+        if self.max_tokens is not None:
             params["max_tokens"] = self.max_tokens
-        if self.seed:
+        if self.seed is not None:
             params["seed"] = self.seed
         if self.model_kwargs:
             params["model_extras"] = self.model_kwargs
