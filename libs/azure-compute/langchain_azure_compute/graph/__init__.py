@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+
 """Azure Durable Task Scheduler (DTS) durable execution for LangGraph graphs.
 
 Provides :func:`attach_durability`, :func:`durable_tool`, :func:`durable_node`,
