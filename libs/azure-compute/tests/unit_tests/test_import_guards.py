@@ -117,3 +117,15 @@ def test_user_agent_falls_back_when_the_distribution_is_absent() -> None:
     ):
         spec.loader.exec_module(module)
     assert module.USER_AGENT == "langchain-azure-compute/0.0.0 (Language=Python)"
+
+
+class TestGraphPackage:
+    def test_missing_langgraph_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="durabletask") as excinfo:
+            _exec_module_without("langchain_azure_compute.graph", "langgraph")
+        assert "langgraph" in str(excinfo.value)
+
+    def test_missing_durabletask_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="durabletask") as excinfo:
+            _exec_module_without("langchain_azure_compute.graph", "durabletask")
+        assert "durabletask" in str(excinfo.value)

@@ -10,6 +10,7 @@ Install only the integration you need:
 ```bash
 pip install "langchain-azure-compute[dynamic-sessions]"
 pip install "langchain-azure-compute[sandboxes]"
+pip install "langchain-azure-compute[durabletask]"
 ```
 
 Extras control *dependencies*, not which modules are present — every module
@@ -167,6 +168,92 @@ the request first: `execute` then returns an error `ExecuteResponse` rather
 than raising, and the command may keep running server-side. To use timeouts
 above ~300 seconds, construct the `SandboxClient` with a transport whose read
 timeout exceeds them.
+
+## Durable LangGraph execution (Durable Task Scheduler)
+
+`langchain_azure_compute.graph` runs compiled LangGraph graphs (`StateGraph.compile()`),
+LangChain agents (`create_agent` / `create_react_agent`), and Deep Agents
+(`create_deep_agent`) on the
+[Azure Durable Task Scheduler (DTS)](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/durable-task-scheduler)
+or the local DTS emulator.
+
+```python
+from typing import Annotated, TypedDict
+
+from durabletask.azuremanaged.client import DurableTaskSchedulerClient
+from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
+
+from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
+
+
+class SupportState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    approved: bool
+
+
+@durable_tool(retries=3)
+@tool
+def refund_order(order_id: str) -> str:
+    """Runs as an isolated Durable Task activity with its own retry policy."""
+    return f"Refunded order {order_id}"
+
+
+def manager_gate(state: SupportState) -> dict:
+    decision = interrupt({"question": "Approve refund?", "order_id": "ord-42"})
+    return {"approved": bool(decision.get("approved"))}
+
+
+builder = StateGraph(SupportState)
+builder.add_node("approve", manager_gate)
+builder.add_node("tools", ToolNode([refund_order]))
+builder.add_edge(START, "approve")
+builder.add_edge("approve", "tools")
+builder.add_edge("tools", END)
+graph = builder.compile()
+
+reg = attach_durability(graph, name="support")
+
+# Connect to the local DTS emulator ("127.0.0.1:8080") or an Azure DTS endpoint
+# ("https://<scheduler>.<region>.durabletask.io") with DefaultAzureCredential:
+opts = sdk_options("127.0.0.1:8080")
+worker = DurableTaskSchedulerWorker(**opts)
+sdk = DurableTaskSchedulerClient(**opts)
+reg.register(worker)
+worker.start()
+try:
+    client = reg.client(sdk)
+    run = client.start(
+        {"messages": [HumanMessage(content="Refund order 42")], "approved": False},
+        instance_id="refund-42",
+    )
+    pending = run.wait_pending(timeout=30)
+    run.resume(pending, {"approved": True})
+    result = run.wait_result(timeout=60)
+finally:
+    worker.stop()
+    sdk.close()
+```
+
+Key capabilities include:
+
+- **Control plane vs. state plane separation:** Graph state stays in LangGraph's
+  checkpointer (`SqliteSaver`, `PostgresSaver`, `CosmosDBSaver`, or an automatic
+  `InMemorySaver` checkpoint bundle in zero-config mode) while DTS carries compact
+  checkpoint pointers and rolls over long-running conversations via `continue_as_new`.
+- **Per-tool and per-node activity isolation:** `@durable_tool` calls inside a
+  `ToolNode` and `@durable_node` branches (including dynamic `Send()` map-reduce
+  fan-out) execute as parallel DTS activities with independent retry policies.
+- **Human-in-the-loop (`interrupt()` / `resume()`):** Maps LangGraph `interrupt()`
+  and static breakpoints to DTS external events without holding worker threads.
+- **Azure Functions hosting (`LangGraphFunctionApp`):** Exposes `/api/graphs/<name>/start`,
+  `/status/{instanceId}`, and `/respond/{instanceId}/{interruptId}` routes on Azure
+  Functions Python v2.
 
 ## Development
 
