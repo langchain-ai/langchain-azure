@@ -3467,7 +3467,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
     )
     assert dispatch_function_request(app, missing_req).status_code == 404
 
-    # 6. Verify default auth_level is FUNCTION, per-instance caller ownership is enforced,
+    # 6. Verify default auth_level is FUNCTION, caller ownership is enforced,
     # and FunctionAppHttpServer works over real TCP HTTP
     assert getattr(app, "_auth_level", None) == func.AuthLevel.FUNCTION
     owned_start = func.HttpRequest(

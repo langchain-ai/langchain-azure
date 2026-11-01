@@ -137,7 +137,7 @@ def _is_client_sdk(obj: Any) -> bool:
 
 
 def _extract_caller_principal(req: Any) -> str | None:
-    """Extract the authenticated caller identity from Azure EasyAuth headers if present."""
+    """Extract the authenticated caller identity from EasyAuth headers."""
     headers = getattr(req, "headers", None)
     if not headers or not hasattr(headers, "items"):
         return None
