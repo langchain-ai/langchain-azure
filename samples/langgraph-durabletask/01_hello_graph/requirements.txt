@@ -1,0 +1,5 @@
+durabletask>=1.9.0,<2
+durabletask-azuremanaged>=1.9.0,<2
+langchain-core>=0.3.0
+langgraph>=1.0.0,<2
+langchain-azure-compute[durabletask]

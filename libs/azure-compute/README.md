@@ -255,6 +255,127 @@ Key capabilities include:
   `/status/{instanceId}`, and `/respond/{instanceId}/{interruptId}` routes on Azure
   Functions Python v2.
 
+### Connecting to Hosted Azure DTS (Entra ID / Managed Identity) vs. Local Emulator
+
+`sdk_options()` supports both the local DTS emulator and hosted Azure Durable Task
+Scheduler resources:
+
+```python
+import os
+from azure.identity import DefaultAzureCredential
+from durabletask.azuremanaged.client import DurableTaskSchedulerClient
+from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_azure_compute.graph import sdk_options
+
+# 1. Local DTS Emulator (secure_channel=False, token_credential=None, taskhub="default")
+emulator_opts = sdk_options("127.0.0.1:8080")
+
+# 2. Hosted Azure DTS with Entra ID / Managed Identity (secure_channel=True auto-enabled)
+hosted_opts = sdk_options(
+    "https://<scheduler>.<region>.durabletask.io",
+    taskhub="my-taskhub",
+    token_credential=DefaultAzureCredential(),
+)
+
+# 3. Hosted Azure DTS via Connection String (Endpoint=...;TaskHub=...;Authentication=DefaultAzure)
+conn_str_opts = sdk_options(
+    connection_string=os.environ["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"],
+    token_credential=DefaultAzureCredential(),
+)
+
+worker = DurableTaskSchedulerWorker(**hosted_opts)
+sdk = DurableTaskSchedulerClient(**hosted_opts)
+```
+
+### Two-Tier State Model
+
+| Mode | How to Enable | How State Moves | Best For |
+| --- | --- | --- | --- |
+| **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, `PostgresSaver`, `CosmosDBSaver`, `MongoDBSaver`) | `inline_checkpoints=False` (default). DTS carries only checkpoint IDs and small control envelopes (`~8.6 KB/turn`). Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
+| **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
+
+### Configuring Tool Durability, Retries, and Concurrency
+
+By default (`durable_tools=True`), every tool inside a `ToolNode` executes as an
+isolated `langgraph.<name>.tool` activity. You can customize retries or opt out
+pure in-memory helpers either via `@durable_tool` or centrally on `attach_durability()`:
+
+```python
+from langchain_core.tools import tool
+from langgraph.prebuilt import ToolNode
+from langchain_azure_compute.graph import attach_durability, durable_tool
+
+
+@durable_tool(retries=4)
+@tool
+def book_flight(destination: str) -> str:
+    """Runs as an isolated DTS activity with up to 4 attempts."""
+    return f"FLIGHT-{destination}"
+
+
+@durable_tool(durable=False)
+@tool
+def format_itinerary(summary: str) -> str:
+    """Pure in-memory helper: runs locally inside the tool-commit step."""
+    return summary.upper()
+
+
+reg = attach_durability(
+    graph,
+    name="travel_agent",
+    tool_policy={"tools::book_flight": "durable", "tools::format_itinerary": "local"},
+    tool_retries={"book_flight": 4},
+    tool_max_concurrency=2,  # None = parallel batch (default), 1 = sequential, N = batches of N
+)
+```
+
+### Durable Nodes (`@durable_node`) for Parallel Fan-Out & `Send()` Map-Reduce
+
+When a graph fans out across parallel branches (`START -> [branch_a, branch_b] -> join`)
+or uses `Send("worker", item)` map-reduce, decorate the branch/target node with
+`@durable_node(retries=3)` (or pass `durable_nodes=True` / `node_policy=...` to
+`attach_durability()`). Each parallel branch or `Send()` packet executes concurrently
+as its own `langgraph.<name>.node` activity across workers with per-branch retry
+isolation.
+
+### Graph Versioning & Live Migration
+
+When deploying an updated graph topology (`"v2"`) while `"v1"` runs are in flight:
+
+```python
+reg = attach_durability(
+    graph_v2,
+    name="order_workflow",
+    version="v2",
+    previous_versions={"v1": graph_v1},
+    migrations={
+        ("v1", "v2"): lambda state, snap, resume_val: {
+            "as_node": "new_approval_gate",
+            "values": {"approved_by": resume_val},
+        }
+    },
+    upgrade_on_continue_as_new=True,
+)
+```
+
+### Runnable Samples
+
+Ten end-to-end runnable samples (each with its own `README.md`, `requirements.txt`,
+and `sample.py`) are available in [`samples/langgraph-durabletask/`](../../samples/langgraph-durabletask/README.md):
+
+| # | Sample | What It Demonstrates |
+| --- | --- | --- |
+| 01 | [`01_hello_graph`](../../samples/langgraph-durabletask/01_hello_graph/README.md) | Minimal linear & conditional graph (Zero-Config `builder.compile()`) |
+| 02 | [`02_vacation_booking`](../../samples/langgraph-durabletask/02_vacation_booking/README.md) | Per-tool retry isolation inside a `ToolNode` (`book_car` retries without re-running `book_flight` or `book_hotel`) & idempotent `client.start(..., instance_id=...)` |
+| 03 | [`03_human_in_the_loop`](../../samples/langgraph-durabletask/03_human_in_the_loop/README.md) | Sequential and parallel `interrupt()`, `pending_interrupts()`, and `run.resume()` |
+| 04 | [`04_react_agent_and_subgraphs`](../../samples/langgraph-durabletask/04_react_agent_and_subgraphs/README.md) | Prebuilt ReAct agents (`create_agent` / `create_react_agent`) and compiled subgraphs as nodes |
+| 05 | [`05_multi_turn_conversation`](../../samples/langgraph-durabletask/05_multi_turn_conversation/README.md) | Multi-turn conversation with `SqliteSaver`, `SqliteStore`, and `Runtime[Context]` propagation |
+| 06 | [`06_durable_nodes_map_reduce`](../../samples/langgraph-durabletask/06_durable_nodes_map_reduce/README.md) | Static parallel fan-out and dynamic `Send()` map-reduce with `@durable_node` and `node_max_concurrency` |
+| 07 | [`07_multi_graph_app`](../../samples/langgraph-durabletask/07_multi_graph_app/README.md) | Multiple durable graphs (`triage`, `vacation`, `refund`) sharing one worker and delegating across graphs |
+| 08 | [`08_graph_versioning_and_migration`](../../samples/langgraph-durabletask/08_graph_versioning_and_migration/README.md) | Graph versioning and live checkpoint migration (`version="v2"`, `previous_versions`, `migrations`, `run.upgrade()`) |
+| 09 | [`09_two_process_crash_recovery`](../../samples/langgraph-durabletask/09_two_process_crash_recovery/README.md) | Two OS worker processes (`pod-A` hard-killed mid-run, `pod-B` recovers via Zero-Config `checkpoint_bundle`) |
+| 10 | [`10_azure_functions_hitl`](../../samples/langgraph-durabletask/10_azure_functions_hitl/README.md) | Azure Functions Python v2 HTTP routes (`LangGraphFunctionApp` `/start`, `/status/{id}`, `/respond/{id}/{interruptId}`) across two worker processes |
+
 ## Development
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) in the repository root.
