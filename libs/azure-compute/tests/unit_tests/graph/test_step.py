@@ -3467,8 +3467,40 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
     )
     assert dispatch_function_request(app, missing_req).status_code == 404
 
-    # 6. Verify FunctionAppHttpServer over real TCP HTTP +
-    # Registration.register_function_routes
+    # 6. Verify default auth_level is FUNCTION, per-instance caller ownership is enforced,
+    # and FunctionAppHttpServer works over real TCP HTTP
+    assert getattr(app, "_auth_level", None) == func.AuthLevel.FUNCTION
+    owned_start = func.HttpRequest(
+        method="POST",
+        url="http://localhost:7071/api/graphs/expense_approval/start?instance_id=inst-owned",
+        headers={
+            "Content-Type": "application/json",
+            "x-ms-client-principal-id": "user-alice",
+        },
+        params={},
+        route_params={},
+        body=json.dumps({"expense_id": "EXP-777", "approved": False}).encode("utf-8"),
+    )
+    assert dispatch_function_request(app, owned_start).status_code == 202
+    wrong_caller_status = func.HttpRequest(
+        method="GET",
+        url="http://localhost:7071/api/graphs/expense_approval/status/inst-owned",
+        headers={"x-ms-client-principal-id": "user-mallory"},
+        params={},
+        route_params={},
+        body=b"",
+    )
+    assert dispatch_function_request(app, wrong_caller_status).status_code == 403
+    owner_status = func.HttpRequest(
+        method="GET",
+        url="http://localhost:7071/api/graphs/expense_approval/status/inst-owned",
+        headers={"x-ms-client-principal-id": "user-alice"},
+        params={},
+        route_params={},
+        body=b"",
+    )
+    assert dispatch_function_request(app, owner_status).status_code == 200
+
     app2 = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
     reg.register_function_routes(app2, fake_sdk)
     with FunctionAppHttpServer(app2) as srv:

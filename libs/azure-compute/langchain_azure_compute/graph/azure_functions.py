@@ -136,6 +136,19 @@ def _is_client_sdk(obj: Any) -> bool:
     )
 
 
+def _extract_caller_principal(req: Any) -> str | None:
+    """Extract the authenticated caller identity from Azure EasyAuth headers if present."""
+    headers = getattr(req, "headers", None)
+    if not headers or not hasattr(headers, "items"):
+        return None
+    lowered = {str(k).lower(): str(v).strip() for k, v in headers.items() if v}
+    for header_name in ("x-ms-client-principal-id", "x-ms-client-principal-name"):
+        val = lowered.get(header_name)
+        if val:
+            return val
+    return None
+
+
 class _FunctionAppState:
     """Internal per-`FunctionApp` state tracking registered graphs, DTS client, and.
 
@@ -147,6 +160,7 @@ class _FunctionAppState:
     ) -> None:
         self.registrations: dict[str, Registration] = {}
         self.thread_by_instance: dict[str, str] = {}
+        self.owner_by_instance: dict[str, str] = {}
         self._sdk_or_options = sdk_or_options
         self._want_worker = bool(start_worker)
         self._client_sdk: Any = (
@@ -334,6 +348,15 @@ def register_function_routes(
             max_concurrency = None
             node_max_concurrency = None
 
+        caller = _extract_caller_principal(req)
+        if instance_id is not None:
+            existing_owner = state.owner_by_instance.get(str(instance_id))
+            if existing_owner is not None and existing_owner != caller:
+                return _json_response(
+                    {"error": "Caller is not authorized for this instance"},
+                    status_code=403,
+                )
+
         sdk = state.get_sdk()
         client = reg.client(sdk)
         run = client.start(
@@ -351,6 +374,8 @@ def register_function_routes(
             version=str(version) if version is not None else None,
         )
         state.thread_by_instance[run.instance_id] = run.thread_id
+        if caller is not None and run.instance_id not in state.owner_by_instance:
+            state.owner_by_instance[run.instance_id] = caller
         api_base = _extract_api_base(req.url)
         return _json_response(
             {
@@ -373,6 +398,14 @@ def register_function_routes(
         reg = state.registrations.get(name)
         if reg is None:
             return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
+        expected_owner = state.owner_by_instance.get(instance_id)
+        if expected_owner is not None and expected_owner != _extract_caller_principal(
+            req
+        ):
+            return _json_response(
+                {"error": "Caller is not authorized for this instance"},
+                status_code=403,
+            )
 
         params = dict(req.params) if getattr(req, "params", None) else {}
         hint_thread = (
@@ -440,6 +473,14 @@ def register_function_routes(
         reg = state.registrations.get(name)
         if reg is None:
             return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
+        expected_owner = state.owner_by_instance.get(instance_id)
+        if expected_owner is not None and expected_owner != _extract_caller_principal(
+            req
+        ):
+            return _json_response(
+                {"error": "Caller is not authorized for this instance"},
+                status_code=403,
+            )
 
         raw_body = req.get_body()
         has_body = bool(raw_body)
@@ -600,7 +641,7 @@ def create_function_app(
         graph: Single compiled graph, used when registrations and graphs are omitted.
         graphs: Named graphs or graph collection, used when registrations is omitted.
         name: Name for a single raw graph.
-        auth_level: HTTP authorization level; defaults to anonymous.
+        auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
         start_worker: Whether to start an embedded DTS worker.
 
     Returns:
@@ -610,7 +651,7 @@ def create_function_app(
         ValueError: If no graph or registration is supplied.
     """
     func = _require_azure_functions()
-    eff_auth = auth_level if auth_level is not None else func.AuthLevel.ANONYMOUS
+    eff_auth = auth_level if auth_level is not None else func.AuthLevel.FUNCTION
     app = func.FunctionApp(http_auth_level=eff_auth)
     target = (
         registrations
@@ -669,7 +710,7 @@ def LangGraphFunctionApp(
         graph: Single raw graph to register.
         graphs: Named graphs or a collection of graphs.
         name: Name for a single raw graph.
-        auth_level: HTTP authorization level; defaults to anonymous.
+        auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
         start_worker: Whether to start an embedded DTS worker.
 
     Returns:
