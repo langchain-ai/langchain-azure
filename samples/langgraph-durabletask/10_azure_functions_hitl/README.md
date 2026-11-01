@@ -80,7 +80,7 @@ export DTS_EMULATOR=127.0.0.1:8080
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 ```
 
-> **DTS Dashboard:** Open `http://localhost:8082` to inspect the `expense_approval` orchestrations (`EXP-501` and `EXP-502`), tool activities, and `lg.resume.<interrupt_id>` external events.
+> **DTS Dashboard:** Open `http://localhost:8082` to inspect the `expense_approval` orchestrations (`EXP-501` and `EXP-502`), tool activities, and `resume:<interrupt_id>` external events.
 
 #### Option B: Hosted Azure Durable Task Scheduler (Entra ID)
 
@@ -113,7 +113,7 @@ python sample.py
 
 **PowerShell:**
 ```powershell
-cd examples\10_azure_functions_hitl
+cd samples\langgraph-durabletask\10_azure_functions_hitl
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 python sample.py
 ```
@@ -129,7 +129,7 @@ python samples/langgraph-durabletask/10_azure_functions_hitl/sample.py
 **PowerShell:**
 ```powershell
 $env:DTS_EMULATOR = "127.0.0.1:8080"
-python examples\10_azure_functions_hitl\sample.py
+python samples\langgraph-durabletask\10_azure_functions_hitl\sample.py
 ```
 
 ---

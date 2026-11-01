@@ -40,6 +40,7 @@ The following section describes the main DRIs for each f the packages and namesp
 |-----------|-----|---------------|
 | `langchain_azure_compute.dynamic_sessions` | @darieldatoon | @kyleknap |
 | `langchain_azure_compute.sandboxes` | @darieldatoon | @kyleknap |
+| `langchain_azure_compute.graph` | @tamirdresher | @darieldatoon |
 
 ### `langchain-azure-dynamic-sessions`
 

@@ -1,12 +1,12 @@
-# 06 - Durable Nodes (`@durable_node` & `mark_node`) & Map-Reduce Fan-Out
+# 06 - Durable Nodes (`@durable_node` & `@durable_node`) & Map-Reduce Fan-Out
 
-This sample demonstrates how to turn **parallel graph branches** and **dynamic `Send()` map-reduce workers** into independent **Azure Durable Task Scheduler (DTS)** node activities (`langgraph.<name>.node`) using `@durable_node` and `mark_node`.
+This sample demonstrates how to turn **parallel graph branches** and **dynamic `Send()` map-reduce workers** into independent **Azure Durable Task Scheduler (DTS)** node activities (`langgraph.<name>.node`) using `@durable_node` and `@durable_node`.
 
 When branches are marked as durable nodes, the DTS orchestrator fans them out across your worker pool (`ctx.when_all([...])`), retries only the failing branch on transient errors without re-running completed sibling branches, and supports bounded batch concurrency via `node_max_concurrency`.
 
 ## Key Concepts Demonstrated
 
-- **Static Parallel Fan-Out (`START -> [branch_a, branch_b, branch_c] -> join`)**: Decorating parallel nodes with `@durable_node`, `@durable_node(retries=3)`, or `mark_node(branch_c, durable=True, retries=2)` so each branch executes as its own `langgraph.<name>.node` activity.
+- **Static Parallel Fan-Out (`START -> [branch_a, branch_b, branch_c] -> join`)**: Decorating parallel nodes with `@durable_node`, `@durable_node(retries=3)`, or `durable_node(branch_c, durable=True, retries=2)` so each branch executes as its own `langgraph.<name>.node` activity.
 - **Dynamic Map-Reduce (`Send("research_worker", item)`)**: Returning `[Send("research_worker", {"topic": t}) for t in state["topics"]]` from a conditional edge and executing each `Send` branch as an isolated DTS node activity.
 - **Per-Branch Retry Isolation**: In Part 1, `branch_b` fails once on attempt 1 (`branch_a` and `branch_c` run only once). In Part 2, the `"security"` topic fails once on attempt 1 (`"architecture"` and `"performance"` run only once).
 - **Concurrency Throttling (`node_max_concurrency=2`)**: Bounding how many `langgraph.<name>.node` activities the orchestrator schedules in parallel per batch.
@@ -17,7 +17,7 @@ When branches are marked as durable nodes, the DTS orchestrator fans them out ac
 Part 1 - Static Parallel Fan-Out (static_parallel_nodes):
           ┌──► branch_a (@durable_node)            ──► [langgraph.static_parallel_nodes.node] (1 attempt)  ──┐
   START ──┼──► branch_b (@durable_node(retries=3)) ──► [langgraph.static_parallel_nodes.node] (2 attempts) ──┼──► join ──► END
-          └──► branch_c (mark_node(..., retries=2))──► [langgraph.static_parallel_nodes.node] (1 attempt)  ──┘
+          └──► branch_c (durable_node(..., retries=2))──► [langgraph.static_parallel_nodes.node] (1 attempt)  ──┘
 
 Part 2 - Dynamic Send() Map-Reduce (research_map_reduce, node_max_concurrency=2):
                         ┌── Send("research_worker", {"topic": "architecture"}) ──► [node activity] (1 attempt)  ──┐
@@ -34,7 +34,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e ".[test]"
+pip install -e "libs/azure-compute[durabletask]"
 ```
 
 Or from this sample folder:
@@ -90,7 +90,7 @@ python sample.py
 
 **PowerShell:**
 ```powershell
-cd examples\06_durable_nodes_map_reduce
+cd samples\langgraph-durabletask\06_durable_nodes_map_reduce
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 python sample.py
 ```
@@ -106,12 +106,12 @@ python samples/langgraph-durabletask/06_durable_nodes_map_reduce/sample.py
 **PowerShell:**
 ```powershell
 $env:DTS_EMULATOR = "127.0.0.1:8080"
-python examples\06_durable_nodes_map_reduce\sample.py
+python samples\langgraph-durabletask\06_durable_nodes_map_reduce\sample.py
 ```
 
 ## Code Walkthrough
 
-### 1. Static Parallel Branches with `@durable_node` and `mark_node`
+### 1. Static Parallel Branches with `@durable_node` and `@durable_node`
 
 ```python
 @durable_node
@@ -133,7 +133,7 @@ def branch_c(state: StaticParallelState) -> dict:
     return {"results": [f"C={state['seed'] + 3}"]}
 
 
-mark_node(branch_c, durable=True, retries=2)
+durable_node(branch_c, durable=True, retries=2)
 ```
 
 ### 2. Dynamic `Send()` Map-Reduce with `@durable_node` and `node_max_concurrency`

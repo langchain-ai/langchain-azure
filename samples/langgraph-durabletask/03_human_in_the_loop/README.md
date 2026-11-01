@@ -33,7 +33,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e ".[test]"
+pip install -e "libs/azure-compute[durabletask]"
 ```
 
 Or from this sample folder:
@@ -60,7 +60,7 @@ export DTS_EMULATOR=127.0.0.1:8080
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 ```
 
-> **DTS Dashboard:** Open `http://localhost:8082` to inspect the orchestration custom status while paused and the `EventRaised` entries (`lg.resume.<interrupt_id>`) when resumed.
+> **DTS Dashboard:** Open `http://localhost:8082` to inspect the orchestration custom status while paused and the `EventRaised` entries (`resume:<interrupt_id>`) when resumed.
 
 #### Option B: Hosted Azure Durable Task Scheduler (Entra ID)
 
@@ -89,7 +89,7 @@ python sample.py
 
 **PowerShell:**
 ```powershell
-cd examples\03_human_in_the_loop
+cd samples\langgraph-durabletask\03_human_in_the_loop
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 python sample.py
 ```
@@ -105,7 +105,7 @@ python samples/langgraph-durabletask/03_human_in_the_loop/sample.py
 **PowerShell:**
 ```powershell
 $env:DTS_EMULATOR = "127.0.0.1:8080"
-python examples\03_human_in_the_loop\sample.py
+python samples\langgraph-durabletask\03_human_in_the_loop\sample.py
 ```
 
 ## Code Walkthrough

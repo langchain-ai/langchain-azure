@@ -30,12 +30,10 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command, interrupt
 
-from langchain_azure_compute.graph import (
+from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
+from langchain_azure_compute.graph.azure_functions import (
     FunctionAppHttpServer,
     LangGraphFunctionApp,
-    attach_durability,
-    durable_tool,
-    sdk_options,
 )
 
 GRAPH_NAME = "expense_approval"

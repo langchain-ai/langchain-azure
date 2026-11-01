@@ -41,7 +41,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from langchain_azure_compute.graph import FunctionAppHttpServer, sdk_options
+from langchain_azure_compute.graph import sdk_options
+from langchain_azure_compute.graph.azure_functions import FunctionAppHttpServer
 
 _HERE = Path(__file__).resolve().parent
 FUNC_APP_PATH = _HERE / "function_app.py"
@@ -66,7 +67,9 @@ def _resolve_endpoint() -> str | None:
 
 def _http_json(method: str, url: str, body: Any = None) -> tuple[int, dict[str, Any]]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"Content-Type": "application/json"} if data is not None else {}
+    headers = {"x-ms-client-principal-id": "demo-user"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -86,7 +89,7 @@ def _spawn_worker_subprocess(
     """Spawn a separate OS process running `function_app.py --worker <worker_id>`."""
     child_env = os.environ.copy()
     src_dir = next(
-        (str(p / "src") for p in Path(__file__).resolve().parents if (p / "src" / "langgraph_durabletask").is_dir()),
+        (str(p / "libs" / "azure-compute") for p in Path(__file__).resolve().parents if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()),
         str(Path(__file__).resolve().parent.parent / "src"),
     )
     existing_pp = child_env.get("PYTHONPATH", "")

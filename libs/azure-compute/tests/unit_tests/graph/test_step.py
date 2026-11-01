@@ -16,13 +16,15 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
 from langchain_azure_compute.graph import (
-    CUSTOM_STATUS_INLINE_LIMIT,
-    MAX_GRAPH_NAME_LENGTH,
     Limits,
-    ToolConfig,
     attach_durability,
     durable_node,
     durable_tool,
+)
+from langchain_azure_compute.graph._api import (
+    CUSTOM_STATUS_INLINE_LIMIT,
+    MAX_GRAPH_NAME_LENGTH,
+    ToolConfig,
     mark_tool,
     pack,
     read_output,
@@ -1323,7 +1325,7 @@ def test_checkpointerless_graph_survives_worker_switch_across_steps_and_tools():
     reg_a = attach_durability(worker_a_graph, name="ephemeral_handoff")
     reg_b = attach_durability(worker_b_graph, name="ephemeral_handoff")
     assert reg_a.inline_checkpoints is True and reg_b.inline_checkpoints is True
-    assert worker_a_graph.checkpointer is not worker_b_graph.checkpointer
+    assert reg_a.graph.checkpointer is not reg_b.graph.checkpointer
 
     # Step 1 (start -> model) and Step 2 (approval interrupt) on Worker A
     r1 = run_step(
@@ -1351,7 +1353,7 @@ def test_checkpointerless_graph_survives_worker_switch_across_steps_and_tools():
 
     # Worker A crashes/stops here! Worker B (whose InMemorySaver is completely empty)
     # handles resume, tool, and completion
-    assert _checkpoint_id(worker_b_graph.get_state(_config("t-eph"))) is None
+    assert _checkpoint_id(reg_b.graph.get_state(_config("t-eph"))) is None
     r3 = run_step(
         worker_b_graph,
         LIM,
@@ -2659,8 +2661,8 @@ def test_no_attach_alias_unknown_version_and_reattach():
     # original interrupt_before=['b']
     reg2 = attach_durability(g2, name="ver_err_2", durable_nodes=True)
     assert reg2.node_config.default_durable is True
-    assert getattr(g2, "_durable_node_config").default_durable is True
-    assert getattr(g2, "_durable_user_interrupt_before") == ("b",)
+    assert getattr(reg2.graph, "_durable_node_config").default_durable is True
+    assert getattr(reg2.graph, "_durable_user_interrupt_before") == ("b",)
 
 
 def test_migration_no_reducer_duplication_and_idempotency():
@@ -3027,17 +3029,16 @@ def test_sdk_options_emulator_hosted_azure_dts_and_connection_strings(monkeypatc
             connection_string="Endpoint=https://x.durabletask.io;TaskHub=h;Authentication=Bogus"
         )
 
-    # 6. Precedence: DTS_EMULATOR takes precedence over
-    # DURABLE_TASK_SCHEDULER_CONNECTION_STRING in env
+    # 6. Precedence: DURABLE_TASK_SCHEDULER_CONNECTION_STRING takes precedence over
+    # DTS_EMULATOR in env
     monkeypatch.setenv("DTS_EMULATOR", "127.0.0.1:8080")
     monkeypatch.setenv(
         "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
-        "Endpoint=https://my-dts.westus2.durabletask.io;TaskHub=envhub;Authentication=DefaultAzure",
+        "Endpoint=https://my-dts.westus2.durabletask.io;TaskHub=envhub;Authentication=None",
     )
     opts_prec = sdk_options()
-    assert opts_prec["host_address"] == "127.0.0.1:8080"
-    assert opts_prec["secure_channel"] is False
-    assert opts_prec["token_credential"] is None
+    assert opts_prec["host_address"] == "my-dts.westus2.durabletask.io"
+    assert opts_prec["taskhub"] == "envhub"
 
 
 def test_migration_shrinking_list_reducer_and_resume_crash_window():
@@ -3272,7 +3273,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
 
     import azure.functions as func
 
-    from langchain_azure_compute.graph import (
+    from langchain_azure_compute.graph.azure_functions import (
         FunctionAppHttpServer,
         create_function_app,
         dispatch_function_request,
@@ -3340,7 +3341,9 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
             return orch_states.get(instance_id)
 
     fake_sdk = FakeDtsSdk()
-    app = create_function_app(reg, fake_sdk, start_worker=False)
+    app = create_function_app(
+        reg, fake_sdk, start_worker=False, auth_level=func.AuthLevel.ANONYMOUS
+    )
 
     # 1. GET /api/health with real azure.functions.HttpRequest
     health_req = func.HttpRequest(
@@ -3372,7 +3375,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
     start_data = json.loads(start_resp.get_body())
     assert start_data == {
         "instanceId": "inst-501",
-        "threadId": "thr-501",
+        "threadId": "inst-501",
         "statusQueryGetUri": "http://localhost:7071/api/graphs/expense_approval/status/inst-501",
         "respondUri": "http://localhost:7071/api/graphs/expense_approval/respond/inst-501/{interruptId}",
     }
@@ -3390,7 +3393,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
     assert status_resp.status_code == 200
     status_data = json.loads(status_resp.get_body())
     assert status_data["instanceId"] == "inst-501"
-    assert status_data["threadId"] == "thr-501"
+    assert status_data["threadId"] == "inst-501"
     assert status_data["runtimeStatus"] == "RUNNING"
     assert status_data["output"] is None
     assert status_data["pendingInterrupts"] == [
@@ -3469,7 +3472,8 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
 
     # 6. Verify default auth_level is FUNCTION, caller ownership is enforced,
     # and FunctionAppHttpServer works over real TCP HTTP
-    assert getattr(app, "_auth_level", None) == func.AuthLevel.FUNCTION
+    default_app = create_function_app(reg, fake_sdk)
+    assert getattr(default_app, "_auth_level", None) == func.AuthLevel.FUNCTION
     owned_start = func.HttpRequest(
         method="POST",
         url="http://localhost:7071/api/graphs/expense_approval/start?instance_id=inst-owned",
@@ -3524,7 +3528,6 @@ def test_push_toolnode_parallel_command_and_toolmessage_commit():
     from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
     from langchain_core.tools import InjectedToolCallId, tool
     from langgraph.graph.message import add_messages
-    from langgraph.prebuilt import ToolNode, create_react_agent
     from langgraph.types import Command
 
     class AgentFilesState(TypedDict):
@@ -3588,11 +3591,12 @@ def test_push_toolnode_parallel_command_and_toolmessage_commit():
         )
     )
 
-    graph = create_react_agent(
-        model,
-        tools=ToolNode([write_virtual_file, lookup_kb]),
+    from langchain.agents import create_agent
+
+    graph = create_agent(
+        model=model,
+        tools=[write_virtual_file, lookup_kb],
         state_schema=AgentFilesState,
-        version="v2",
     )
     reg = attach_durability(graph, name="push_toolnode_v2")
 

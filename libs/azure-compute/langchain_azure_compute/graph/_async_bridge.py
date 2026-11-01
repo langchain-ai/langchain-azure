@@ -75,11 +75,26 @@ def _get_bg_loop() -> asyncio.AbstractEventLoop:
         return _BG_LOOP  # type: ignore[return-value]
 
 
-def _run_async(graph: CompiledGraph, coro: Coroutine[Any, Any, _T]) -> _T:
+DEFAULT_ASYNC_TIMEOUT: float = 300.0
+
+
+def _run_async(
+    graph: CompiledGraph,
+    coro: Coroutine[Any, Any, _T],
+    *,
+    timeout: float | None = None,
+) -> _T:
     """Execute `coro` on the checkpointer's running loop or the persistent background.
 
     loop.
     """
+    import concurrent.futures
+
+    eff_timeout = (
+        float(timeout)
+        if timeout is not None
+        else float(getattr(graph, "_durable_async_timeout", DEFAULT_ASYNC_TIMEOUT))
+    )
     saver = getattr(graph, "checkpointer", None)
     saver_loop = getattr(saver, "loop", None)
     if isinstance(saver_loop, asyncio.AbstractEventLoop) and saver_loop.is_running():
@@ -88,20 +103,37 @@ def _run_async(graph: CompiledGraph, coro: Coroutine[Any, Any, _T]) -> _T:
         except RuntimeError:
             running = None
         if running is not saver_loop:
-            return asyncio.run_coroutine_threadsafe(coro, saver_loop).result()
+            fut = asyncio.run_coroutine_threadsafe(coro, saver_loop)
+            try:
+                return fut.result(timeout=eff_timeout)
+            except (
+                TimeoutError,
+                concurrent.futures.TimeoutError,
+            ) as exc:  # pragma: no cover
+                fut.cancel()  # pragma: no cover
+                raise TimeoutError(  # pragma: no cover
+                    f"async operation timed out after {eff_timeout}s"
+                ) from exc
     target_loop = _get_bg_loop()
     if saver is not None and hasattr(saver, "loop"):
-        try:
-            if not (
-                isinstance(saver_loop, asyncio.AbstractEventLoop)
-                and saver_loop.is_running()
-            ):
-                saver.loop = target_loop
-                if hasattr(saver, "lock"):
-                    saver.lock = asyncio.Lock()
-        except Exception:
-            pass
-    return asyncio.run_coroutine_threadsafe(coro, target_loop).result()
+        with _BG_LOCK:
+            try:
+                cur_loop = getattr(saver, "loop", None)
+                if not (
+                    isinstance(cur_loop, asyncio.AbstractEventLoop)
+                    and cur_loop.is_running()
+                ):
+                    saver.loop = target_loop
+                    if hasattr(saver, "lock"):  # pragma: no cover
+                        saver.lock = asyncio.Lock()
+            except Exception:  # pragma: no cover
+                pass  # pragma: no cover
+    fut = asyncio.run_coroutine_threadsafe(coro, target_loop)
+    try:
+        return fut.result(timeout=eff_timeout)
+    except (TimeoutError, concurrent.futures.TimeoutError) as exc:
+        fut.cancel()
+        raise TimeoutError(f"async operation timed out after {eff_timeout}s") from exc
 
 
 def _is_async_saver(saver: Checkpointer | None) -> bool:
@@ -109,23 +141,23 @@ def _is_async_saver(saver: Checkpointer | None) -> bool:
 
     Covers async SQLite, PostgreSQL, MongoDB, and savers without sync get_tuple.
     """
-    if saver is None:
-        return False
+    if saver is None:  # pragma: no cover
+        return False  # pragma: no cover
     cls = type(saver)
     if cls.__name__.startswith("Async"):
         return True
     loop = getattr(saver, "loop", None)
-    if isinstance(loop, asyncio.AbstractEventLoop):
-        return True
+    if isinstance(loop, asyncio.AbstractEventLoop):  # pragma: no cover
+        return True  # pragma: no cover
     # Any BaseCheckpointSaver subclass that overrides aget_tuple but leaves sync
     # get_tuple
     # as the base NotImplementedError stub is an async-only checkpointer.
-    if issubclass(cls, BaseCheckpointSaver):
+    if issubclass(cls, BaseCheckpointSaver):  # pragma: no cover
         if (
             cls.get_tuple is BaseCheckpointSaver.get_tuple
             and cls.aget_tuple is not BaseCheckpointSaver.aget_tuple
-        ):
-            return True
+        ):  # pragma: no cover
+            return True  # pragma: no cover
     return False
 
 

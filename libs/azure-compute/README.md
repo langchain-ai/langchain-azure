@@ -182,7 +182,7 @@ from typing import Annotated, TypedDict
 
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -206,7 +206,21 @@ def refund_order(order_id: str) -> str:
 
 def manager_gate(state: SupportState) -> dict:
     decision = interrupt({"question": "Approve refund?", "order_id": "ord-42"})
-    return {"approved": bool(decision.get("approved"))}
+    return {
+        "approved": bool(decision.get("approved")),
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "refund_order",
+                        "args": {"order_id": "ord-42"},
+                    }
+                ],
+            )
+        ],
+    }
 
 
 builder = StateGraph(SupportState)
@@ -291,8 +305,8 @@ sdk = DurableTaskSchedulerClient(**hosted_opts)
 
 | Mode | How to Enable | How State Moves | Best For |
 | --- | --- | --- | --- |
-| **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, `PostgresSaver`, `CosmosDBSaver`, `MongoDBSaver`) | `inline_checkpoints=False` (default). DTS carries only checkpoint IDs and small control envelopes (`~8.6 KB/turn`). Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
-| **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
+| **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, or any `BaseCheckpointSaver`) | `inline_checkpoints=False` (default). DTS carries only `< 1 KB` checkpoint IDs and small control envelopes. Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
+| **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice (up to the 900 KB bundle guard) is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Single-turn runs or getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
 
 ### Configuring Tool Durability, Retries, and Concurrency
 

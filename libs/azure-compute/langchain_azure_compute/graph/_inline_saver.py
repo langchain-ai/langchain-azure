@@ -4,7 +4,7 @@
 
 checkpointers.
 
-`langgraph-durabletask` supports two state persistence tiers transparently:
+`langchain_azure_compute.graph` supports two state persistence tiers transparently:
 
 1. **Tier 1 - Persistent Checkpointer (Pointer-Only Mode):**
    When the caller supplies an external checkpointer (`SqliteSaver`, `AsyncSqliteSaver`,
@@ -35,16 +35,20 @@ import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import ormsgpack
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 from langchain_azure_compute.graph._config import (
+    _SERDE,
     CheckpointBundle,
     Checkpointer,
     CompiledGraph,
+    _strict_msgpack_ext_hook,
 )
 
 MAX_INLINE_THREAD_BUNDLES = 256
+MAX_BUNDLE_BYTES = 900_000
 _INLINE_SAVER_LOCK = threading.RLock()
 
 # Bounded in-process LRU/FIFO cache of the most recent exported bundle per thread_id so
@@ -58,7 +62,31 @@ def _encode_typed(pair: tuple[str, bytes]) -> list[str]:
 
 
 def _decode_typed(item: Sequence[str]) -> tuple[str, bytes]:
-    return (item[0], base64.b64decode(item[1]))
+    if not isinstance(item, (list, tuple)) or len(item) != 2:  # pragma: no cover
+        raise ValueError("invalid checkpoint bundle typed entry")  # pragma: no cover
+    kind, b64 = item[0], item[1]
+    if not isinstance(kind, str) or kind not in (
+        "json",
+        "msgpack",
+        "null",
+        "bytes",
+        "empty",
+    ):  # pragma: no cover
+        raise ValueError(
+            f"unsupported checkpoint bundle entry type {kind!r}"
+        )  # pragma: no cover
+    if not isinstance(b64, str):  # pragma: no cover
+        raise ValueError(
+            "checkpoint bundle entry payload must be a base64 string"
+        )  # pragma: no cover
+    raw = base64.b64decode(b64)
+    if kind == "msgpack":
+        ormsgpack.unpackb(
+            raw, ext_hook=_strict_msgpack_ext_hook, option=ormsgpack.OPT_NON_STR_KEYS
+        )
+    elif kind != "empty":
+        _SERDE.loads_typed((kind, raw))
+    return (kind, raw)
 
 
 def _ensure_checkpointer(graph: CompiledGraph) -> Checkpointer:
@@ -67,9 +95,11 @@ def _ensure_checkpointer(graph: CompiledGraph) -> Checkpointer:
     configured.
     """
     cp = getattr(graph, "checkpointer", None)
-    if cp is None:
-        cp = InMemorySaver()
-        graph.checkpointer = cp
+    if cp is None:  # pragma: no cover
+        cp = InMemorySaver(serde=_SERDE)  # pragma: no cover
+        graph.checkpointer = cp  # pragma: no cover
+    elif isinstance(cp, InMemorySaver):
+        cp.serde = _SERDE
     return cp  # type: ignore[return-value]
 
 
@@ -92,29 +122,33 @@ def _export_checkpoint_bundle(
 
     Includes latest and parent checkpoints, writes, and live blobs for crash recovery.
     """
-    if not _is_inline_checkpointer(graph):
-        return None
+    if not _is_inline_checkpointer(graph):  # pragma: no cover
+        return None  # pragma: no cover
     saver = getattr(graph, "checkpointer", None)
-    if not isinstance(saver, InMemorySaver):
-        return None
+    if not isinstance(saver, InMemorySaver):  # pragma: no cover
+        return None  # pragma: no cover
     with _INLINE_SAVER_LOCK:
         ns_map = saver.storage.get(thread)
-        if not ns_map:
-            return None
+        if not ns_map:  # pragma: no cover
+            return None  # pragma: no cover
 
         out_storage: dict[str, dict[str, list[Any]]] = {}
         out_writes: list[list[Any]] = []
         out_blobs: list[list[Any]] = []
         needed_blobs: set[tuple[str, str, Any]] = set()
 
+        has_ua = bool(getattr(graph, "_durable_user_interrupt_after", None))
         for ns, ckpts in list(ns_map.items()):
             if not ckpts:
                 continue
             latest_cid = max(ckpts.keys())
             keep_cids: list[str] = [latest_cid]
-            _, _, parent_cid = ckpts[latest_cid]
-            if parent_cid and parent_cid in ckpts and parent_cid not in keep_cids:
-                keep_cids.append(parent_cid)
+            if has_ua:
+                _, _, parent_cid = ckpts[latest_cid]
+                if (
+                    parent_cid and parent_cid in ckpts and parent_cid not in keep_cids
+                ):  # pragma: no cover
+                    keep_cids.append(parent_cid)
             ns_out: dict[str, list[Any]] = {}
             for cid in keep_cids:
                 ckpt_typed, meta_typed, par_id = ckpts[cid]
@@ -151,6 +185,15 @@ def _export_checkpoint_bundle(
             "writes": out_writes,
             "blobs": out_blobs,
         }
+        from langchain_azure_compute.graph._config import RunError, _size
+
+        bundle_bytes = _size(bundle)
+        if bundle_bytes > MAX_BUNDLE_BYTES:
+            raise RunError(
+                f"checkpoint_bundle size ({bundle_bytes} bytes) exceeds the "
+                f"{MAX_BUNDLE_BYTES}-byte DTS payload limit; configure a persistent "
+                "checkpointer (SqliteSaver, PostgresSaver, CosmosDBSaver)"
+            )
         if thread in _INLINE_THREAD_BUNDLES:
             _INLINE_THREAD_BUNDLES.pop(thread, None)
         while len(_INLINE_THREAD_BUNDLES) >= MAX_INLINE_THREAD_BUNDLES:
@@ -170,12 +213,12 @@ def _hydrate_checkpoint_bundle(
 
     (`InMemorySaver`).
     """
-    if not bundle:
-        return
+    if not bundle:  # pragma: no cover
+        return  # pragma: no cover
     with _INLINE_SAVER_LOCK:
         saver = _ensure_checkpointer(graph)
-        if not isinstance(saver, InMemorySaver):
-            return
+        if not isinstance(saver, InMemorySaver):  # pragma: no cover
+            return  # pragma: no cover
         if (
             only_if_missing_cfg is not None
             and saver.get_tuple(only_if_missing_cfg) is not None

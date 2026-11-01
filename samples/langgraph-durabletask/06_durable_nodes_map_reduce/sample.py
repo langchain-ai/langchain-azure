@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Example 06: Durable Nodes (`@durable_node` & `mark_node`) - Static Parallel Fan-Out & `Send()` Map-Reduce.
+"""Example 06: Durable Nodes (`@durable_node` & `@durable_node`) - Static Parallel Fan-Out & `Send()` Map-Reduce.
 
 Demonstrates:
-1. Static parallel fan-out (`START -> [branch_a, branch_b, branch_c] -> join`) using `@durable_node` and `mark_node`
+1. Static parallel fan-out (`START -> [branch_a, branch_b, branch_c] -> join`) using `@durable_node` and `@durable_node`
    so each branch executes concurrently as its own `langgraph.<name>.node` activity.
 2. Dynamic `Send("research_worker", item)` map-reduce fan-out with per-branch retry isolation (`branch #2` /
    `security` fails once on attempt 1 and retries independently without re-running sibling branches) and
@@ -23,7 +23,7 @@ from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from langchain_azure_compute.graph import attach_durability, durable_node, mark_node, sdk_options
+from langchain_azure_compute.graph import attach_durability, durable_node, sdk_options
 
 
 class StaticParallelState(TypedDict):
@@ -55,7 +55,7 @@ def build_static_parallel_graph(branch_attempts: dict[str, int]):
             branch_attempts["branch_c"] = branch_attempts.get("branch_c", 0) + 1
         return {"results": [f"C={state['seed'] + 3}"]}
 
-    mark_node(branch_c, durable=True, retries=2)
+    durable_node(branch_c, durable=True, retries=2)
 
     builder = StateGraph(StaticParallelState)
     builder.add_node("branch_a", branch_a)

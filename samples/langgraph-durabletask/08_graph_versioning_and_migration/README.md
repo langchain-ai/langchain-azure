@@ -47,7 +47,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e ".[test]"
+pip install -e "libs/azure-compute[durabletask]"
 ```
 
 Or from this sample folder:
@@ -103,7 +103,7 @@ python sample.py
 
 **PowerShell:**
 ```powershell
-cd examples\08_graph_versioning_and_migration
+cd samples\langgraph-durabletask\08_graph_versioning_and_migration
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 python sample.py
 ```
@@ -119,7 +119,7 @@ python samples/langgraph-durabletask/08_graph_versioning_and_migration/sample.py
 **PowerShell:**
 ```powershell
 $env:DTS_EMULATOR = "127.0.0.1:8080"
-python examples\08_graph_versioning_and_migration\sample.py
+python samples\langgraph-durabletask\08_graph_versioning_and_migration\sample.py
 ```
 
 ## Code Walkthrough

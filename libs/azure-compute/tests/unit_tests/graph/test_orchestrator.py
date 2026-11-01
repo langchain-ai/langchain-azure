@@ -951,7 +951,7 @@ def test_orchestrator_version_upgrade_on_continue_as_new_and_on_resume():
             "migrate_values": pack({"flag": True}),
         }
     )
-    assert res_y[1] == "langgraph.x.step"
+    assert res_y[1] == "langgraph.x@v2.step"
     req_resume = res_y[2]
     assert req_resume["kind"] == "resume"
     assert req_resume["migrate_from"] == "v1"
@@ -996,18 +996,18 @@ def test_orchestrator_version_upgrade_during_tool_and_node_interrupts():
     )
     assert ev == ("evt", "resume:ti1")
     mig_yield = gen.send({"value": pack("yes"), "version": "v2"})
-    assert mig_yield[1] == "langgraph.x.step" and mig_yield[2]["kind"] == "migrate"
+    assert mig_yield[1] == "langgraph.x@v2.step" and mig_yield[2]["kind"] == "migrate"
     assert mig_yield[2]["migrate_from"] == "v1" and mig_yield[2]["version"] == "v2"
     tool_retry_yield = gen.send({"status": "tools", "ckpt": "c1@mig", "jumped": False})
     assert (
-        tool_retry_yield[1] == "langgraph.x.tool"
+        tool_retry_yield[1] == "langgraph.x@v2.tool"
         and tool_retry_yield[2]["version"] == "v2"
     )
     commit_yield = gen.send(
         {"call_id": "c1:tools:0:tc1", "status": "ok", "output": pack("ok")}
     )
     assert (
-        commit_yield[1] == "langgraph.x.step"
+        commit_yield[1] == "langgraph.x@v2.step"
         and commit_yield[2]["kind"] == "tools"
         and commit_yield[2]["version"] == "v2"
     )
@@ -1043,7 +1043,7 @@ def test_orchestrator_version_upgrade_during_tool_and_node_interrupts():
         {"value": pack("jump"), "upgrade": {"version": "v2", "as_node": "after_n1"}}
     )
     assert (
-        mig_y2[1] == "langgraph.x.step"
+        mig_y2[1] == "langgraph.x@v2.step"
         and mig_y2[2]["kind"] == "migrate"
         and mig_y2[2]["as_node"] == "after_n1"
     )
@@ -1150,9 +1150,13 @@ def test_continue_as_new_every_single_step_preserves_all_fields():
         attach_durability,
         durable_node,
         durable_tool,
-        read_output,
     )
-    from langchain_azure_compute.graph.runner import run_node, run_step, run_tool
+    from langchain_azure_compute.graph.runner import (
+        read_output,
+        run_node,
+        run_step,
+        run_tool,
+    )
 
     @dataclass
     class T1Ctx:
@@ -1200,10 +1204,10 @@ def test_continue_as_new_every_single_step_preserves_all_fields():
 
     def build_t1(ver_label: str):
         b = StateGraph(T1State, context_schema=T1Ctx)
-        b.add_node("agent", agent)
+        b.add_node("agent", agent)  # type: ignore[arg-type]
         b.add_node("tools", ToolNode([t1_tool]))
-        b.add_node("dnode", dnode)
-        b.add_node("finish", lambda s: {"log": [f"finish:{ver_label}"]})
+        b.add_node("dnode", dnode)  # type: ignore[arg-type]
+        b.add_node("finish", lambda s: {"log": [f"finish:{ver_label}"]})  # type: ignore[arg-type]
         b.add_edge(START, "agent")
         b.add_conditional_edges(
             "agent",
@@ -1265,9 +1269,9 @@ def test_continue_as_new_every_single_step_preserves_all_fields():
                     raise AssertionError("single tool/node should yield ActTask")
                 elif yielded[0] == "act":
                     _, act_name, act_inp = yielded
-                    if act_name == reg.step_name:
+                    if act_name.endswith(".step"):
                         val = run_step(reg.graph, lim, act_inp)
-                    elif act_name == reg.tool_name:
+                    elif act_name.endswith(".tool"):
                         val = run_tool(reg.graph, act_inp)
                     else:
                         val = run_node(reg.graph, act_inp)

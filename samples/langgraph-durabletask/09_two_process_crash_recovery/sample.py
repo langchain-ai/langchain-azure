@@ -9,7 +9,7 @@ Answers a common production question:
 
 How it works under the hood:
   In Zero-Config mode (`inline_checkpoints=True`), after every superstep and durable
-  tool call, `langgraph-durabletask` exports the active thread's latest checkpoint slice
+  tool call, `langchain_azure_compute.graph` exports the active thread's latest checkpoint slice
   into a compact `checkpoint_bundle` carried in the DTS orchestration state. When a
   new worker process (`Pod B`) picks up the next step, it automatically hydrates its own
   fresh `InMemorySaver` from that `checkpoint_bundle` before invoking LangGraph - with
@@ -201,7 +201,7 @@ def _spawn_worker_subprocess(
     """Spawn a separate OS process running a DTS worker and wait for its `WORKER_READY` banner."""
     child_env = os.environ.copy()
     src_dir = next(
-        (str(p / "src") for p in Path(__file__).resolve().parents if (p / "src" / "langgraph_durabletask").is_dir()),
+        (str(p / "libs" / "azure-compute") for p in Path(__file__).resolve().parents if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()),
         str(Path(__file__).resolve().parent.parent / "src"),
     )
     existing_pp = child_env.get("PYTHONPATH", "")

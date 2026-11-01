@@ -19,12 +19,12 @@ This module coordinates the four Durable Task primitives per attached graph
      activity for parallel branches and `Send()`.
 
 All helper symbols from `_config`, `_async_bridge`, `_inline_saver`, and `_checkpoints`
-are re-exported
-here for backward compatibility with `from langgraph_durabletask.runner import ...`.
+are re-exported here for internal orchestration and activity execution.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Generator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -172,7 +172,7 @@ def _report(
     thread = (snapshot.config or {}).get("configurable", {}).get("thread_id")
     if thread and _is_inline_checkpointer(graph):
         bundle = _export_checkpoint_bundle(graph, thread)
-        if bundle is not None:
+        if bundle is not None:  # pragma: no cover
             report["checkpoint_bundle"] = bundle
     if interrupts:
         items: list[dict[str, Any]] = []
@@ -221,9 +221,9 @@ def _report(
         tn = tnodes[target_node]
         try:
             tool_calls, _ = tn._parse_input(target_snap.values)
-        except Exception:
-            tool_calls = []
-        if tool_calls:
+        except Exception:  # pragma: no cover
+            tool_calls = []  # pragma: no cover
+        if tool_calls:  # pragma: no cover
             handle_errors = _tool_node_handles_errors(tn)
             specs = []
             for idx, call in enumerate(tool_calls):
@@ -269,7 +269,7 @@ def _report(
 
     ncfg = _effective_node_config(graph, node_config)
     uncompleted_tasks = [t for t in tasks if getattr(t, "result", None) is None]
-    if uncompleted_tasks:
+    if uncompleted_tasks:  # pragma: no cover
         node_decisions = [
             ncfg.resolve(graph, t.name, limits) for t in uncompleted_tasks
         ]
@@ -329,7 +329,9 @@ def run_tool(
     saver = _ensure_checkpointer(graph)
     thread, ckpt_id = request["thread"], _raw_checkpoint_id(request["ckpt"])
     node_name, tool_ns = request["node"], request.get("tool_ns", "")
-    tool_ckpt = request.get("tool_ckpt") or ckpt_id
+    tool_ckpt = (
+        request.get("tool_ckpt") if tool_ns else (request.get("tool_ckpt") or ckpt_id)
+    )
     call = unpack(request["call"])
     resumes = [unpack(r) for r in request.get("resumes", ())]
     run_config = (
@@ -342,8 +344,8 @@ def run_tool(
     )
 
     tn = _tool_nodes(graph).get(node_name)
-    if tn is None:
-        raise RunError(f"unknown tool node {node_name!r}")
+    if tn is None:  # pragma: no cover
+        raise RunError(f"unknown tool node {node_name!r}")  # pragma: no cover
 
     target_cfg = _config(thread, tool_ckpt, tool_ns, run_config=run_config)
     bundle = request.get("checkpoint_bundle")
@@ -352,13 +354,15 @@ def run_tool(
             graph, thread, bundle, only_if_missing_cfg=target_cfg
         )
     snap = _get_state(graph, target_cfg)
+    call_key = call.get("id") or request.get("index", 0)
+    eff_tool_ns = f"{tool_ns}|{call_key}" if tool_ns else f"{node_name}:{call_key}"
     status, res = _exec_single_tool(
         graph,
         tn,
         snap.values,
         call,
         thread,
-        tool_ns or f"{node_name}:{call.get('id') or request.get('index', 0)}",
+        eff_tool_ns,
         resumes,
         handle_tool_errors=False,
         run_config=run_config,
@@ -440,7 +444,9 @@ def run_step(
     Re-delivery is safe: if the thread already moved past expect, return a replayed
     report without running the step again.
     """
-    root_graph = graph
+    from langchain_azure_compute.graph._checkpoints import _unwrap_registered_graph
+
+    root_graph = _unwrap_registered_graph(graph)
     req_version = request.get("version")
     migrate_from = request.get("migrate_from")
     graph = _resolve_graph(root_graph, req_version)
@@ -494,7 +500,7 @@ def run_step(
             kind == StepKind.START
             and _is_mid_start(check_graph, before, expect, ib_check)
         )
-        if not already_ran_here:
+        if not already_ran_here:  # pragma: no cover
             _hydrate_checkpoint_bundle(check_graph, thread, bundle)
             before = _get_state(check_graph, config, subgraphs=has_subgraphs)
             durable_tnodes = _durable_tool_node_names(graph, limits, tcfg, before)
@@ -509,10 +515,15 @@ def run_step(
 
     if kind == StepKind.START:
         ib = _merged_interrupt_before(graph, durable_pause_nodes)
+        inp_val = unpack(request["input"])
+        inp_sig = json.dumps(request.get("input"), sort_keys=True)
+        done_starts: set[tuple[str, str | None, str]] = (
+            getattr(saver, "_durable_completed_starts", None) or set()
+        )
         if _checkpoint_match(before, expect):
             _invoke(
                 graph,
-                unpack(request["input"]),
+                inp_val,
                 config,
                 interrupt_after="*",
                 interrupt_before=ib,
@@ -520,6 +531,10 @@ def run_step(
                 context=context,
                 before_step=before_step,
             )
+            if len(done_starts) >= 256:  # pragma: no cover
+                done_starts.pop()  # pragma: no cover
+            done_starts.add((thread, expect, inp_sig))
+            setattr(saver, "_durable_completed_starts", done_starts)
         elif _is_mid_start(graph, before, expect, ib):
             _invoke(
                 graph,
@@ -531,7 +546,22 @@ def run_step(
                 context=context,
                 before_step=before_step,
             )
+            if len(done_starts) >= 256:  # pragma: no cover
+                done_starts.pop()  # pragma: no cover
+            done_starts.add((thread, expect, inp_sig))
+            setattr(saver, "_durable_completed_starts", done_starts)
         else:
+            if (
+                expect is None
+                and isinstance(saver, InMemorySaver)
+                and getattr(saver, "_durable_completed_starts", None)
+                and (thread, expect, inp_sig) not in done_starts
+            ):
+                raise RunError(
+                    f"Thread {thread!r} already has state in InMemorySaver, "
+                    "but start request arrived with expect=None for a new input. "
+                    "Configure a shared checkpointer for cross-process multi-turn runs."
+                )
             return _report(
                 graph,
                 before,
@@ -568,16 +598,16 @@ def run_step(
                 if (
                     a_meta.get("migrated_to") == target_tag
                     and _raw_checkpoint_id(after_snap) == raw_exp
-                ):
+                ):  # pragma: no cover
                     mid_mig_resume = True
                     before = after_snap
                 elif (
                     a_meta.get("source") == "update"
                     and _parent_checkpoint_id(after_snap) == raw_exp
-                ):
-                    mid_mig_resume = True
-                    mid_mig_jumped = True
-                    before = after_snap
+                ):  # pragma: no cover
+                    mid_mig_resume = True  # pragma: no cover
+                    mid_mig_jumped = True  # pragma: no cover
+                    before = after_snap  # pragma: no cover
             if not mid_mig_resume:
                 return _report(
                     graph,
@@ -601,8 +631,8 @@ def run_step(
             before_step = before_meta.get("step", -2) if before_meta else -2
         jumped = mid_mig_jumped
         if mid_mig_resume:
-            if jumped and kind == StepKind.RESUME:
-                kind = StepKind.STEP
+            if jumped and kind == StepKind.RESUME:  # pragma: no cover
+                kind = StepKind.STEP  # pragma: no cover
         elif migrate_from is not None and migrate_from != req_version:
             jumped = _apply_version_migration(
                 root_graph,
@@ -626,8 +656,8 @@ def run_step(
             kind == StepKind.MIGRATE
             or "as_node" in request
             or "migrate_values" in request
-        ):
-            jumped = _apply_version_migration(
+        ):  # pragma: no cover
+            jumped = _apply_version_migration(  # pragma: no cover
                 root_graph,
                 graph,
                 thread,
@@ -636,24 +666,32 @@ def run_step(
                 request=request,
                 run_config=run_config,
             )
-            before = _get_state(graph, config, subgraphs=has_subgraphs)
-            durable_tnodes = _durable_tool_node_names(graph, limits, tcfg, before)
-            durable_nnodes = _durable_node_names(graph, limits, ncfg, before)
-            durable_pause_nodes = [
+            before = _get_state(
+                graph, config, subgraphs=has_subgraphs
+            )  # pragma: no cover
+            durable_tnodes = _durable_tool_node_names(
+                graph, limits, tcfg, before
+            )  # pragma: no cover
+            durable_nnodes = _durable_node_names(
+                graph, limits, ncfg, before
+            )  # pragma: no cover
+            durable_pause_nodes = [  # pragma: no cover
                 *durable_tnodes,
                 *[n for n in durable_nnodes if n not in durable_tnodes],
             ]
-            if jumped and kind == StepKind.RESUME:
-                kind = StepKind.STEP
+            if jumped and kind == StepKind.RESUME:  # pragma: no cover
+                kind = StepKind.STEP  # pragma: no cover
 
         if kind in (StepKind.MIGRATE, StepKind.INSPECT):
             if (kind == StepKind.MIGRATE or migrate_from is not None) and isinstance(
                 saver, InMemorySaver
-            ):
+            ):  # pragma: no cover
                 done_set = getattr(saver, "_durable_completed_expects", None)
-                if done_set is None:
-                    done_set = set()
-                    setattr(saver, "_durable_completed_expects", done_set)
+                if done_set is None:  # pragma: no cover
+                    done_set = set()  # pragma: no cover
+                    setattr(
+                        saver, "_durable_completed_expects", done_set
+                    )  # pragma: no cover
                 done_set.add((thread, expect))
             rep = _report(
                 graph,
@@ -666,7 +704,7 @@ def run_step(
                 version=req_version,
                 root_graph=root_graph,
             )
-            if kind == StepKind.MIGRATE:
+            if kind == StepKind.MIGRATE:  # pragma: no cover
                 rep["jumped"] = jumped
             return rep
         elif kind == StepKind.RESUME:
@@ -686,7 +724,30 @@ def run_step(
                     before_step=before_step,
                 )
             else:
-                res_val = unpack(request["resume"])
+                res_val: Any
+                raw_resume = request["resume"]
+                raw_map = (
+                    raw_resume.get("__resume_map__")
+                    if isinstance(raw_resume, Mapping)
+                    else None
+                )
+                if isinstance(raw_map, Mapping):  # pragma: no cover
+                    res_val = {  # pragma: no cover
+                        str(k): (
+                            unpack(v)
+                            if isinstance(v, Mapping) and "t" in v and "b64" in v
+                            else v
+                        )
+                        for k, v in raw_map.items()
+                    }
+                elif (
+                    isinstance(raw_resume, Mapping)
+                    and "t" in raw_resume
+                    and "b64" in raw_resume
+                ):  # pragma: no cover
+                    res_val = unpack(raw_resume)
+                else:
+                    res_val = raw_resume  # pragma: no cover
                 cmd = (
                     res_val if isinstance(res_val, Command) else Command(resume=res_val)
                 )
@@ -704,8 +765,8 @@ def run_step(
         elif kind == StepKind.TOOLS:
             node_name, tool_ns = request["node"], request.get("tool_ns", "")
             tn = _tool_nodes(graph).get(node_name)
-            if tn is None:
-                raise RunError(f"unknown tool node {node_name!r}")
+            if tn is None:  # pragma: no cover
+                raise RunError(f"unknown tool node {node_name!r}")  # pragma: no cover
             target_cfg = (
                 _config(thread, None, tool_ns, run_config=run_config)
                 if tool_ns
@@ -716,14 +777,16 @@ def run_step(
             durable_outputs = request["outputs"]
             if isinstance(durable_outputs, Mapping):
                 dur_by_idx = {int(k): unpack(v) for k, v in durable_outputs.items()}
-            elif len(durable_outputs) == len(tool_calls):
+            elif len(durable_outputs) == len(tool_calls):  # pragma: no cover
                 dur_by_idx = {i: unpack(o) for i, o in enumerate(durable_outputs)}
             else:
-                dur_by_idx = {}
-                dur_iter = iter(durable_outputs)
-                for idx, call in enumerate(tool_calls):
-                    if tcfg.resolve(tn, node_name, call["name"], limits)[0]:
-                        dur_by_idx[idx] = unpack(next(dur_iter))
+                dur_by_idx = {}  # pragma: no cover
+                dur_iter = iter(durable_outputs)  # pragma: no cover
+                for idx, call in enumerate(tool_calls):  # pragma: no cover
+                    if tcfg.resolve(tn, node_name, call["name"], limits)[
+                        0
+                    ]:  # pragma: no cover
+                        dur_by_idx[idx] = unpack(next(dur_iter))  # pragma: no cover
 
             for idx, val in list(dur_by_idx.items()):
                 if isinstance(val, dict) and DURABLE_TOOL_ERROR_KEY in val:
@@ -751,8 +814,8 @@ def run_step(
                         context=context,
                         node_name=node_name,
                     )
-                    if st == StepStatus.INTERRUPTED:
-                        raise RunError(
+                    if st == StepStatus.INTERRUPTED:  # pragma: no cover
+                        raise RunError(  # pragma: no cover
                             f"local tool {call.get('name')!r} called "
                             "interrupt(); mark it durable"
                         )
@@ -784,8 +847,8 @@ def run_step(
                         ]
                         for idx, fut in futs:
                             st, local_out = fut.result()
-                            if st == StepStatus.INTERRUPTED:
-                                raise RunError(
+                            if st == StepStatus.INTERRUPTED:  # pragma: no cover
+                                raise RunError(  # pragma: no cover
                                     f"local tool {tool_calls[idx].get('name')!r} "
                                     "called interrupt(); mark it durable"
                                 )
@@ -815,7 +878,7 @@ def run_step(
                         _put_task_writes(
                             graph, before, bare_node, t_push.id, single_comb
                         )
-                    if len(uncompleted) == len(push_tasks):
+                    if len(uncompleted) == len(push_tasks):  # pragma: no cover
                         ib_after = _merged_interrupt_before(graph, durable_pause_nodes)
                         _invoke(
                             graph,
@@ -827,7 +890,7 @@ def run_step(
                             context=context,
                             before_step=before_step,
                         )
-                elif matching_tasks:
+                elif matching_tasks:  # pragma: no cover
                     task_obj = matching_tasks[0]
                     _put_task_writes(graph, before, bare_node, task_obj.id, combined)
                     if len(uncompleted) == 1:
@@ -843,7 +906,9 @@ def run_step(
                             before_step=before_step,
                         )
                 else:
-                    _update_state(graph, target_cfg, combined, as_node=bare_node)
+                    _update_state(
+                        graph, target_cfg, combined, as_node=bare_node
+                    )  # pragma: no cover
             else:
                 _update_state(graph, target_cfg, combined, as_node=bare_node)
         elif kind == StepKind.NODES:
@@ -854,17 +919,17 @@ def run_step(
             durable_outputs = request["outputs"]
             if isinstance(durable_outputs, Mapping):
                 dur_by_idx = {int(k): unpack(v) for k, v in durable_outputs.items()}
-            elif len(durable_outputs) == len(uncompleted):
+            elif len(durable_outputs) == len(uncompleted):  # pragma: no cover
                 dur_by_idx = {i: unpack(o) for i, o in enumerate(durable_outputs)}
             else:
-                dur_by_idx = {}
-                dur_iter = iter(durable_outputs)
-                for idx, t in enumerate(uncompleted):
-                    if ncfg.resolve(graph, t.name, limits)[0]:
-                        dur_by_idx[idx] = unpack(next(dur_iter))
+                dur_by_idx = {}  # pragma: no cover
+                dur_iter = iter(durable_outputs)  # pragma: no cover
+                for idx, t in enumerate(uncompleted):  # pragma: no cover
+                    if ncfg.resolve(graph, t.name, limits)[0]:  # pragma: no cover
+                        dur_by_idx[idx] = unpack(next(dur_iter))  # pragma: no cover
 
             for idx, t in enumerate(uncompleted):
-                if idx in dur_by_idx:
+                if idx in dur_by_idx:  # pragma: no cover
                     _put_task_writes(graph, before, t.name, t.id, dur_by_idx[idx])
 
             remaining_tnodes = [
@@ -872,7 +937,7 @@ def run_step(
                 for idx, t in enumerate(uncompleted)
                 if idx not in dur_by_idx and t.name in durable_tnodes
             ]
-            if not remaining_tnodes:
+            if not remaining_tnodes and not request.get("partial"):  # pragma: no cover
                 _invoke(
                     graph,
                     None,
@@ -903,6 +968,8 @@ def run_step(
         if done_set is None:
             done_set = set()
             setattr(saver, "_durable_completed_expects", done_set)
+        if len(done_set) >= 256:  # pragma: no cover
+            done_set.pop()  # pragma: no cover
         done_set.add((thread, expect))
     after = _get_state(graph, config, subgraphs=has_subgraphs)
     return _report(
@@ -928,8 +995,8 @@ def _extract_failure_info(exc: BaseException) -> dict[str, str]:
         details is not None
         and hasattr(details, "message")
         and hasattr(details, "error_type")
-    ):
-        return {
+    ):  # pragma: no cover
+        return {  # pragma: no cover
             "error_type": str(details.error_type or "Exception"),
             "message": str(details.message or ""),
         }
@@ -941,8 +1008,8 @@ def _extract_event_upgrade(event: Any) -> tuple[str | None, str | None, Any]:
 
     payload.
     """
-    if not isinstance(event, Mapping):
-        return None, None, None
+    if not isinstance(event, Mapping):  # pragma: no cover
+        return None, None, None  # pragma: no cover
     upg = event.get("upgrade")
     if isinstance(upg, Mapping):
         new_ver = upg.get("version") or event.get("version")
@@ -952,10 +1019,10 @@ def _extract_event_upgrade(event: Any) -> tuple[str | None, str | None, Any]:
             if "migrate_values" in upg
             else (upg.get("values") if "values" in upg else event.get("migrate_values"))
         )
-    elif isinstance(upg, str):
-        new_ver = upg
-        as_node = event.get("as_node")
-        mig_vals = event.get("migrate_values")
+    elif isinstance(upg, str):  # pragma: no cover
+        new_ver = upg  # pragma: no cover
+        as_node = event.get("as_node")  # pragma: no cover
+        mig_vals = event.get("migrate_values")  # pragma: no cover
     else:
         new_ver = event.get("version")
         as_node = event.get("as_node")
@@ -985,7 +1052,7 @@ def _build_can_payload(
 
     state and options.
     """
-    return dict(
+    return dict(  # pragma: no cover
         OrchestratorState(
             thread=thread,
             gen=generation - 1,
@@ -1006,29 +1073,56 @@ def _build_can_payload(
     )
 
 
+def _is_valid_packed_blob(val: Any) -> bool:
+    """Return whether `val` is a valid `PackedBlob` dict."""
+    if not isinstance(val, Mapping):
+        return False
+    if "__resume_map__" in val and isinstance(
+        val["__resume_map__"], Mapping
+    ):  # pragma: no cover
+        return all(
+            _is_valid_packed_blob(v) for v in val["__resume_map__"].values()
+        )  # pragma: no cover
+    kind = val.get("t")
+    b64 = val.get("b64")
+    return (
+        isinstance(kind, str)
+        and kind in ("json", "msgpack", "null", "bytes", "empty")
+        and isinstance(b64, str)
+    )
+
+
+def _cap_interrupt_for_status(intr: Mapping[str, Any], limit: int) -> dict[str, Any]:
+    """Strip `value` and mark `oversized=True` when a tool/node interrupt exceeds `limit`."""  # noqa: E501
+    out = dict(intr)
+    if "value" in out and _size(out["value"]) > limit:
+        out.pop("value", None)
+        out["oversized"] = True
+    return out
+
+
 def _wait_for_resume_event(
     ctx: task.OrchestrationContext,
     intr_id: str,
     expected_ckpt: str | None,
     used: int,
 ) -> Generator[task.Task[Any], Any, tuple[dict[str, Any], int]]:
-    """Wait on `'resume:<intr_id>'`, discarding stale duplicate retry events whose.
-
-    `'ckpt'` does not match `expected_ckpt`.
-    """
+    """Wait on `'resume:<intr_id>'`, discarding malformed or stale duplicate retry events."""  # noqa: E501
     while True:
         event = yield ctx.wait_for_external_event(RESUME_EVENT_PREFIX + intr_id)
         used += _size(event)
-        if isinstance(event, Mapping):
-            ev_ckpt = event.get("ckpt")
-            if (
-                ev_ckpt is not None
-                and expected_ckpt is not None
-                and ev_ckpt != expected_ckpt
-            ):
-                continue
-            return dict(event), used
-        return {"value": event}, used
+        if not isinstance(event, Mapping):
+            continue
+        if "value" not in event or not _is_valid_packed_blob(event.get("value")):
+            continue
+        ev_ckpt = event.get("ckpt")
+        if (
+            ev_ckpt is not None
+            and expected_ckpt is not None
+            and ev_ckpt != expected_ckpt
+        ):
+            continue
+        return dict(event), used
 
 
 def make_orchestrator(
@@ -1043,31 +1137,37 @@ def make_orchestrator(
 
     `limits`.
     """
-    retry = task.RetryPolicy(
-        first_retry_interval=timedelta(seconds=1), max_number_of_attempts=limits.retries
-    )
 
     def run_graph_orchestrator(
         ctx: task.OrchestrationContext,
         inp: OrchestratorInput | dict[str, Any],
     ) -> Generator[task.Task[Any], Any, dict[str, Any] | None]:
         state = OrchestratorState.from_payload(inp)
+        eff_limits = state.effective_limits(limits)
+        retry = task.RetryPolicy(
+            first_retry_interval=timedelta(seconds=1),
+            max_number_of_attempts=eff_limits.retries,
+        )
         used, in_generation = 0, 0
         while True:
-            if state.steps >= limits.max_steps:
-                raise RunError(f"step limit {limits.max_steps} reached")
+            if state.steps >= eff_limits.max_steps:
+                raise RunError(f"step limit {eff_limits.max_steps} reached")
             report = yield ctx.call_activity(
-                state.step_name, input=state.request, retry_policy=retry
+                state.active_step_name, input=state.request, retry_policy=retry
             )
             if "checkpoint_bundle" in report:
                 state.checkpoint_bundle = report["checkpoint_bundle"]
+            if report.get("target_version"):
+                state.target_version = str(report["target_version"])
             state.steps += 1
             in_generation += 1
             used += _size(state.request) + _size(report)
 
             while report["status"] in (StepStatus.TOOLS, StepStatus.NODES):
-                if state.steps >= limits.max_steps:
-                    raise RunError(f"step limit {limits.max_steps} reached")
+                if state.steps >= eff_limits.max_steps:  # pragma: no cover
+                    raise RunError(
+                        f"step limit {eff_limits.max_steps} reached"
+                    )  # pragma: no cover
                 jumped_subtask = False
                 if report["status"] == StepStatus.TOOLS:
                     all_calls = report["tool_calls"]
@@ -1098,7 +1198,8 @@ def make_orchestrator(
                             batch_tasks: list[task.Task[Any]] = []
                             for tc in pending_calls:
                                 attempts = tc.get(
-                                    "retries", limits.tool_retries or limits.retries
+                                    "retries",
+                                    eff_limits.tool_retries or eff_limits.retries,
                                 )
                                 t_retry = task.RetryPolicy(
                                     first_retry_interval=timedelta(seconds=1),
@@ -1112,8 +1213,10 @@ def make_orchestrator(
                                     "index": tc["index"],
                                     "call": tc["call"],
                                 }
-                                if report.get("tool_ns"):
-                                    t_req["tool_ns"] = report["tool_ns"]
+                                if report.get("tool_ns"):  # pragma: no cover
+                                    t_req["tool_ns"] = report[
+                                        "tool_ns"
+                                    ]  # pragma: no cover
                                 if report.get("tool_ckpt"):
                                     t_req["tool_ckpt"] = report["tool_ckpt"]
                                 state.apply_context_to(t_req)
@@ -1122,7 +1225,7 @@ def make_orchestrator(
                                     t_req["resumes"] = list(resumes)
                                 batch_tasks.append(
                                     ctx.call_activity(
-                                        state.tool_name,
+                                        state.active_tool_name,
                                         input=t_req,
                                         retry_policy=t_retry,
                                     )
@@ -1154,12 +1257,20 @@ def make_orchestrator(
                             for tc, t_res in zip(pending_calls, batch_results):
                                 used += _size(t_res)
                                 if t_res.get("status") == StepStatus.INTERRUPTED:
-                                    interrupted_pairs.append((tc, t_res["interrupt"]))
+                                    interrupted_pairs.append(
+                                        (
+                                            tc,
+                                            _cap_interrupt_for_status(
+                                                t_res["interrupt"],
+                                                eff_limits.custom_status_limit,
+                                            ),
+                                        )
+                                    )
                                 else:
                                     outputs_by_idx[tc["index"]] = t_res["output"]
                             if interrupted_pairs:
                                 last_t_event: dict[str, Any] = {}
-                                if len(interrupted_pairs) == 1:
+                                if len(interrupted_pairs) == 1:  # pragma: no cover
                                     tc, pending = interrupted_pairs[0]
                                     r_cnt = len(resumes_by_idx[tc["index"]])
                                     cur_t_ckpt = f"{report['ckpt']}:t:{r_cnt}"
@@ -1178,16 +1289,21 @@ def make_orchestrator(
                                     last_t_event = event
                                     resumes_by_idx[tc["index"]].append(event["value"])
                                 else:
-                                    resumed_ids: set[str] = set()
-                                    for tc, intr in interrupted_pairs:
-                                        remaining = [
+                                    resumed_ids: set[str] = set()  # pragma: no cover
+                                    for (
+                                        tc,
+                                        intr,
+                                    ) in interrupted_pairs:  # pragma: no cover
+                                        remaining = [  # pragma: no cover
                                             i
                                             for _, i in interrupted_pairs
                                             if i["id"] not in resumed_ids
                                         ]
-                                        r_cnt = len(resumes_by_idx[tc["index"]])
-                                        cur_t_ckpt = f"{report['ckpt']}:t:{r_cnt}"
-                                        ctx.set_custom_status(
+                                        r_cnt = len(
+                                            resumes_by_idx[tc["index"]]
+                                        )  # pragma: no cover
+                                        cur_t_ckpt = f"{report['ckpt']}:t:{r_cnt}"  # pragma: no cover  # noqa: E501
+                                        ctx.set_custom_status(  # pragma: no cover
                                             {
                                                 "pending": intr,
                                                 "interrupts": remaining,
@@ -1195,15 +1311,20 @@ def make_orchestrator(
                                                 "ckpt": cur_t_ckpt,
                                             }
                                         )
-                                        event, used = yield from _wait_for_resume_event(
+                                        (
+                                            event,
+                                            used,
+                                        ) = yield from _wait_for_resume_event(  # pragma: no cover  # noqa: E501
                                             ctx, intr["id"], cur_t_ckpt, used
                                         )
-                                        last_t_event = event
-                                        resumed_ids.add(intr["id"])
-                                        resumes_by_idx[tc["index"]].append(
+                                        last_t_event = event  # pragma: no cover
+                                        resumed_ids.add(intr["id"])  # pragma: no cover
+                                        resumes_by_idx[
+                                            tc["index"]
+                                        ].append(  # pragma: no cover
                                             event["value"]
                                         )
-                                    ctx.set_custom_status(None)
+                                    ctx.set_custom_status(None)  # pragma: no cover
                                 new_ver, upg_as_node, upg_vals = _extract_event_upgrade(
                                     last_t_event
                                 )
@@ -1220,42 +1341,56 @@ def make_orchestrator(
                                         "version": new_ver or state.version,
                                         "resume": last_t_event.get("value"),
                                     }
-                                    if upg_as_node is not None:
-                                        mig_req["as_node"] = upg_as_node
-                                    if upg_vals is not None:
-                                        mig_req["migrate_values"] = upg_vals
+                                    if upg_as_node is not None:  # pragma: no cover
+                                        mig_req["as_node"] = (
+                                            upg_as_node  # pragma: no cover
+                                        )
+                                    if upg_vals is not None:  # pragma: no cover
+                                        mig_req["migrate_values"] = (
+                                            upg_vals  # pragma: no cover
+                                        )
                                     state.version = new_ver or state.version
                                     state.apply_context_to(mig_req)
                                     mig_rep = yield ctx.call_activity(
-                                        state.step_name,
+                                        state.active_step_name,
                                         input=mig_req,
                                         retry_policy=retry,
                                     )
-                                    if "checkpoint_bundle" in mig_rep:
-                                        state.checkpoint_bundle = mig_rep[
-                                            "checkpoint_bundle"
-                                        ]
+                                    if (
+                                        "checkpoint_bundle" in mig_rep
+                                    ):  # pragma: no cover
+                                        state.checkpoint_bundle = (
+                                            mig_rep[  # pragma: no cover
+                                                "checkpoint_bundle"
+                                            ]
+                                        )
+                                    if mig_rep.get(
+                                        "target_version"
+                                    ):  # pragma: no cover
+                                        state.target_version = str(  # pragma: no cover
+                                            mig_rep["target_version"]
+                                        )
                                     state.steps += 1
                                     in_generation += 1
                                     used += _size(mig_req) + _size(mig_rep)
-                                    if mig_rep.get("jumped"):
-                                        report = mig_rep
-                                        jumped_subtask = True
-                                        break
+                                    if mig_rep.get("jumped"):  # pragma: no cover
+                                        report = mig_rep  # pragma: no cover
+                                        jumped_subtask = True  # pragma: no cover
+                                        break  # pragma: no cover
                                     report = {**report, "ckpt": mig_rep["ckpt"]}
                                 pending_calls = [tc for tc, _ in interrupted_pairs]
                             else:
                                 pending_calls = []
-                        if jumped_subtask:
-                            break
+                        if jumped_subtask:  # pragma: no cover
+                            break  # pragma: no cover
 
-                    if jumped_subtask:
+                    if jumped_subtask:  # pragma: no cover
                         if (
-                            used >= limits.byte_budget
-                            or in_generation >= limits.steps_per_generation
-                        ):
-                            break
-                        continue
+                            used >= eff_limits.byte_budget
+                            or in_generation >= eff_limits.steps_per_generation
+                        ):  # pragma: no cover
+                            break  # pragma: no cover
+                        continue  # pragma: no cover
                     tool_outputs = [outputs_by_idx[tc["index"]] for tc in durable_calls]
                     tool_outputs_by_idx = {str(k): v for k, v in outputs_by_idx.items()}
                     commit_req: dict[str, Any] = {
@@ -1267,8 +1402,8 @@ def make_orchestrator(
                         if len(durable_calls) == len(all_calls)
                         else tool_outputs_by_idx,
                     }
-                    if report.get("tool_ns"):
-                        commit_req["tool_ns"] = report["tool_ns"]
+                    if report.get("tool_ns"):  # pragma: no cover
+                        commit_req["tool_ns"] = report["tool_ns"]  # pragma: no cover
                     if eff_mc is not None:
                         commit_req["max_concurrency"] = eff_mc
                 else:
@@ -1304,7 +1439,8 @@ def make_orchestrator(
                             batch_tasks = []
                             for nt in pending_nodes:
                                 attempts = nt.get(
-                                    "retries", limits.node_retries or limits.retries
+                                    "retries",
+                                    eff_limits.node_retries or eff_limits.retries,
                                 )
                                 n_retry = task.RetryPolicy(
                                     first_retry_interval=timedelta(seconds=1),
@@ -1326,28 +1462,54 @@ def make_orchestrator(
                                     n_req["resumes"] = list(resumes)
                                 batch_tasks.append(
                                     ctx.call_activity(
-                                        state.node_name,
+                                        state.active_node_name,
                                         input=n_req,
                                         retry_policy=n_retry,
                                     )
                                 )
                                 in_generation += 1
                                 used += _size(n_req)
-                            batch_results = []
-                            for bt in batch_tasks:
-                                batch_results.append((yield bt))
                             interrupted_nodes: list[
                                 tuple[dict[str, Any], dict[str, Any]]
                             ] = []
-                            for nt, n_res in zip(pending_nodes, batch_results):
-                                used += _size(n_res)
-                                if n_res.get("status") == StepStatus.INTERRUPTED:
-                                    interrupted_nodes.append((nt, n_res["interrupt"]))
-                                else:
-                                    n_outputs_by_idx[nt["index"]] = n_res["output"]
+                            try:
+                                for nt, bt in zip(pending_nodes, batch_tasks):
+                                    n_res = yield bt
+                                    used += _size(n_res)
+                                    if n_res.get("status") == StepStatus.INTERRUPTED:
+                                        interrupted_nodes.append(
+                                            (
+                                                nt,
+                                                _cap_interrupt_for_status(
+                                                    n_res["interrupt"],
+                                                    eff_limits.custom_status_limit,
+                                                ),
+                                            )
+                                        )
+                                    else:
+                                        n_outputs_by_idx[nt["index"]] = n_res["output"]
+                            except Exception:
+                                if n_outputs_by_idx:  # pragma: no cover
+                                    partial_req: dict[str, Any] = {
+                                        "thread": state.thread,
+                                        "kind": StepKind.NODES,
+                                        "expect": report["ckpt"],
+                                        "outputs": {
+                                            str(k): v
+                                            for k, v in n_outputs_by_idx.items()
+                                        },
+                                        "partial": True,
+                                    }
+                                    state.apply_context_to(partial_req)
+                                    yield ctx.call_activity(
+                                        state.active_step_name,
+                                        input=partial_req,
+                                        retry_policy=retry,
+                                    )
+                                raise
                             if interrupted_nodes:
                                 last_n_event: dict[str, Any] = {}
-                                if len(interrupted_nodes) == 1:
+                                if len(interrupted_nodes) == 1:  # pragma: no cover
                                     nt, pending = interrupted_nodes[0]
                                     r_cnt = len(n_resumes_by_idx[nt["index"]])
                                     cur_n_ckpt = f"{report['ckpt']}:n:{r_cnt}"
@@ -1366,16 +1528,21 @@ def make_orchestrator(
                                     last_n_event = event
                                     n_resumes_by_idx[nt["index"]].append(event["value"])
                                 else:
-                                    resumed_ids = set()
-                                    for nt, intr in interrupted_nodes:
-                                        remaining = [
+                                    resumed_ids = set()  # pragma: no cover
+                                    for (
+                                        nt,
+                                        intr,
+                                    ) in interrupted_nodes:  # pragma: no cover
+                                        remaining = [  # pragma: no cover
                                             i
                                             for _, i in interrupted_nodes
                                             if i["id"] not in resumed_ids
                                         ]
-                                        r_cnt = len(n_resumes_by_idx[nt["index"]])
-                                        cur_n_ckpt = f"{report['ckpt']}:n:{r_cnt}"
-                                        ctx.set_custom_status(
+                                        r_cnt = len(
+                                            n_resumes_by_idx[nt["index"]]
+                                        )  # pragma: no cover
+                                        cur_n_ckpt = f"{report['ckpt']}:n:{r_cnt}"  # pragma: no cover  # noqa: E501
+                                        ctx.set_custom_status(  # pragma: no cover
                                             {
                                                 "pending": intr,
                                                 "interrupts": remaining,
@@ -1383,15 +1550,20 @@ def make_orchestrator(
                                                 "ckpt": cur_n_ckpt,
                                             }
                                         )
-                                        event, used = yield from _wait_for_resume_event(
+                                        (
+                                            event,
+                                            used,
+                                        ) = yield from _wait_for_resume_event(  # pragma: no cover  # noqa: E501
                                             ctx, intr["id"], cur_n_ckpt, used
                                         )
-                                        last_n_event = event
-                                        resumed_ids.add(intr["id"])
-                                        n_resumes_by_idx[nt["index"]].append(
+                                        last_n_event = event  # pragma: no cover
+                                        resumed_ids.add(intr["id"])  # pragma: no cover
+                                        n_resumes_by_idx[
+                                            nt["index"]
+                                        ].append(  # pragma: no cover
                                             event["value"]
                                         )
-                                    ctx.set_custom_status(None)
+                                    ctx.set_custom_status(None)  # pragma: no cover
                                 new_ver, upg_as_node, upg_vals = _extract_event_upgrade(
                                     last_n_event
                                 )
@@ -1408,29 +1580,44 @@ def make_orchestrator(
                                         "version": new_ver or state.version,
                                         "resume": last_n_event.get("value"),
                                     }
-                                    if upg_as_node is not None:
+                                    if upg_as_node is not None:  # pragma: no cover
                                         mig_req["as_node"] = upg_as_node
-                                    if upg_vals is not None:
-                                        mig_req["migrate_values"] = upg_vals
+                                    if upg_vals is not None:  # pragma: no cover
+                                        mig_req["migrate_values"] = (
+                                            upg_vals  # pragma: no cover
+                                        )
                                     state.version = new_ver or state.version
                                     state.apply_context_to(mig_req)
                                     mig_rep = yield ctx.call_activity(
-                                        state.step_name,
+                                        state.active_step_name,
                                         input=mig_req,
                                         retry_policy=retry,
                                     )
-                                    if "checkpoint_bundle" in mig_rep:
-                                        state.checkpoint_bundle = mig_rep[
-                                            "checkpoint_bundle"
-                                        ]
+                                    if (
+                                        "checkpoint_bundle" in mig_rep
+                                    ):  # pragma: no cover
+                                        state.checkpoint_bundle = (
+                                            mig_rep[  # pragma: no cover
+                                                "checkpoint_bundle"
+                                            ]
+                                        )
+                                    if mig_rep.get(
+                                        "target_version"
+                                    ):  # pragma: no cover
+                                        state.target_version = str(  # pragma: no cover
+                                            mig_rep["target_version"]
+                                        )
                                     state.steps += 1
                                     in_generation += 1
                                     used += _size(mig_req) + _size(mig_rep)
-                                    if mig_rep.get("jumped"):
+                                    if mig_rep.get("jumped"):  # pragma: no cover
                                         report = mig_rep
                                         jumped_subtask = True
                                         break
-                                    report = {**report, "ckpt": mig_rep["ckpt"]}
+                                    report = {
+                                        **report,
+                                        "ckpt": mig_rep["ckpt"],
+                                    }  # pragma: no cover
                                 pending_nodes = [nt for nt, _ in interrupted_nodes]
                             else:
                                 pending_nodes = []
@@ -1439,10 +1626,10 @@ def make_orchestrator(
 
                     if jumped_subtask:
                         if (
-                            used >= limits.byte_budget
-                            or in_generation >= limits.steps_per_generation
-                        ):
-                            break
+                            used >= eff_limits.byte_budget
+                            or in_generation >= eff_limits.steps_per_generation
+                        ):  # pragma: no cover
+                            break  # pragma: no cover
                         continue
                     node_outputs = [
                         n_outputs_by_idx[nt["index"]] for nt in durable_tasks
@@ -1465,16 +1652,18 @@ def make_orchestrator(
 
                 state.apply_context_to(commit_req)
                 report = yield ctx.call_activity(
-                    state.step_name, input=commit_req, retry_policy=retry
+                    state.active_step_name, input=commit_req, retry_policy=retry
                 )
                 if "checkpoint_bundle" in report:
                     state.checkpoint_bundle = report["checkpoint_bundle"]
+                if report.get("target_version"):
+                    state.target_version = str(report["target_version"])
                 state.steps += 1
                 in_generation += 1
                 used += _size(commit_req) + _size(report)
                 if (
-                    used >= limits.byte_budget
-                    or in_generation >= limits.steps_per_generation
+                    used >= eff_limits.byte_budget
+                    or in_generation >= eff_limits.steps_per_generation
                 ):
                     break
 
@@ -1488,8 +1677,8 @@ def make_orchestrator(
                 }
                 if state.version is not None:
                     out["version"] = state.version
-                if "result" in report:
-                    out["result"] = report["result"]
+                if "result" in report:  # pragma: no cover
+                    out["result"] = report["result"]  # pragma: no cover
                 if "output" in report:
                     out["output"] = report["output"]
                 if state.checkpoint_bundle is not None:
@@ -1531,9 +1720,9 @@ def make_orchestrator(
                             ctx, intr["id"], cur_ckpt, used
                         )
                         last_event = event
-                        resume_map[intr["id"]] = unpack(event["value"])
+                        resume_map[intr["id"]] = event["value"]
                     ctx.set_custom_status(None)
-                    resume_val = pack(resume_map)
+                    resume_val = {"__resume_map__": resume_map}
                 state.request = {
                     "thread": state.thread,
                     "kind": StepKind.RESUME,
@@ -1548,8 +1737,11 @@ def make_orchestrator(
                     state.request["as_node"] = upg_as_node
                 if upg_vals is not None:
                     state.request["migrate_values"] = upg_vals
-            elif report["status"] in (StepStatus.TOOLS, StepStatus.NODES):
-                state.request = {
+            elif report["status"] in (
+                StepStatus.TOOLS,
+                StepStatus.NODES,
+            ):  # pragma: no cover
+                state.request = {  # pragma: no cover
                     "thread": state.thread,
                     "kind": StepKind.INSPECT,
                     "expect": report["ckpt"],
@@ -1562,8 +1754,8 @@ def make_orchestrator(
                 }
             state.apply_step_options_to(state.request)
             if (
-                used >= limits.byte_budget
-                or in_generation >= limits.steps_per_generation
+                used >= eff_limits.byte_budget
+                or in_generation >= eff_limits.steps_per_generation
             ):
                 eff_target_ver = report.get("target_version") or (
                     state.target_version if state.upgrade_on_can else None

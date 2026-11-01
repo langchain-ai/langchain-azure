@@ -48,9 +48,9 @@ sandboxes = [
     "deepagents>=0.7.1,<0.8",
 ]
 durabletask = [
-    "langgraph>=1.0.0,<2.0",
-    "durabletask>=1.9.0",
-    "durabletask-azuremanaged>=1.9.0",
+    "langgraph>=1.0.2,<1.2",
+    "durabletask>=1.9.0,<1.10",
+    "durabletask-azuremanaged>=1.9.0,<1.10",
 ]
 
 [project.urls]
@@ -90,7 +90,6 @@ module = [
     "langchain_tests.*",
     "durabletask.*",
     "azure.functions.*",
-    "langgraph.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

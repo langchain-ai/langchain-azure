@@ -34,7 +34,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e ".[test]"
+pip install -e "libs/azure-compute[durabletask]"
 ```
 
 Or from this sample folder:
@@ -90,7 +90,7 @@ python sample.py
 
 **PowerShell:**
 ```powershell
-cd examples\09_two_process_crash_recovery
+cd samples\langgraph-durabletask\09_two_process_crash_recovery
 $env:DTS_EMULATOR = "127.0.0.1:8080"
 python sample.py
 ```
@@ -106,7 +106,7 @@ python samples/langgraph-durabletask/09_two_process_crash_recovery/sample.py
 **PowerShell:**
 ```powershell
 $env:DTS_EMULATOR = "127.0.0.1:8080"
-python examples\09_two_process_crash_recovery\sample.py
+python samples\langgraph-durabletask\09_two_process_crash_recovery\sample.py
 ```
 
 ## Code Walkthrough
