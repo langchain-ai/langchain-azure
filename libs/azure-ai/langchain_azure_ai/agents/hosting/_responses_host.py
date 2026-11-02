@@ -806,9 +806,8 @@ class ResponsesHostServer:
         # shortcut: `conversation` is not checked here. A request that sets both
         # previous_response_id and conversation branches from the parent and ignores
         # the conversation, instead of returning the HTTP 400 required by the design.
-        return (
-            self._enable_response_branching
-            and bool(request.get("previous_response_id"))
+        return self._enable_response_branching and bool(
+            request.get("previous_response_id")
         )
 
     async def _response_branch_config(
