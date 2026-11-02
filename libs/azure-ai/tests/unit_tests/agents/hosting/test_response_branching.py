@@ -303,6 +303,80 @@ async def test_branch_recovery_uses_selected_checkpoint(
     chain_set.assert_not_awaited()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Malformed branch recovery progress currently falls back to parent replay.",
+)
+@pytest.mark.parametrize("damage", ["partial", "malformed"])
+async def test_branch_recovery_rejects_damaged_progress_without_replaying_input(
+    graph: CompiledStateGraph,
+    recovery_context: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert client.portal is not None
+        stored_parent = client.portal.call(provider.get_response, parent["id"])
+        parent_config = _config(stored_parent)
+        await graph.ainvoke(
+            {"messages": [HumanMessage(content="B")]},
+            parent_config,
+            interrupt_before=["answer"],
+            durability="sync",
+        )
+        progress = await graph.aget_state(
+            {"configurable": {"thread_id": parent_config["configurable"]["thread_id"]}}
+        )
+        assert progress.next == ("answer",)
+        reference = CheckpointRef.from_dict(progress.config["configurable"])
+        assert reference is not None
+        metadata: dict[str, Any] = {}
+        TaskStorageManager(metadata).store_checkpoint_ref(reference)
+        if damage == "partial":
+            metadata.pop("langgraph_checkpoint_id")
+        else:
+            metadata["langgraph_checkpoint_id"] = 42
+        recovery_context.persisted_response["metadata"] = {
+            "_internal_metadata": json.dumps(metadata)
+        }
+        recovery_context._provider = provider
+        lookup = AsyncMock(wraps=provider.get_response)
+        monkeypatch.setattr(provider, "get_response", lookup)
+        execute = AsyncMock(wraps=server.build_input)
+        monkeypatch.setattr(server, "build_input", execute)
+        chain_get = AsyncMock()
+        chain_set = AsyncMock()
+        monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+        monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+        events = [
+            event
+            async for event in server._handle_create_async_gen(
+                cast(
+                    CreateResponse,
+                    {
+                        "input": "B",
+                        "previous_response_id": parent["id"],
+                        "background": True,
+                        "store": True,
+                    },
+                ),
+                recovery_context,
+                asyncio.Event(),
+            )
+        ]
+
+    assert events[-1]["response"]["status"] == "failed"
+    execute.assert_not_awaited()
+    recovery_context.get_input_items.assert_not_awaited()
+    lookup.assert_not_awaited()
+    chain_get.assert_not_awaited()
+    chain_set.assert_not_awaited()
+
+
 @pytest.mark.parametrize("recovering", [False, True])
 @pytest.mark.parametrize("failure", ["response", "reference", "checkpoint", "status"])
 async def test_unavailable_parent_fails_without_executing_a_new_root(
