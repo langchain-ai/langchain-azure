@@ -120,13 +120,13 @@ async def test_real_transport_pool_headers_and_borrower_close(
             ) as other:
                 await other.get()
         assert len({request.transport for request in requests}) == 1
-        assert [r.headers.get("x-agent-foundry-call-id") for r in requests[:4]] == [
+        assert len(requests) == 5
+        assert [r.headers.get("x-agent-foundry-call-id") for r in requests[:3]] == [
             "call-1",
             "call-1",
-            "call-2",
             "call-2",
         ]
         assert requests[1].headers["x-ms-user-id"] == "delegated"
         assert requests[1].headers["User-Agent"] == "first"
-        assert requests[3].headers["User-Agent"] == "second"
+        assert requests[2].headers["User-Agent"] == "second"
         credential.close.assert_not_awaited()

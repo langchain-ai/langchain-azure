@@ -5,6 +5,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -17,6 +18,7 @@ from azure.ai.agentserver.core import (
 )
 from azure.ai.agentserver.core.storage import (
     FoundryStateStore,
+    FoundryStorageEndpoint,
     FoundryStorageNotFoundError,
 )
 from azure.core.pipeline.transport import AioHttpTransport
@@ -36,6 +38,7 @@ from langchain_azure_ai.agents.hosting._storage import (
 @pytest.fixture
 def clients(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     created: list[Any] = []
 
     async def acquire(name: str, *args: Any, **options: Any) -> Any:
@@ -54,7 +57,7 @@ def clients(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return created
 
 
-async def test_concurrent_borrowers_refresh_and_close_once(clients: list[Any]) -> None:
+async def test_concurrent_borrowers_resolve_and_close_once(clients: list[Any]) -> None:
     owner = object()
 
     async def borrow() -> Any:
@@ -67,85 +70,176 @@ async def test_concurrent_borrowers_refresh_and_close_once(clients: list[Any]) -
         borrowed = await asyncio.gather(*(borrow() for _ in range(8)))
         assert all(store is clients[0] for store in borrowed)
         assert len(clients) == 1
-        assert clients[0].get.await_count == 7
+        clients[0].get.assert_not_awaited()
     clients[0].aclose.assert_awaited_once()
 
 
-async def test_cached_metadata_refreshes_overlap(clients: list[Any]) -> None:
-    owner = object()
-    all_started, release = asyncio.Event(), asyncio.Event()
-    started = 0
-
-    async def refresh() -> None:
-        nonlocal started
-        started += 1
-        if started == 4:
-            all_started.set()
-        await release.wait()
-
-    async def borrow() -> Any:
-        async with get_state_store(owner, FoundryStateStore, "store") as store:
-            return store
-
+@pytest.mark.parametrize(
+    "actual_isolation", [False, True], ids=["whole-store", "user-items"]
+)
+async def test_saver_deletion_resolves_store_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, actual_isolation: bool
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    saver = FoundryCheckpointSaver(
+        credential=AsyncMock(), user_isolation=actual_isolation
+    )
     async with state_store_client_scope():
-        first = await borrow()
-        first.get.side_effect = refresh
-        borrowers = asyncio.gather(*(borrow() for _ in range(4)))
+        async with saver._get_or_create_store("thread") as first:
+            await first.set_item("old", {"value": "old"})
+        await saver.adelete_thread("thread")
+        async with saver._get_or_create_store("thread") as replacement:
+            assert replacement is not first
+            assert await replacement.get_item("old") is None
+            await replacement.set_item("new", {"value": "new"})
+        async with saver._get_or_create_store("thread") as reused:
+            assert reused is replacement
+            item = await reused.get_item("new")
+            assert item is not None and item.value == {"value": "new"}
+
+
+@pytest.mark.parametrize(
+    "actual_isolation", [False, True], ids=["whole-store", "user-items"]
+)
+@pytest.mark.parametrize("alias", ["consumer", "user"])
+async def test_saver_deletion_invalidates_only_affected_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, actual_isolation: bool, alias: str
+) -> None:
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    first = FoundryCheckpointSaver(
+        credential=AsyncMock(), user_isolation=actual_isolation
+    )
+    second = (
+        FoundryCheckpointSaver(credential=AsyncMock(), user_isolation=actual_isolation)
+        if alias == "consumer"
+        else first
+    )
+    config: RunnableConfig = {"configurable": {"thread_id": "shared"}}
+    async with state_store_client_scope():
+        token = set_request_context(FoundryAgentRequestContext(user_id="bob"))
         try:
-            await asyncio.wait_for(all_started.wait(), 2)
-            first.aclose.assert_not_awaited()
+            assert await second.aget_tuple(config) is None
+            async with second._get_or_create_store("shared") as old:
+                pass
         finally:
-            release.set()
-            borrowed = await borrowers
-        assert all(store is first for store in borrowed)
-        assert len(clients) == 1
-        assert first.get.await_count == 4
-    first.aclose.assert_awaited_once()
+            reset_request_context(token)
+        user = "bob" if alias == "consumer" else "alice"
+        token = set_request_context(FoundryAgentRequestContext(user_id=user))
+        try:
+            await first.adelete_thread("shared")
+        finally:
+            reset_request_context(token)
+        token = set_request_context(FoundryAgentRequestContext(user_id="bob"))
+        try:
+            assert await second.aget_tuple(config) is None
+            async with second._get_or_create_store("shared") as current:
+                assert (current is old) is actual_isolation
+                await current.set_item("new", {"value": "new"})
+        finally:
+            reset_request_context(token)
 
 
-async def test_concurrent_missing_refreshes_share_one_replacement(
-    clients: list[Any],
+@pytest.mark.parametrize("alias", ["binding", "consumer", "user"])
+async def test_deletion_waits_for_acquisition_and_blocks_replacement(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], alias: str
 ) -> None:
     owner = object()
-    all_started = asyncio.Event()
-    releases = [asyncio.Event() for _ in range(4)]
-    started = 0
+    borrower = object() if alias == "consumer" else owner
+    acquire_started, delete_started = asyncio.Event(), asyncio.Event()
+    allow_acquire, allow_delete = asyncio.Event(), asyncio.Event()
+    get_or_create = FoundryStateStore.get_or_create
 
-    async def missing() -> None:
-        nonlocal started
-        index = started
-        started += 1
-        if started == len(releases):
-            all_started.set()
-        await releases[index].wait()
-        raise FoundryStorageNotFoundError("deleted")
+    async def acquire(*args: Any, **kwargs: Any) -> Any:
+        store = await get_or_create(*args, **kwargs)
+        acquire_started.set()
+        await allow_acquire.wait()
+        return store
 
     async def borrow() -> Any:
-        async with get_state_store(owner, FoundryStateStore, "store") as store:
-            return store
-
-    async with state_store_client_scope():
-        old = await borrow()
-        old.get.side_effect = missing
-        borrowers = [asyncio.create_task(borrow()) for _ in releases]
+        token = set_request_context(
+            FoundryAgentRequestContext(user_id="bob" if alias == "user" else None)
+        )
         try:
-            await asyncio.wait_for(all_started.wait(), 2)
-            releases[0].set()
-            replacement = await asyncio.wait_for(asyncio.shield(borrowers[0]), 2)
-            assert replacement is not old
-            old.aclose.assert_not_awaited()
-            # Later failures from the old client must not evict this replacement.
-            for release in releases[1:]:
-                release.set()
-            borrowed = await asyncio.gather(*borrowers)
-            assert all(store is replacement for store in borrowed)
-            assert len(clients) == 2
-            assert old.get.await_count == 4
-            assert replacement.get.await_count == 3
+            async with get_state_store(borrower, FoundryStateStore, "store") as store:
+                return store
         finally:
-            for release in releases:
-                release.set()
-            await asyncio.gather(*borrowers, return_exceptions=True)
+            reset_request_context(token)
+
+    async def delete() -> None:
+        async with state_store_factory._state_store_deletion_scope(
+            owner, "store"
+        ) as invalidate_aliases:
+            delete_started.set()
+            await allow_delete.wait()
+            invalidate_aliases()
+
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    async with state_store_client_scope():
+        first = asyncio.create_task(borrow())
+        tasks = [first]
+        try:
+            await asyncio.wait_for(acquire_started.wait(), 2)
+            deletion = asyncio.create_task(delete())
+            tasks.append(deletion)
+            await asyncio.sleep(0)
+            assert not delete_started.is_set()
+            allow_acquire.set()
+            old = await asyncio.wait_for(asyncio.shield(first), 2)
+            await asyncio.wait_for(delete_started.wait(), 2)
+            borrowers = [asyncio.create_task(borrow()) for _ in range(4)]
+            tasks.extend(borrowers)
+            await asyncio.sleep(0)
+            assert all(not task.done() for task in borrowers)
+            old.aclose.assert_not_awaited()
+            allow_delete.set()
+            await asyncio.wait_for(asyncio.shield(deletion), 2)
+            borrowed = await asyncio.gather(*borrowers)
+            assert all(store is clients[1] for store in borrowed)
+            assert len(clients) == 2
+        finally:
+            allow_acquire.set()
+            allow_delete.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    for client in clients:
+        client.get.assert_not_awaited()
+        client.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        None,
+        "https://project.test/storage/",
+        FoundryStorageEndpoint(storage_base_url="https://project.test/storage/"),
+    ],
+)
+async def test_whole_store_deletion_only_invalidates_matching_resource(
+    clients: list[Any], endpoint: FoundryStorageEndpoint | str | None
+) -> None:
+    owner = object()
+    bindings = [
+        (object(), "store", endpoint),
+        (object(), "store", "https://other.test"),
+        (owner, "other", endpoint),
+    ]
+    async with state_store_client_scope():
+        for consumer, name, target in bindings:
+            async with get_state_store(
+                consumer, FoundryStateStore, name, endpoint=target
+            ):
+                pass
+        async with state_store_factory._state_store_deletion_scope(
+            owner, "store", endpoint="https://project.test"
+        ) as invalidate_aliases:
+            invalidate_aliases()
+        for index, (consumer, name, target) in enumerate(bindings):
+            async with get_state_store(
+                consumer, FoundryStateStore, name, endpoint=target
+            ) as store:
+                assert (store is clients[index]) is (index != 0)
+        assert len(clients) == 4
     for client in clients:
         client.aclose.assert_awaited_once()
 
@@ -173,13 +267,99 @@ async def test_store_consumer_and_user_bindings_are_separate(
         client.aclose.assert_awaited_once()
 
 
-async def test_missing_store_reacquires_without_closing_other_borrowers(
-    clients: list[Any],
+async def test_deletion_preserves_other_user_binding(clients: list[Any]) -> None:
+    owner = object()
+    async with state_store_client_scope():
+        for user, delete in [("a", False), ("b", False), ("a", True), ("b", False)]:
+            token = set_request_context(FoundryAgentRequestContext(user_id=user))
+            try:
+                if delete:
+                    async with state_store_factory._state_store_deletion_scope(
+                        owner, "store"
+                    ):
+                        pass
+                async with get_state_store(owner, FoundryStateStore, "store") as store:
+                    if user == "b":
+                        assert store is clients[1]
+            finally:
+                reset_request_context(token)
+        assert len(clients) == 3
+    for client in clients:
+        client.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FoundryStorageNotFoundError("store deleted externally"),
+        RuntimeError("backend"),
+        asyncio.CancelledError(),
+    ],
+)
+async def test_only_not_found_evicts_borrowed_client(
+    clients: list[Any], error: BaseException
+) -> None:
+    owner = object()
+    async with state_store_client_scope():
+        with pytest.raises(type(error)) as raised:
+            async with get_state_store(owner, FoundryStateStore, "store") as store:
+                cast(Any, store).set_item = AsyncMock(side_effect=error)
+                await store.set_item("key", {})
+        assert raised.value is error
+        async with get_state_store(owner, FoundryStateStore, "store") as next_store:
+            if isinstance(error, FoundryStorageNotFoundError):
+                assert next_store is not store
+                assert len(clients) == 2
+            else:
+                assert next_store is store
+                assert len(clients) == 1
+        clients[0].aclose.assert_not_awaited()
+    for client in clients:
+        client.get.assert_not_awaited()
+        client.aclose.assert_awaited_once()
+
+
+async def test_old_client_not_found_keeps_replacement(clients: list[Any]) -> None:
+    owner = object()
+    async with state_store_client_scope():
+        with pytest.raises(FoundryStorageNotFoundError):
+            async with get_state_store(owner, FoundryStateStore, "store"):
+                async with state_store_factory._state_store_deletion_scope(
+                    owner, "store"
+                ):
+                    pass
+                async with get_state_store(
+                    owner, FoundryStateStore, "store"
+                ) as replacement:
+                    pass
+                raise FoundryStorageNotFoundError("old client failed")
+        async with get_state_store(owner, FoundryStateStore, "store") as reused:
+            assert reused is replacement
+        assert len(clients) == 2
+    for client in clients:
+        client.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error", [None, RuntimeError("delete failed"), asyncio.CancelledError()]
+)
+async def test_deletion_reacquires_without_closing_other_borrowers(
+    clients: list[Any], error: BaseException | None
 ) -> None:
     owner = object()
     async with state_store_client_scope():
         async with get_state_store(owner, FoundryStateStore, "store") as old:
-            cast(Any, old).get.side_effect = FoundryStorageNotFoundError("deleted")
+            expectation = (
+                pytest.raises(type(error)) if error is not None else nullcontext()
+            )
+            with expectation as raised:
+                async with state_store_factory._state_store_deletion_scope(
+                    owner, "store"
+                ):
+                    if error is not None:
+                        raise error
+            if error is not None:
+                assert raised is not None and raised.value is error
             async with get_state_store(owner, FoundryStateStore, "store") as new:
                 assert old is not new
                 cast(Any, old).aclose.assert_not_awaited()
@@ -189,18 +369,36 @@ async def test_missing_store_reacquires_without_closing_other_borrowers(
         client.aclose.assert_awaited_once()
 
 
-@pytest.mark.parametrize("error", [RuntimeError("backend"), asyncio.CancelledError()])
-async def test_refresh_failure_propagates_and_closes(
-    clients: list[Any], error: BaseException
+@pytest.mark.parametrize(
+    "error",
+    [
+        FoundryStorageNotFoundError("missing"),
+        RuntimeError("backend"),
+        asyncio.CancelledError(),
+    ],
+)
+async def test_failed_acquisition_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch, clients: list[Any], error: BaseException
 ) -> None:
     owner = object()
-    with pytest.raises(type(error)):
-        async with state_store_client_scope():
+    get_or_create = FoundryStateStore.get_or_create
+    monkeypatch.setattr(
+        FoundryStateStore, "get_or_create", AsyncMock(side_effect=error)
+    )
+    async with state_store_client_scope() as factory:
+        with pytest.raises(type(error)) as raised:
             async with get_state_store(owner, FoundryStateStore, "store") as store:
-                cast(Any, store).get.side_effect = error
-            async with get_state_store(owner, FoundryStateStore, "store"):
-                pytest.fail("Failed refresh must not lend the client")
-    clients[0].aclose.assert_awaited_once()
+                pytest.fail("Failed acquisition must not lend a client")
+        assert raised.value is error
+        assert factory.clients == {}
+        monkeypatch.setattr(FoundryStateStore, "get_or_create", get_or_create)
+        async with get_state_store(owner, FoundryStateStore, "store") as store:
+            assert store is clients[0]
+        async with get_state_store(owner, FoundryStateStore, "store") as reused:
+            assert reused is store
+        assert len(clients) == 1
+        cast(Any, clients[0]).get.assert_not_awaited()
+    cast(Any, clients[0]).aclose.assert_awaited_once()
 
 
 async def test_cancelled_owner_waits_for_active_borrowers(clients: list[Any]) -> None:
@@ -309,7 +507,59 @@ async def test_factory_rejects_another_event_loop_before_borrowing(
     clients[0].aclose.assert_awaited_once()
 
 
-async def test_scoped_saver_refreshes_existence_without_revalidation(
+async def test_deletion_scope_rejects_another_event_loop(clients: list[Any]) -> None:
+    owner = object()
+
+    async def delete_from_another_loop() -> None:
+        async with state_store_factory._state_store_deletion_scope(owner, "store"):
+            pytest.fail("Deletion must not touch a factory from another event loop")
+
+    async with state_store_client_scope():
+        async with get_state_store(owner, FoundryStateStore, "store") as first:
+            pass
+        with pytest.raises(RuntimeError, match="original event loop"):
+            await asyncio.to_thread(lambda: asyncio.run(delete_from_another_loop()))
+        async with get_state_store(owner, FoundryStateStore, "store") as reused:
+            assert reused is first
+        assert len(clients) == 1
+    clients[0].aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("wait_for_lock", [False, True])
+async def test_deletion_scope_rejects_closing_factory(
+    clients: list[Any], wait_for_lock: bool
+) -> None:
+    owner = object()
+
+    async def delete() -> None:
+        async with state_store_factory._state_store_deletion_scope(owner, "store"):
+            pytest.fail("Closing factory must reject deletion coordination")
+
+    async with state_store_client_scope() as factory:
+        async with get_state_store(owner, FoundryStateStore, "store") as first:
+            pass
+        key = next(iter(factory.clients))
+        lock = factory.locks[key[1]]
+        if wait_for_lock:
+            await lock.acquire()
+            deletion = asyncio.create_task(delete())
+            try:
+                await asyncio.sleep(0)
+                assert not deletion.done()
+                factory.closing = True
+            finally:
+                lock.release()
+            with pytest.raises(RuntimeError, match="already ended"):
+                await asyncio.wait_for(deletion, 2)
+        else:
+            factory.closing = True
+            with pytest.raises(RuntimeError, match="already ended"):
+                await delete()
+        assert factory.clients[key] is first
+    clients[0].aclose.assert_awaited_once()
+
+
+async def test_scoped_saver_reuses_store_without_existence_checks(
     clients: list[Any],
 ) -> None:
     saver = FoundryCheckpointSaver(credential=AsyncMock())
@@ -327,7 +577,7 @@ async def test_scoped_saver_refreshes_existence_without_revalidation(
         assert await saver.aget_tuple(config) is None
         assert await saver.aget_tuple(config) is None
         assert len(clients) == 1
-        assert cast(Any, store).get.await_count == 2
+        cast(Any, store).get.assert_not_awaited()
         assert cast(Any, store).list_keys.await_count == 2
     cast(Any, store).aclose.assert_awaited_once()
 
@@ -358,7 +608,7 @@ async def test_scoped_chain_store_reuses_existing_settings(
         await chain.set("chain", "key", data)
         assert await chain.get("chain", "key") == data
         assert len(clients) == 1
-        assert fake.get.await_count == 2
+        fake.get.assert_not_awaited()
         fake.set_item.assert_awaited_once_with("key", data)
     fake.aclose.assert_awaited_once()
 
@@ -367,6 +617,7 @@ async def test_failed_acquisition_closes_owned_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
     transports = []
 
     async def fail(*args: Any, **options: Any) -> None:

@@ -265,11 +265,22 @@ The Responses host uses one conversation-state source per graph. The policy depe
 | Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
 | Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
 
-Checkpointed multi-turn conversations must use an explicit `conversation.id`
+Checkpointed multi-turn conversations use an explicit `conversation.id`
 or run with `steerable_conversations=True`. Both modes are linear and preserve
-the latest LangGraph checkpoint through Agent Server's public
-`conversation_chain_metadata` API. Forking with only `previous_response_id`
-when steering is disabled is not supported for checkpointed graphs.
+the latest LangGraph checkpoint for subsequent turns.
+
+To branch from a completed response instead, enable
+`ResponsesHostServer(graph, enable_response_branching=True)` with a
+history-preserving checkpointer, steering disabled, and no externally supplied
+`app`. Send
+`{"input": "Alternative follow-up", "previous_response_id": "<parent-response-id>"}`.
+The host restores that response's exact saved checkpoint, so two requests
+referencing the same parent create independent siblings. Each child saves its
+own checkpoint reference without advancing the shared conversation head.
+The parent response and its checkpoint must still be retained, and the graph
+must have finished; paused-parent branching is not supported.
+This option does not add request-instruction isolation or crash-recovery
+enhancements. When disabled, the existing execution path is unchanged.
 
 For checkpointed graphs, each request resolves its saved input checkpoint reference
 once, including the saved task reference on recovery. Interrupt inspection and
@@ -288,6 +299,17 @@ Requests without a saved input reference use the saver's normal latest selection
 its checkpointer; mutable configuration may remain shared with the original
 graph.
 `InvocationsHostServer` retains its existing execution path.
+
+Responses handlers check or create factory-managed Foundry checkpoint and
+conversation-chain stores on first use, then reuse their clients without
+additional store-existence checks. Thread deletion through the saver resets
+that handler's client binding and blocks acquisitions for the same store until
+deletion ends. Whole-store deletion invalidates all consumer and user bindings
+for that endpoint and store; isolated deletion retains other users' bindings.
+Already-borrowed clients can continue item operations. An item operation that
+raises `FoundryStorageNotFoundError` invalidates its cached binding and propagates
+the error; the next borrow resolves the store again. Missing item reads returned
+as `None` do not invalidate the binding.
 
 The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
