@@ -755,8 +755,9 @@ class ResponsesHostServer:
         for this user and conversation chain. With any checkpoint saver,
         that reference fixes the request's input. Latest-checkpoint queries
         still reach storage to preserve historical-branch protection.
-        When response branching is enabled, new ``previous_response_id``
-        requests instead select that completed response's saved checkpoint.
+        When response branching is enabled, ``previous_response_id`` requests
+        select that completed response's saved checkpoint. A recovered response's
+        own persisted checkpoint takes precedence over its parent.
         The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
@@ -774,6 +775,17 @@ class ResponsesHostServer:
             A ``RunnableConfig`` dict.
         """
         if self._is_response_branch(request, context):
+            if context.is_recovery and context.persisted_response is not None:
+                checkpoint_ref = TaskStorageManager.from_stream(
+                    ResponseEventStream(
+                        response_id=context.response_id,
+                        response=context.persisted_response,
+                    )
+                ).recovery_checkpoint_ref
+                if checkpoint_ref is not None:
+                    return HostingRunnableConfig.create_from_checkpoint(
+                        checkpoint_ref, context
+                    ).runnable_config
             return await self._response_branch_config(request, context)
         hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
@@ -808,12 +820,8 @@ class ResponsesHostServer:
         # shortcut: `conversation` is not checked here. A request that sets both
         # previous_response_id and conversation branches from the parent and ignores
         # the conversation, instead of returning the HTTP 400 required by the design.
-        return (
-            self._enable_response_branching
-            and bool(request.get("previous_response_id"))
-            # shortcut: Branches assume no recovery; revisit when branch
-            # recovery is added.
-            and not context.is_recovery
+        return self._enable_response_branching and bool(
+            request.get("previous_response_id")
         )
 
     async def _response_branch_config(
@@ -1051,6 +1059,9 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
+            checkpoint_ref = (
+                task_storage.recovery_checkpoint_ref if recovering else None
+            )
             config = await self.build_runnable_config(request, context)
             root_response_id = HostingRunnableConfig(config).root_response_id
             if root_response_id is not None:
@@ -1073,7 +1084,6 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
-            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
             if checkpoint_ref is not None:
                 config = (
                     HostingRunnableConfig(config)
@@ -1084,7 +1094,7 @@ class ResponsesHostServer:
             if checkpoint_reads is not None:
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
-            if self._is_response_branch(request, context):
+            if self._is_response_branch(request, context) and checkpoint_ref is None:
                 state = await self._graph.aget_state(config)
                 if (
                     HostingRunnableConfig(state.config).checkpoint_ref
