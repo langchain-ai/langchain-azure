@@ -197,9 +197,8 @@ developer message items supplied in conversation history.
 
 The host adds the current request's instructions as a tagged developer message
 to the current input. Every new request, including a tool-output or approval
-continuation, removes earlier host-tagged instructions with `RemoveMessage`;
-omitting
-`instructions`, passing `null`, or passing an empty string removes it.
+continuation, removes earlier host-tagged instructions with `RemoveMessage`.
+Omit the `instructions` field when no instructions are needed.
 Recovery of the same response keeps its original instructions.
 
 Message updates in a tool-output continuation retain the graph reducer's input
