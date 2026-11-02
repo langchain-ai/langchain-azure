@@ -66,7 +66,7 @@ The Python runtime starts the file specified by `codeConfiguration.entryPoint`. 
 
 ### Prepare runtime dependencies
 
-The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For this guide's Foundry-model adaptation, these include:
+The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
@@ -78,6 +78,8 @@ tavily-python>=0.7.26
 httpx>=0.28.1
 markdownify>=1.2.2
 ```
+
+If you keep the original Anthropic model, also include `langchain-anthropic>=1.5.4,<2.0.0` in `requirements.txt`. Keep deployment dependencies consistent with the final application code.
 
 Check that these requirements install in a fresh Python 3.13 environment outside the project:
 
@@ -116,6 +118,8 @@ Review the upload contents before deployment. The upload must exclude `.env`, lo
 ## Configure project connections for third-party endpoints
 
 Configure secure credential access for any third-party endpoints your application uses. This example stores the search API key in a Foundry project connection. Follow [Add a new connection to your project](https://learn.microsoft.com/azure/foundry/how-to/connections-add) to create the appropriate connection.
+
+If you keep an external model provider, store its credentials in a separate project connection and have your application retrieve them when initializing the model client. Use the same connection-access pattern shown below for the search client.
 
 This example uses a `CustomKeys` connection named `tavily-search` with target `https://api.tavily.com`. You can obtain a key from the [Tavily Python SDK quickstart](https://docs.tavily.com/sdk/python/quick-start) and store it in the connection's secret field named `api_key`.
 
@@ -165,18 +169,20 @@ The hosted agent identity also needs permission to read these connection credent
 
 The hosted runtime uses deployment configuration, not your local `.env`. Pass the model deployment name and connection name to the agent; the tool code from [Configure project connections](#configure-project-connections-for-third-party-endpoints) retrieves the secret at runtime. Foundry supplies the project endpoint automatically.
 
+The model settings below apply to the [Foundry-model path](../migrate-langgraph-to-foundry.md#model-choice). If you keep another provider, use the configuration required by that model client and retrieve its credentials through a project connection.
+
 This example uses the following values:
 
 | Variable | Value |
 | --- | --- |
 | `FOUNDRY_PROJECT_ENDPOINT` | Foundry injects the project endpoint into the hosted runtime. Your local host reads it from `.env`. |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Your selected model deployment name |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | Your selected Foundry model deployment name |
 | `TAVILY_CONNECTION_NAME` | Your project connection name for Tavily credentials |
 
 Set the model deployment name and connection name in the selected azd environment:
 
 ```powershell
-azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<deployment-name>"
+azd env set AZURE_OPENAI_DEPLOYMENT_NAME "<deployment-name>"
 azd env set TAVILY_CONNECTION_NAME tavily-search
 ```
 
@@ -184,7 +190,7 @@ Add these values to the agent service's `env` mapping in `azure.yaml`:
 
 ```yaml
 env:
-  AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME}
   TAVILY_CONNECTION_NAME: ${TAVILY_CONNECTION_NAME}
 ```
 

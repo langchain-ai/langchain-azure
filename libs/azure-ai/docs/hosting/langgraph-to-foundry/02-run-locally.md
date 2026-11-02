@@ -39,11 +39,13 @@ The hosting package works with the existing graph, tools, and prompts, handling 
 
 Make your application's configuration and credentials available before SDK and graph initialization. Create or update the root `.env` with the values your application reads. The startup command below loads it with uv's `--env-file` option rather than relying on the `env` field in `langgraph.json`.
 
-For the Foundry model configuration used in this example, `.env` includes:
+If you keep the original Deep Research model, configure `ANTHROPIC_API_KEY` in your local `.env`.
+
+The following configuration assumes that you have completed the [Foundry model adaptation](../migrate-langgraph-to-foundry.md#model-choice). The model client reads the project endpoint and deployment name from these environment variables:
 
 ```dotenv
 FOUNDRY_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
-AZURE_AI_MODEL_DEPLOYMENT_NAME=<deployment-name>
+AZURE_OPENAI_DEPLOYMENT_NAME=<deployment-name>
 ```
 
 The local host test can use the application's existing search credentials. When deploying the agent to Foundry, we recommend storing these credentials in a Foundry project connection, as described in [Configure project connections](03-prepare-deployment.md#configure-project-connections-for-third-party-endpoints).

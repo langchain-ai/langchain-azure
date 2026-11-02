@@ -24,6 +24,14 @@ Microsoft Foundry combines agent hosting with application interfaces, enterprise
 
 ## Before you start
 
+### Model choice
+
+Hosting on Foundry does not require changing your model provider. You can keep your application's existing model, with its provider dependencies and credentials configured for both local and hosted execution.
+
+To switch to a model deployed in Foundry, follow [Use LangChain with models in Microsoft Foundry](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-models) to update model initialization, authentication, and dependencies before local testing. The Foundry model configuration examples in this guide assume that this adaptation is complete.
+
+### Common prerequisites
+
 The following prerequisites apply before you prepare and deploy your application:
 
 - This guide uses Python 3.13 for local testing and Foundry source-code deployment.
