@@ -41,6 +41,26 @@ class TaskStorageManager:
             return None
         return CheckpointRef(thread_id, checkpoint_id)
 
+    @property
+    def recovery_checkpoint_ref(self) -> CheckpointRef | None:
+        """Return saved recovery progress, rejecting malformed references.
+
+        Returns:
+            The saved reference, or None if no reference fields are present.
+
+        Raises:
+            RuntimeError: Reference fields are present but do not form a valid
+                checkpoint reference.
+        """
+        reference = self.checkpoint_ref
+        if reference is None and self._metadata is not None:
+            if (
+                METADATA_LANGGRAPH_THREAD_ID in self._metadata
+                or METADATA_LANGGRAPH_CHECKPOINT_ID in self._metadata
+            ):
+                raise RuntimeError("The response checkpoint reference is malformed.")
+        return reference
+
     def store_checkpoint_ref(self, checkpoint_ref: CheckpointRef) -> None:
         """Store a LangGraph reference on the active response."""
         if self._metadata is None:
