@@ -390,15 +390,19 @@ async def test_branch_recovery_from_finished_checkpoint_preserves_saved_output(
     lookup.assert_not_awaited()
 
 
+@pytest.mark.parametrize("branching", [False, True])
 @pytest.mark.parametrize("damage", ["partial", "malformed"])
-async def test_branch_recovery_rejects_damaged_progress_without_replaying_input(
+async def test_recovery_rejects_damaged_progress_without_replaying_input(
     graph: CompiledStateGraph,
     recovery_context: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
     damage: str,
+    branching: bool,
 ) -> None:
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    server = ResponsesHostServer(
+        graph, store=provider, enable_response_branching=branching
+    )
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
         assert client.portal is not None

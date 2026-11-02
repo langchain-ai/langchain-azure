@@ -1045,6 +1045,9 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
+            checkpoint_ref = (
+                task_storage.recovery_checkpoint_ref if recovering else None
+            )
             config = await self.build_runnable_config(request, context)
             root_response_id = HostingRunnableConfig(config).root_response_id
             if root_response_id is not None:
@@ -1064,13 +1067,6 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
-            checkpoint_ref = None
-            if recovering:
-                checkpoint_ref = (
-                    task_storage.recovery_checkpoint_ref
-                    if self._is_response_branch(request, context)
-                    else task_storage.checkpoint_ref
-                )
             if checkpoint_ref is not None:
                 config = (
                     HostingRunnableConfig(config)
