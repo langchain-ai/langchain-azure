@@ -41,11 +41,11 @@ Make your application's configuration and credentials available before SDK and g
 
 If you keep the original Deep Research model, configure `ANTHROPIC_API_KEY` in your local `.env`.
 
-The following configuration assumes that you have completed the [Foundry model adaptation](../migrate-langgraph-to-foundry.md#model-choice). The model client reads the project endpoint and deployment name from these environment variables:
+The following configuration assumes that you have completed the [Foundry model adaptation](../migrate-langgraph-to-foundry.md#model-choice). Use these same environment variable names in your model initialization:
 
 ```dotenv
 FOUNDRY_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
-AZURE_OPENAI_DEPLOYMENT_NAME=<deployment-name>
+AZURE_AI_MODEL_DEPLOYMENT_NAME=<deployment-name>
 ```
 
 The local host test can use the application's existing search credentials. When deploying the agent to Foundry, we recommend storing these credentials in a Foundry project connection, as described in [Configure project connections](03-prepare-deployment.md#configure-project-connections-for-third-party-endpoints).

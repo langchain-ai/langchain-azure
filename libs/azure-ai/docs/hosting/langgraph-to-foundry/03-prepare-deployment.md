@@ -176,13 +176,13 @@ This example uses the following values:
 | Variable | Value |
 | --- | --- |
 | `FOUNDRY_PROJECT_ENDPOINT` | Foundry injects the project endpoint into the hosted runtime. Your local host reads it from `.env`. |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | Your selected Foundry model deployment name |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Your selected Foundry model deployment name |
 | `TAVILY_CONNECTION_NAME` | Your project connection name for Tavily credentials |
 
 Set the model deployment name and connection name in the selected azd environment:
 
 ```powershell
-azd env set AZURE_OPENAI_DEPLOYMENT_NAME "<deployment-name>"
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<deployment-name>"
 azd env set TAVILY_CONNECTION_NAME tavily-search
 ```
 
@@ -190,7 +190,7 @@ Add these values to the agent service's `env` mapping in `azure.yaml`:
 
 ```yaml
 env:
-  AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME}
+  AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
   TAVILY_CONNECTION_NAME: ${TAVILY_CONNECTION_NAME}
 ```
 
