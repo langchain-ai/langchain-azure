@@ -18,17 +18,28 @@ Complete [Host and test the agent locally](02-run-locally.md). Keep the verified
 
 ## Prepare deployment files
 
+### Add a deployment launcher
+
+Create `main.py` in the application root, `{local-root}\deep_research`. It calls the hosting runner with an explicit argument list and reuses the graph entry point in `langgraph.json`:
+
+```python
+from langchain_azure_ai.agents.hosting.run import main
+
+if __name__ == "__main__":
+    main(["--protocol", "responses", "--config", "langgraph.json"])
+```
+
+The launcher passes runner options as separate arguments. The deployment entry point stays a file path.
+
 ### Configure azure.yaml
 
-The `codeConfiguration.entryPoint` setting in `azure.yaml` specifies the hosting runner command, as shown in [Host an existing agent](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#host-an-existing-agent).
-
-`langgraph.json` tells the runner how to load the agent, both locally and in Foundry. `azure.yaml` tells azd how to deploy and start the hosted agent. The deployment package must include `langgraph.json` and the application files it references. See [Package the zip manually](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code#package-the-zip-manually) for the package layout and `requirements.txt`.
+`langgraph.json` tells the runner how to load the agent, both locally and in Foundry. `azure.yaml` tells azd how to deploy and start the hosted agent. The deployment package must include `main.py`, `langgraph.json`, and the application files it references. See [Package the zip manually](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code#package-the-zip-manually) for the package layout and `requirements.txt`.
 
 Initialize a source-code deployment from `{local-root}\deep_research`:
 
 ```powershell
 azd auth login
-azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 --entry-point '-m langchain_azure_ai.agents.hosting.run --protocol responses --config langgraph.json'
+azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 --entry-point main.py
 ```
 
 During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. The agent service's `project` field should be `.` so the upload starts from the application root directory.
@@ -47,13 +58,11 @@ services:
         version: 2.0.0
     codeConfiguration:
       runtime: python_3_13
-      entryPoint: >-
-        -m langchain_azure_ai.agents.hosting.run
-        --protocol responses --config langgraph.json
+      entryPoint: main.py
       dependencyResolution: remote_build
 ```
 
-The Python runtime starts the module specified by `codeConfiguration.entryPoint`. The [azure.yaml authoring guide](https://learn.microsoft.com/azure/foundry/agents/how-to/author-azure-yaml) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code) describe the other deployment settings.
+The Python runtime starts the file specified by `codeConfiguration.entryPoint`. In this example, it runs `python main.py`. The [azure.yaml authoring guide](https://learn.microsoft.com/azure/foundry/agents/how-to/author-azure-yaml) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code) describe the other deployment settings.
 
 ### Prepare runtime dependencies
 

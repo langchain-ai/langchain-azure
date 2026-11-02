@@ -19,7 +19,7 @@ The command selects Python 3.13, records the dependency in `pyproject.toml`, upd
 
 ## Identify the existing graph entry point
 
-The hosting runner loads an existing graph as described in [Host an existing agent](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#host-an-existing-agent). In this example, `agent.py` exports the compiled graph as `agent`. The root `langgraph.json` references it as `./agent.py:agent`, telling the hosting runner which graph to load. No new application entry point is required.
+The hosting runner loads an existing graph as described in [Host an existing agent](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#host-an-existing-agent). In this example, `agent.py` exports the compiled graph as `agent`. The root `langgraph.json` references it as `./agent.py:agent`, telling the hosting runner which graph to load. The hosting runner reuses this graph entry point.
 
 The local host reuses these application files:
 

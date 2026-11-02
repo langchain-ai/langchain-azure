@@ -61,19 +61,25 @@ Verify that a later turn restores and updates the required application state. Fo
 
 If unfinished requests must survive host failures, configure durable checkpoints and the Responses host's recovery settings. These settings allow execution to resume from persisted graph progress, including checkpoints saved partway through an interrupted request.
 
-The graph still needs the durable checkpointer. The following configuration applies to the hosting runner used in this guide. To enable recovery for the deployed host, update the agent's `codeConfiguration` in `azure.yaml`:
+The graph still needs the durable checkpointer. To enable recovery for the deployed host, update the `main.py` [deployment launcher](03-prepare-deployment.md#add-a-deployment-launcher) to pass the recovery option to the hosting runner:
 
-```yaml
-codeConfiguration:
-  runtime: python_3_13
-  entryPoint: >-
-    -m langchain_azure_ai.agents.hosting.run
-    --protocol responses --config langgraph.json
-    --option resilient_background=true
-  dependencyResolution: remote_build
+```python
+from langchain_azure_ai.agents.hosting.run import main
+
+if __name__ == "__main__":
+    main(
+        [
+            "--protocol",
+            "responses",
+            "--config",
+            "langgraph.json",
+            "--option",
+            "resilient_background=true",
+        ]
+    )
 ```
 
-Redeploy the updated entry point with `azd deploy deep-research-foundry`. Test recovery on the deployed agent in a test environment.
+Keep `entryPoint: main.py` in `azure.yaml` and redeploy the updated launcher with `azd deploy deep-research-foundry`. Test recovery on the deployed agent in a test environment.
 
 > **Note:** Foundry State Store's [user isolation](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-state-store#caller-identity) is not supported in local runs. Keep `user_isolation=True` for the hosted agent; a local host test does not verify this configuration's isolation or recovery behavior.
 
