@@ -152,6 +152,24 @@ class _ResponseInstructions:
             else messages
         )
         if isinstance(graph_input, Command):
+            from ._checkpoint._checkpoint_reuse import (
+                NO_WRITES,
+                NULL_TASK_ID,
+                _checkpoint_reads,
+            )
+
+            reads = _checkpoint_reads.get()
+            if reads is not None:
+                saved = await graph.checkpointer.aget_tuple(state.config)
+                if saved is not None:
+                    reads.replaced_message_writes = (
+                        saved.checkpoint["id"],
+                        sum(
+                            task == NULL_TASK_ID
+                            and channel in ("messages", NO_WRITES)
+                            for task, channel, _ in saved.pending_writes or []
+                        ),
+                    )
             return replace(
                 graph_input,
                 update=(

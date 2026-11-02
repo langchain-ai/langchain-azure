@@ -15,6 +15,7 @@ from typing import Any, NamedTuple
 
 from azure.ai.agentserver.core import get_request_context
 from langchain_core.runnables import RunnableConfig
+from langgraph._internal._constants import NO_WRITES, NULL_TASK_ID
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     ChannelVersions,
@@ -24,7 +25,10 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
+from langgraph.types import Overwrite
 from wrapt import ObjectProxy
+
+from .._instructions import _is_request_instruction
 
 
 def _reference_config(
@@ -125,6 +129,49 @@ class _CheckpointReadContext:
     active: bool = True
     cache_enabled: bool = True
     cache: _CachedCheckpoint | None = None
+    replaced_message_writes: tuple[str, int] | None = None
+
+    def restore(self, value: CheckpointTuple | None) -> CheckpointTuple | None:
+        if value is None or not value.pending_writes:
+            return value
+        writes = value.pending_writes
+        messages = [
+            index
+            for index, (task, channel, _) in enumerate(writes)
+            if task == NULL_TASK_ID and channel in ("messages", NO_WRITES)
+        ]
+        superseded: set[int] = set()
+        if (
+            self.replaced_message_writes is not None
+            and self.replaced_message_writes[0] == value.checkpoint["id"]
+        ):
+            superseded.update(messages[: self.replaced_message_writes[1]])
+        if len(messages) > 1 and any(
+            _is_request_instruction(message)
+            for update in (writes[index][2] for index in messages)
+            for message in (
+                update.value
+                if isinstance(update, Overwrite)
+                else update
+                if isinstance(update, list)
+                else []
+            )
+        ):
+            overwrites = [
+                index for index in messages if isinstance(writes[index][2], Overwrite)
+            ]
+            latest = overwrites[-1] if overwrites else messages[-1]
+            superseded.update(index for index in messages if index < latest)
+        if not superseded:
+            return value
+        return value._replace(
+            pending_writes=[
+                (task, NO_WRITES, None)
+                if index in superseded
+                else (task, channel, update)
+                for index, (task, channel, update) in enumerate(writes)
+            ]
+        )
 
     def pin(self, saver: object, config: RunnableConfig) -> None:
         configurable = config.get("configurable") or {}
@@ -266,7 +313,7 @@ class _RequestCheckpointSaver(ObjectProxy):
                         key: configurable.get(key)
                         for key in self._self_extra_config_keys
                     }:
-                        return (
+                        return reads.restore(
                             cached.value.restore(self.serde, config)
                             if cached.value is not None
                             else None
@@ -293,7 +340,7 @@ class _RequestCheckpointSaver(ObjectProxy):
                     )
                 except Exception:
                     reads.invalidate()
-            return result
+            return reads.restore(result)
         except BaseException:
             reads.invalidate()
             raise

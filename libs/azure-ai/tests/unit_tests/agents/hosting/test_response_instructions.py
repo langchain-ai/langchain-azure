@@ -338,16 +338,18 @@ def test_intermediate_checkpoints_keep_instructions_and_final_reference_is_clean
 
 @pytest.mark.parametrize("instructions", [None, "", "turn-B"])
 @pytest.mark.parametrize("schema", _SCHEMAS)
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     "reply_kind", ["mcp_approval_response", "function_call_output"]
 )
 def test_interrupt_continuation_replaces_or_removes_previous_instructions(
-    instructions: str | None, schema: type, reply_kind: str
+    instructions: str | None, schema: type, stream: bool, reply_kind: str
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
 
     def pause(state: MessagesState) -> dict[str, Any]:
-        interrupt({"question": "continue?"})
+        for question in ("first?", "second?", "third?"):
+            interrupt({"question": question})
         return {}
 
     async def answer(state: MessagesState) -> dict[str, Any]:
@@ -363,40 +365,46 @@ def test_interrupt_continuation_replaces_or_removes_previous_instructions(
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(builder.compile(checkpointer=saver), store=provider)
     with TestClient(server.app) as client:
-        first = _create(client, input="first", instructions="turn-A")
+        response = _create(
+            client, stream=stream, input="first", instructions="turn-A"
+        )
         assert client.portal is not None
         paused = client.portal.call(
-            server.graph.aget_state, _stored_config(client, provider, first)
+            server.graph.aget_state, _stored_config(client, provider, response)
         )
         assert paused.next
         assert _contents(paused.values["messages"]) == ["turn-A", "first"]
-        approval = next(
-            item for item in first["output"] if item["type"] == "mcp_approval_request"
-        )
-        function_call = next(
-            item for item in first["output"] if item["type"] == "function_call"
-        )
-        item = (
-            {
-                "type": reply_kind,
-                "approval_request_id": approval["id"],
-                "approve": True,
-            }
-            if reply_kind == "mcp_approval_response"
-            else {
-                "type": reply_kind,
-                "call_id": function_call["call_id"],
-                "output": "approved",
-            }
-        )
-        second = _create(
-            client,
-            previous_response_id=first["id"],
-            instructions=instructions,
-            input=[item],
-        )
+        for _ in range(3):
+            approval = next(
+                item
+                for item in response["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            function_call = next(
+                item for item in response["output"] if item["type"] == "function_call"
+            )
+            item = (
+                {
+                    "type": reply_kind,
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+                if reply_kind == "mcp_approval_response"
+                else {
+                    "type": reply_kind,
+                    "call_id": function_call["call_id"],
+                    "output": "approved",
+                }
+            )
+            response = _create(
+                client,
+                stream=stream,
+                previous_response_id=response["id"],
+                instructions=instructions,
+                input=[item],
+            )
         final = client.portal.call(
-            server.graph.aget_state, _stored_config(client, provider, second)
+            server.graph.aget_state, _stored_config(client, provider, response)
         )
     assert _contents(model._calls[0]) == [
         *([instructions] if instructions else []),
