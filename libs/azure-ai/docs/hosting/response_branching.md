@@ -195,9 +195,10 @@ Do not inherit a previous response's top-level `instructions` through a graph
 checkpoint. Distinguish request-scoped instructions from actual system or
 developer message items supplied in conversation history.
 
-The host prepends the current request's instructions as a tagged developer
-message in the root graph's `messages` state. Every new request, including a
-tool-output or approval continuation, replaces that message; omitting
+The host adds the current request's instructions as a tagged developer message
+to the current input. Every new request, including a tool-output or approval
+continuation, removes earlier host-tagged instructions with `RemoveMessage`;
+omitting
 `instructions`, passing `null`, or passing an empty string removes it.
 Recovery of the same response keeps its original instructions.
 
@@ -211,9 +212,11 @@ checkpoint reference. Earlier checkpoints are unchanged. Explicit system and
 developer input messages remain part of the conversation history.
 
 Instruction handling runs at request and completion boundaries. The host does
-not wrap graph channels, tasks, caches, or child graphs. Graph authors remain
-responsible for preserving instructions when replacing messages internally,
-and for any private message lists or cached prompt copies.
+not rewrite or reorder existing history, or wrap graph channels, tasks, caches,
+or child graphs. Checkpointed instruction handling relies on `add_messages`
+semantics, as used by `MessagesState`. Custom message reducers, application
+message transformations, private message lists, and cached prompt copies remain
+the graph author's responsibility.
 
 The graph's saver must preserve checkpoint history and implement asynchronous
 reads and writes. Keep referenced checkpoints and any history needed to restore

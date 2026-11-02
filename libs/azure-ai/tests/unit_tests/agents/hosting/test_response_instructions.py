@@ -33,12 +33,11 @@ from langchain_core.messages import (
     AnyMessage,
     BaseMessage,
     HumanMessage,
-    convert_to_messages,
+    RemoveMessage,
     convert_to_openai_messages,
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.cache.memory import InMemoryCache
-from langgraph.channels import BinaryOperatorAggregate, DeltaChannel
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     ChannelVersions,
@@ -50,9 +49,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.func import task
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.graph.message import Messages, add_messages
+from langgraph.graph.message import Messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command, Overwrite, interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, PrivateAttr
 from starlette.testclient import TestClient
 from typing_extensions import TypedDict
@@ -92,14 +91,6 @@ class _ActualInputModel(FakeListChatModel):
         return super()._call(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
-class _AppendingState(TypedDict):
-    messages: Annotated[list[AnyMessage], add]
-
-
-class _ReplacingState(TypedDict):
-    messages: list[AnyMessage]
-
-
 class _MappingState(TypedDict):
     messages: list[AnyMessage] | dict[str, str]
 
@@ -121,41 +112,15 @@ class _CommandUpdate(BaseModel):
     omitted: str | None = None
 
 
-def _message_deltas(previous: Messages, updates: Sequence[Messages]) -> Messages:
-    for update in updates:
-        previous = add_messages(previous, update)
-    return previous
-
-
-class _DeltaSnapshotState(TypedDict):
-    messages: Annotated[
-        list[AnyMessage], DeltaChannel(_message_deltas, snapshot_frequency=1)
-    ]
-
-
-class _DeltaReplayState(TypedDict):
-    messages: Annotated[list[AnyMessage], DeltaChannel(_message_deltas)]
-
-
-_SCHEMAS = [
-    MessagesState,
-    _AppendingState,
-    _ReplacingState,
-    _DeltaSnapshotState,
-    _DeltaReplayState,
-]
-
-
 def _graph(
     model: _ActualInputModel,
     saver: BaseCheckpointSaver | None,
-    schema: type = MessagesState,
 ) -> CompiledStateGraph:
     async def answer(state: MessagesState) -> dict[str, Any]:
         return {"messages": [await model.ainvoke(state["messages"])]}
 
-    builder: StateGraph = StateGraph(schema)
-    builder.add_node("answer", answer, input_schema=schema)
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     return builder.compile(checkpointer=saver)
@@ -241,15 +206,14 @@ def _recover(
     return checkpoint, events
 
 
-@pytest.mark.parametrize("schema", _SCHEMAS)
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("conversation", [False, True])
-def test_current_request_instructions_precede_history(
-    schema: type, stream: bool, conversation: bool
+def test_current_request_instructions_do_not_inherit_previous_instructions(
+    stream: bool, conversation: bool
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
     server = ResponsesHostServer(
-        _graph(model, InMemorySaver(), schema), store=InMemoryResponseProvider()
+        _graph(model, InMemorySaver()), store=InMemoryResponseProvider()
     )
     linkage: dict[str, Any] = (
         {"conversation": {"id": "conversation"}} if conversation else {}
@@ -271,16 +235,17 @@ def test_current_request_instructions_precede_history(
             input="third",
             **(linkage or {"previous_response_id": second["id"]}),
         )
-    history = [] if schema is _ReplacingState else ["first", "answer"]
     assert [_contents(call) for call in model._calls[:2]] == [
         ["turn-A", "first"],
-        ["turn-B", *history, "second"],
+        ["first", "answer", "turn-B", "second"],
     ]
-    assert _contents(model._calls[2]) == (
-        ["third"]
-        if schema is _ReplacingState
-        else [*history, "second", "answer", "third"]
-    )
+    assert _contents(model._calls[2]) == [
+        "first",
+        "answer",
+        "second",
+        "answer",
+        "third",
+    ]
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -298,15 +263,14 @@ def test_history_without_checkpointer_uses_only_current_instructions(
     ]
 
 
-@pytest.mark.parametrize("schema", _SCHEMAS)
 @pytest.mark.parametrize("stream", [False, True])
 def test_intermediate_checkpoints_keep_instructions_and_final_reference_is_clean(
-    schema: type, stream: bool, monkeypatch: pytest.MonkeyPatch
+    stream: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
     saver = InMemorySaver()
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(_graph(model, saver, schema), store=provider)
+    server = ResponsesHostServer(_graph(model, saver), store=provider)
     publish = AsyncMock(wraps=server._conversation_chain_store.set)
     monkeypatch.setattr(server._conversation_chain_store, "set", publish)
     with TestClient(server.app) as client:
@@ -337,13 +301,12 @@ def test_intermediate_checkpoints_keep_instructions_and_final_reference_is_clean
 
 
 @pytest.mark.parametrize("instructions", [None, "", "turn-B"])
-@pytest.mark.parametrize("schema", _SCHEMAS)
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     "reply_kind", ["mcp_approval_response", "function_call_output"]
 )
 def test_interrupt_continuation_replaces_or_removes_previous_instructions(
-    instructions: str | None, schema: type, stream: bool, reply_kind: str
+    instructions: str | None, stream: bool, reply_kind: str
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
 
@@ -355,9 +318,9 @@ def test_interrupt_continuation_replaces_or_removes_previous_instructions(
     async def answer(state: MessagesState) -> dict[str, Any]:
         return {"messages": [await model.ainvoke(state["messages"])]}
 
-    builder: StateGraph = StateGraph(schema)
-    builder.add_node("pause", pause, input_schema=schema)
-    builder.add_node("answer", answer, input_schema=schema)
+    builder = StateGraph(MessagesState)
+    builder.add_node("pause", pause)
+    builder.add_node("answer", answer)
     builder.add_edge(START, "pause")
     builder.add_edge("pause", "answer")
     builder.add_edge("answer", END)
@@ -407,13 +370,12 @@ def test_interrupt_continuation_replaces_or_removes_previous_instructions(
             server.graph.aget_state, _stored_config(client, provider, response)
         )
     assert _contents(model._calls[0]) == [
-        *([instructions] if instructions else []),
         "first",
+        *([instructions] if instructions else []),
     ]
     assert not any(_is_request_instruction(m) for m in final.values["messages"])
 
 
-@pytest.mark.parametrize("schema", [MessagesState, _DeltaReplayState])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("instructions", [None, "", "turn-B"])
 @pytest.mark.parametrize(
@@ -422,7 +384,6 @@ def test_interrupt_continuation_replaces_or_removes_previous_instructions(
     ids=["string", "dict"],
 )
 def test_interrupt_continuation_preserves_single_message_updates(
-    schema: type,
     stream: bool,
     instructions: str | None,
     message_update: str | dict[str, str],
@@ -436,9 +397,9 @@ def test_interrupt_continuation_preserves_single_message_updates(
     async def answer(state: MessagesState) -> dict[str, Any]:
         return {"messages": [await model.ainvoke(state["messages"])]}
 
-    builder: StateGraph = StateGraph(schema)
-    builder.add_node("pause", pause, input_schema=schema)
-    builder.add_node("answer", answer, input_schema=schema)
+    builder = StateGraph(MessagesState)
+    builder.add_node("pause", pause)
+    builder.add_node("answer", answer)
     builder.add_edge(START, "pause")
     builder.add_edge("pause", "answer")
     builder.add_edge("answer", END)
@@ -471,18 +432,17 @@ def test_interrupt_continuation_preserves_single_message_updates(
             server.graph.aget_state, _stored_config(client, provider, second)
         )
     assert _contents(model._calls[0]) == [
-        *([instructions] if instructions else []),
         "first",
+        *([instructions] if instructions else []),
         "correction",
     ]
     assert _contents(final.values["messages"]) == ["first", "correction", "answer"]
 
 
-@pytest.mark.parametrize("schema", [MessagesState, _AppendingState])
-def test_explicit_messages_and_developer_roles_are_preserved(schema: type) -> None:
+def test_explicit_messages_and_developer_roles_are_preserved() -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(_graph(model, InMemorySaver(), schema), store=provider)
+    server = ResponsesHostServer(_graph(model, InMemorySaver()), store=provider)
     with TestClient(server.app) as client:
         first = _create(
             client,
@@ -531,10 +491,7 @@ def test_explicit_messages_and_developer_roles_are_preserved(schema: type) -> No
     ]
 
 
-@pytest.mark.parametrize("schema", _SCHEMAS)
-def test_same_response_recovery_keeps_instructions_and_completed_tasks(
-    schema: type,
-) -> None:
+def test_same_response_recovery_keeps_instructions_and_completed_tasks() -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
     calls: list[str] = []
     failed = False
@@ -552,8 +509,8 @@ def test_same_response_recovery_keeps_instructions_and_completed_tasks(
             raise RuntimeError("recover this response")
         return {"messages": [await model.ainvoke(state["messages"])]}
 
-    builder: StateGraph = StateGraph(schema)
-    builder.add_node("answer", answer, input_schema=schema)
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     saver = InMemorySaver()
@@ -625,9 +582,8 @@ def test_completion_cleanup_does_not_rerun_conditional_routing(stream: bool) -> 
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite", "foundry"])
-@pytest.mark.parametrize("schema", _SCHEMAS)
 async def test_branches_use_clean_final_checkpoints_without_changing_parent(
-    backend: str, schema: type, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if backend == "foundry":
         monkeypatch.setattr(
@@ -648,7 +604,7 @@ async def test_branches_use_clean_final_checkpoints_without_changing_parent(
     async with storage as saver:
         provider = InMemoryResponseProvider()
         server = ResponsesHostServer(
-            _graph(model, saver, schema),
+            _graph(model, saver),
             store=provider,
             enable_response_branching=True,
         )
@@ -689,14 +645,12 @@ async def test_branches_use_clean_final_checkpoints_without_changing_parent(
             for message in parent_state.values["messages"]
         )
         assert _contents(model._calls[1]) == [
+            "first",
+            "answer",
             "turn-B",
-            *([] if schema is _ReplacingState else ["first", "answer"]),
             "second",
         ]
-        assert _contents(model._calls[2]) == [
-            *([] if schema is _ReplacingState else ["first", "answer"]),
-            "sibling",
-        ]
+        assert _contents(model._calls[2]) == ["first", "answer", "sibling"]
         historical = [
             item
             async for item in saver.alist(
@@ -712,9 +666,8 @@ async def test_branches_use_clean_final_checkpoints_without_changing_parent(
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("resume", [False, True])
-@pytest.mark.parametrize("append_messages", [False, True])
 def test_parallel_completion_cleans_only_messages(
-    stream: bool, resume: bool, append_messages: bool
+    stream: bool, resume: bool
 ) -> None:
     seen: list[list[Any]] = []
 
@@ -736,8 +689,6 @@ def test_parallel_completion_cleans_only_messages(
     saver = InMemorySaver()
     provider = InMemoryResponseProvider()
     graph = builder.compile(checkpointer=saver)
-    if append_messages:
-        graph.channels["messages"] = BinaryOperatorAggregate(list, add)
     server = ResponsesHostServer(graph, store=provider)
     with TestClient(server.app) as client:
         response = _create(
@@ -767,7 +718,7 @@ def test_parallel_completion_cleans_only_messages(
         final = client.portal.call(server.graph.aget_state, config)
     assert seen == [
         ["request-only", "first"],
-        ["replacement", "first"] if resume else ["request-only", "first"],
+        ["first", "replacement"] if resume else ["request-only", "first"],
     ]
     assert final.next == final.tasks == ()
     assert sorted(final.values["completed"]) == ["left", "right"]
@@ -839,37 +790,6 @@ def test_cleanup_failure_is_reported_and_recovery_does_not_rerun_the_graph(
     assert _contents(state.values["messages"]) == ["first", "answer"]
 
 
-def test_initial_reducer_failure_can_recover_the_checkpointed_instructions() -> None:
-    fail = True
-
-    def reducer(previous: Messages, incoming: Messages) -> Messages:
-        nonlocal fail
-        if fail:
-            fail = False
-            raise RuntimeError("input reducer failed")
-        return add_messages(previous, incoming)
-
-    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
-    graph = _graph(model, InMemorySaver())
-    graph.channels["messages"] = BinaryOperatorAggregate(list, reducer)
-    provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(graph, store=provider)
-    with TestClient(server.app) as client:
-        first = _create(
-            client, expected_status="failed", input="first", instructions="request-only"
-        )
-        assert model._calls == []
-        _stored_config(client, provider, first)
-        recovered, events = _recover(
-            client, server, provider, first, input="first", instructions="request-only"
-        )
-        assert events[-1]["type"] == "response.completed"
-        assert client.portal is not None
-        final = client.portal.call(server.graph.aget_state, _config(recovered))
-    assert _contents(model._calls[0]) == ["request-only", "first"]
-    assert _contents(final.values["messages"]) == ["first", "answer"]
-
-
 def test_cleanup_preserves_typed_state_with_strict_serialization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -908,25 +828,21 @@ def test_cleanup_preserves_typed_state_with_strict_serialization(
     assert _contents(continued.values["messages"]) == ["first", "second"]
     assert seen == [
         ["request-only", "first"],
-        ["replacement", "first", "second"],
+        ["first", "replacement", "second"],
     ]
 
 
-@pytest.mark.parametrize("schema", _SCHEMAS)
-async def test_command_preparation_preserves_resume_and_other_updates(
-    schema: type,
-) -> None:
+async def test_command_preparation_preserves_resume_and_other_updates() -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
-    graph = _graph(model, InMemorySaver(), schema)
+    graph = _graph(model, InMemorySaver())
     config: RunnableConfig = {"configurable": {"thread_id": "command"}}
-    await graph.ainvoke({"messages": [HumanMessage(content="old")]}, config)
+    previous = _ResponseInstructions.create("previous", "previous-response")
+    assert previous.message is not None
+    await graph.ainvoke(
+        {"messages": previous.prepend([HumanMessage(content="old")])}, config
+    )
     replacement = [HumanMessage(content="replacement")]
-    update = {
-        "messages": (
-            replacement if schema is _ReplacingState else Overwrite(replacement)
-        ),
-        "other": "keep",
-    }
+    update = {"messages": replacement, "other": "keep"}
     command = Command(resume={"approval": "yes"}, update=update, goto="answer")
     prepared = await _ResponseInstructions.create("current", "response").prepare(
         graph, config, command
@@ -935,23 +851,17 @@ async def test_command_preparation_preserves_resume_and_other_updates(
     assert prepared.resume == command.resume
     assert prepared.goto == command.goto
     assert prepared.graph == command.graph
-    assert isinstance(prepared.update, dict)
-    assert prepared.update["other"] == "keep"
-    messages = prepared.update["messages"]
-    assert _contents(
-        messages.value if isinstance(messages, Overwrite) else messages
-    ) == ["current", "replacement"]
+    assert isinstance(prepared.update, list)
+    assert prepared.update[1:] == list(update.items())
+    channel, messages = prepared.update[0]
+    assert channel == "messages"
+    assert isinstance(messages[0], RemoveMessage)
+    assert messages[0].id == previous.message.id
+    assert _contents(messages[1:]) == ["current"]
     assert command.update is update
-    original = update["messages"]
-    assert _contents(
-        original.value if isinstance(original, Overwrite) else original
-    ) == ["replacement"]
+    assert _contents(replacement) == ["replacement"]
 
 
-@pytest.mark.parametrize(
-    "schema", [MessagesState, _DeltaSnapshotState, _DeltaReplayState]
-)
-@pytest.mark.parametrize("input_kind", ["initial", "state", "command"])
 @pytest.mark.parametrize(
     "message_update",
     [
@@ -963,88 +873,27 @@ async def test_command_preparation_preserves_resume_and_other_updates(
     ids=["string", "dict", "tuple", "message"],
 )
 async def test_preparation_preserves_single_message_updates(
-    schema: type, input_kind: str, message_update: Messages
+    message_update: Messages,
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
-    graph = _graph(model, InMemorySaver(), schema)
+    graph = _graph(model, InMemorySaver())
     config: RunnableConfig = {"configurable": {"thread_id": "single-message"}}
-    if input_kind != "initial":
-        await graph.ainvoke({"messages": [HumanMessage(content="old")]}, config)
+    await graph.ainvoke({"messages": [HumanMessage(content="old")]}, config)
     update = {"messages": deepcopy(message_update)}
-    graph_input: dict[str, Any] | Command = (
-        Command(resume="approved", update=update) if input_kind == "command" else update
-    )
+    graph_input: Command = Command(resume="approved", update=update)
     prepared = await _ResponseInstructions.create("current", "response").prepare(
         graph, config, graph_input
     )
-    if isinstance(prepared, Command):
-        assert prepared.resume == "approved"
-        prepared = prepared.update
-    assert isinstance(prepared, dict)
-    messages = prepared["messages"]
-    normalized = convert_to_messages(
-        messages.value if isinstance(messages, Overwrite) else messages
-    )
-    assert _contents(normalized) == [
-        "current",
-        *([] if input_kind == "initial" else ["old", "answer"]),
-        "correction",
-    ]
-    assert isinstance(normalized[-1], HumanMessage)
-
-
-@pytest.mark.parametrize("has_history", [False, True])
-async def test_preparation_preserves_custom_reducer_updates(has_history: bool) -> None:
-    seen: list[Messages] = []
-
-    def reducer(previous: Messages, incoming: Messages) -> Messages:
-        seen.append(deepcopy(incoming))
-        if isinstance(incoming, dict) and "append" in incoming:
-            return add_messages(previous, HumanMessage(content=incoming["append"]))
-        return add_messages(previous, incoming)
-
-    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
-    graph = _graph(model, InMemorySaver())
-    graph.channels["messages"] = BinaryOperatorAggregate(list, reducer)
-    config: RunnableConfig = {"configurable": {"thread_id": "custom-update"}}
-    if has_history:
-        await graph.ainvoke({"messages": [HumanMessage(content="old")]}, config)
-    seen.clear()
-    message_update = {"append": "correction"}
-    prepared = await _ResponseInstructions.create("current", "response").prepare(
-        graph, config, {"messages": message_update}
-    )
-    assert seen == [message_update]
-    assert isinstance(prepared, dict)
-    messages = prepared["messages"]
-    assert isinstance(messages, Overwrite)
-    assert _contents(messages.value) == [
-        "current",
-        *(["old", "answer"] if has_history else []),
-        "correction",
-    ]
-
-
-@pytest.mark.parametrize("serialized", [False, True])
-async def test_preparation_drops_single_tagged_instruction_updates(
-    serialized: bool,
-) -> None:
-    model = _ActualInputModel(responses=["answer"], disable_streaming=True)
-    graph = _graph(model, InMemorySaver())
-    config: RunnableConfig = {"configurable": {"thread_id": "tagged-update"}}
-    old_instruction = _ResponseInstructions.create("old", "previous").message
-    assert old_instruction is not None
-    prepared = await _ResponseInstructions.create("current", "response").prepare(
-        graph,
-        config,
-        {"messages": old_instruction.to_json() if serialized else old_instruction},
-    )
-    assert isinstance(prepared, dict)
-    assert _contents(prepared["messages"]) == ["current"]
+    assert isinstance(prepared, Command)
+    assert prepared.resume == "approved"
+    assert isinstance(prepared.update, list)
+    assert _contents(prepared.update[0][1]) == ["current"]
+    assert prepared.update[1:] == list(update.items())
+    assert graph_input.update is update
 
 
 @pytest.mark.parametrize("update_shape", ["pairs", "model"])
-async def test_command_update_normalization_preserves_repeated_writes_and_unset_fields(
+async def test_command_preparation_preserves_repeated_writes_and_unset_fields(
     update_shape: str,
 ) -> None:
     model = _ActualInputModel(responses=["answer"], disable_streaming=True)
@@ -1061,23 +910,17 @@ async def test_command_update_normalization_preserves_repeated_writes_and_unset_
         if update_shape == "pairs"
         else _CommandUpdate(messages=[HumanMessage(content="one")])
     )
+    command: Command = Command(resume="approved", update=update)
     prepared = await _ResponseInstructions.create("current", "response").prepare(
-        graph, config, Command(resume="approved", update=update)
+        graph, config, command
     )
     assert isinstance(prepared, Command)
     assert isinstance(prepared.update, list)
     assert [pair for pair in prepared.update if pair[0] != "messages"] == (
         [("other", "first"), ("other", "second")] if update_shape == "pairs" else []
     )
-    messages = next(value for key, value in prepared.update if key == "messages")
-    assert isinstance(messages, Overwrite)
-    assert _contents(messages.value) == [
-        "current",
-        "old",
-        "answer",
-        "one",
-        *(["two"] if update_shape == "pairs" else []),
-    ]
+    assert _contents(prepared.update[0][1]) == ["current"]
+    assert prepared.update[1:] == list(command._update_as_tuples())
 
 
 def test_requests_without_instructions_preserve_custom_message_channels() -> None:

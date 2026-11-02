@@ -6,36 +6,30 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
 
-from langchain_core.messages import AnyMessage, BaseMessage, SystemMessage
+from langchain_core.messages import (
+    AnyMessage,
+    BaseMessage,
+    MessageLikeRepresentation,
+    RemoveMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
-from langgraph.channels import BinaryOperatorAggregate, DeltaChannel, LastValue
 from langgraph.checkpoint.base import BaseCheckpointSaver, create_checkpoint
+from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command, Overwrite
+from langgraph.types import Command
 
 _INSTRUCTIONS_ID_PREFIX = "__langchain_azure_response_instructions:"
 
 
 def _is_request_instruction(value: Any) -> bool:
-    if isinstance(value, BaseMessage):
-        message_id = value.id
-    elif isinstance(value, dict):
-        payload = (
-            value.get("kwargs")
-            if value.get("type") == "constructor"
-            else value.get("data", value)
-        )
-        if not isinstance(payload, dict) or "content" not in payload:
-            return False
-        message_id = payload.get("id")
-    else:
-        return False
-    return isinstance(message_id, str) and message_id.startswith(
-        _INSTRUCTIONS_ID_PREFIX
+    return (
+        isinstance(value, BaseMessage)
+        and isinstance(value.id, str)
+        and value.id.startswith(_INSTRUCTIONS_ID_PREFIX)
     )
 
 
@@ -44,7 +38,6 @@ class _ResponseInstructions:
     """Keep instructions scoped to one Responses request."""
 
     message: SystemMessage | None
-    _cleanup_required: bool = False
 
     @classmethod
     def create(cls, instructions: object, response_id: str) -> _ResponseInstructions:
@@ -76,118 +69,41 @@ class _ResponseInstructions:
         config: RunnableConfig,
         graph_input: dict[str, Any] | Command | None,
     ) -> dict[str, Any] | Command | None:
-        if not isinstance(graph, CompiledStateGraph) or not isinstance(
-            graph.checkpointer, BaseCheckpointSaver
+        if (
+            graph_input is None
+            or not isinstance(graph, CompiledStateGraph)
+            or not isinstance(graph.checkpointer, BaseCheckpointSaver)
         ):
-            return graph_input
-        channel = graph.channels.get("messages")
-        if channel is None:
             return graph_input
         if self.message is None and not (config.get("configurable") or {}).get(
             "thread_id"
         ):
             return graph_input
         state = await graph.aget_state(config)
-        if isinstance(graph_input, Command):
-            state = await graph.aget_state(state.config)
-        previous = state.values.get("messages", [])
-        self._cleanup_required = isinstance(previous, list) and any(
-            _is_request_instruction(message) for message in previous
-        )
-        if self.message is None and not self._cleanup_required:
+        removals = [
+            RemoveMessage(id=message.id)
+            for message in state.values.get("messages", [])
+            if _is_request_instruction(message)
+        ]
+        if self.message is None and not removals:
             return graph_input
-        if not isinstance(previous, list):
-            raise ValueError("Request instructions require a messages list.")
-        if not isinstance(channel, (BinaryOperatorAggregate, DeltaChannel, LastValue)):
-            raise ValueError(
-                "Instructions require a last-value or reducer-backed messages channel."
-            )
         if isinstance(graph_input, Command):
-            # Keep LangGraph's repeated-write and unset-field semantics.
-            writes = list(graph_input._update_as_tuples())
-        elif isinstance(graph_input, dict):
-            writes = list(graph_input.items())
-        else:
-            return graph_input
-        updates = dict(writes)
-
-        messages = self.prepend(previous)
-        incoming_updates = []
-        for key, incoming in writes:
-            if key != "messages":
-                continue
-            if isinstance(incoming, Overwrite):
-                incoming = Overwrite(self.prepend(incoming.value))
-            elif isinstance(incoming, list):
-                incoming = [
-                    message
-                    for message in incoming
-                    if not _is_request_instruction(message)
-                ]
-            elif _is_request_instruction(incoming):
-                incoming = []
-            incoming_updates.append(incoming)
-        if incoming_updates:
-            incoming = incoming_updates[0]
-            if (
-                not previous
-                and not isinstance(graph_input, Command)
-                and isinstance(incoming, (list, Overwrite))
-            ):
-                # Let LangGraph persist the first input before applying its reducer.
-                updates["messages"] = self.prepend(
-                    incoming.value if isinstance(incoming, Overwrite) else incoming
-                )
-                return updates
-            # Apply the application's reducer once, then prepend after the merge.
-            durable = [
-                message for message in previous if not _is_request_instruction(message)
-            ]
-            merged = channel.from_checkpoint(deepcopy(durable))
-            merged.update(incoming_updates)
-            messages = self.prepend(merged.get())
-        updates["messages"] = (
-            Overwrite(messages)
-            if isinstance(channel, (BinaryOperatorAggregate, DeltaChannel))
-            else messages
-        )
-        if isinstance(graph_input, Command):
-            from ._checkpoint._checkpoint_reuse import (
-                NO_WRITES,
-                NULL_TASK_ID,
-                _checkpoint_reads,
-            )
-
-            reads = _checkpoint_reads.get()
-            if reads is not None:
-                saved = await graph.checkpointer.aget_tuple(state.config)
-                if saved is not None:
-                    reads.replaced_message_writes = (
-                        saved.checkpoint["id"],
-                        sum(
-                            task == NULL_TASK_ID
-                            and channel in ("messages", NO_WRITES)
-                            for task, channel, _ in saved.pending_writes or []
-                        ),
-                    )
             return replace(
                 graph_input,
-                update=(
-                    updates
-                    if graph_input.update is None
-                    or isinstance(graph_input.update, dict)
-                    else [
-                        *(write for write in writes if write[0] != "messages"),
-                        ("messages", updates["messages"]),
-                    ]
-                ),
+                update=[
+                    ("messages", [*removals, *self.prepend([])]),
+                    *graph_input._update_as_tuples(),
+                ],
             )
-        return updates
+        return {
+            **graph_input,
+            "messages": [*removals, *self.prepend(graph_input.get("messages", []))],
+        }
 
     async def finish(
         self, graph: CompiledStateGraph, config: RunnableConfig
     ) -> RunnableConfig:
-        if self.message is None and not self._cleanup_required:
+        if self.message is None:
             return config
         if not isinstance(graph, CompiledStateGraph) or not isinstance(
             graph.checkpointer, BaseCheckpointSaver
@@ -197,10 +113,12 @@ class _ResponseInstructions:
         if state.next or state.tasks or state.interrupts:
             return config
         messages = state.values.get("messages", [])
-        clean = [
-            message for message in messages if not _is_request_instruction(message)
+        removals: list[MessageLikeRepresentation] = [
+            RemoveMessage(id=message.id)
+            for message in messages
+            if _is_request_instruction(message)
         ]
-        if len(clean) == len(messages):
+        if not removals:
             return config
         saver = graph.checkpointer
         saved = await saver.aget_tuple(state.config)
@@ -210,7 +128,7 @@ class _ResponseInstructions:
         checkpoint = create_checkpoint(saved.checkpoint, None, step)
         checkpoint["channel_values"] = {
             **saved.checkpoint["channel_values"],
-            "messages": clean,
+            "messages": add_messages(messages, removals),
         }
         version = saver.get_next_version(
             saved.checkpoint["channel_versions"].get("messages"), None

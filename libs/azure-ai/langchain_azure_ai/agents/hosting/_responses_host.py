@@ -435,12 +435,7 @@ class ResponsesHostServer:
         if isinstance(saver, BaseCheckpointSaver) and not isinstance(
             saver, _RequestCheckpointSaver
         ):
-            graph_updates: dict[str, Any] = {
-                "checkpointer": _RequestCheckpointSaver(saver)
-            }
-            if isinstance(graph, CompiledStateGraph):
-                graph_updates["channels"] = dict(graph.channels)
-            graph = graph.copy(graph_updates)
+            graph = graph.copy({"checkpointer": _RequestCheckpointSaver(saver)})
         self._graph = graph
         self._graph_has_checkpointer = _uses_langgraph_checkpointer(graph)
         self._enable_response_branching = enable_response_branching
