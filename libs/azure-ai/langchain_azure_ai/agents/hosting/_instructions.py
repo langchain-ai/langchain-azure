@@ -88,6 +88,8 @@ class _ResponseInstructions:
         ):
             return graph_input
         state = await graph.aget_state(config)
+        if isinstance(graph_input, Command):
+            state = await graph.aget_state(state.config)
         previous = state.values.get("messages", [])
         self._cleanup_required = isinstance(previous, list) and any(
             _is_request_instruction(message) for message in previous

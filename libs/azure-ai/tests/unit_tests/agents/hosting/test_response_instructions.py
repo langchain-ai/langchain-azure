@@ -702,7 +702,12 @@ async def test_branches_use_clean_final_checkpoints_without_changing_parent(
         assert any("turn-A" in repr(item) for item in historical)
 
 
-def test_parallel_completion_cleans_only_messages() -> None:
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("append_messages", [False, True])
+def test_parallel_completion_cleans_only_messages(
+    stream: bool, resume: bool, append_messages: bool
+) -> None:
     seen: list[list[Any]] = []
 
     def left(state: _ParallelState) -> dict[str, Any]:
@@ -710,6 +715,8 @@ def test_parallel_completion_cleans_only_messages() -> None:
         return {"messages": [AIMessage(content="left")], "completed": ["left"]}
 
     def right(state: _ParallelState) -> dict[str, Any]:
+        if resume:
+            interrupt("continue?")
         seen.append(_contents(state["messages"]))
         return {"messages": [AIMessage(content="right")], "completed": ["right"]}
 
@@ -720,13 +727,40 @@ def test_parallel_completion_cleans_only_messages() -> None:
         builder.add_edge(name, END)
     saver = InMemorySaver()
     provider = InMemoryResponseProvider()
-    server = ResponsesHostServer(builder.compile(checkpointer=saver), store=provider)
+    graph = builder.compile(checkpointer=saver)
+    if append_messages:
+        graph.channels["messages"] = BinaryOperatorAggregate(list, add)
+    server = ResponsesHostServer(graph, store=provider)
     with TestClient(server.app) as client:
-        response = _create(client, input="first", instructions="request-only")
+        response = _create(
+            client, stream=stream, input="first", instructions="request-only"
+        )
+        if resume:
+            approval = next(
+                item
+                for item in response["output"]
+                if item["type"] == "mcp_approval_request"
+            )
+            response = _create(
+                client,
+                stream=stream,
+                previous_response_id=response["id"],
+                instructions="replacement",
+                input=[
+                    {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": approval["id"],
+                        "approve": True,
+                    }
+                ],
+            )
         config = _stored_config(client, provider, response)
         assert client.portal is not None
         final = client.portal.call(server.graph.aget_state, config)
-    assert seen == [["request-only", "first"], ["request-only", "first"]]
+    assert seen == [
+        ["request-only", "first"],
+        ["replacement", "first"] if resume else ["request-only", "first"],
+    ]
     assert final.next == final.tasks == ()
     assert sorted(final.values["completed"]) == ["left", "right"]
     assert sorted(_contents(final.values["messages"])) == ["first", "left", "right"]
