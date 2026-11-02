@@ -303,11 +303,6 @@ async def test_branch_recovery_uses_selected_checkpoint(
     chain_set.assert_not_awaited()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Malformed branch recovery progress currently falls back to parent replay.",
-)
 @pytest.mark.parametrize("damage", ["partial", "malformed"])
 async def test_branch_recovery_rejects_damaged_progress_without_replaying_input(
     graph: CompiledStateGraph,

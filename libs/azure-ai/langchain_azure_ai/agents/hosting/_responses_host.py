@@ -767,7 +767,7 @@ class ResponsesHostServer:
                         response_id=context.response_id,
                         response=context.persisted_response,
                     )
-                ).checkpoint_ref
+                ).recovery_checkpoint_ref
                 if checkpoint_ref is not None:
                     return HostingRunnableConfig.create_from_checkpoint(
                         checkpoint_ref, context
@@ -1064,7 +1064,13 @@ class ResponsesHostServer:
             resume_command: Optional["Command"] = None
             consumed_call_ids: frozenset[str] = frozenset()
             graph_input: dict[str, Any] | Command | None
-            checkpoint_ref = task_storage.checkpoint_ref if recovering else None
+            checkpoint_ref = None
+            if recovering:
+                checkpoint_ref = (
+                    task_storage.recovery_checkpoint_ref
+                    if self._is_response_branch(request, context)
+                    else task_storage.checkpoint_ref
+                )
             if checkpoint_ref is not None:
                 config = (
                     HostingRunnableConfig(config)
