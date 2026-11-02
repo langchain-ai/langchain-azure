@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import nullcontext
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -303,6 +304,92 @@ async def test_branch_recovery_uses_selected_checkpoint(
     chain_set.assert_not_awaited()
 
 
+async def test_branch_recovery_from_finished_checkpoint_preserves_saved_output(
+    recovery_context: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node_calls: list[str] = []
+
+    async def answer(state: MessagesState) -> dict[str, Any]:
+        text = "|".join(
+            str(message.content)
+            for message in state["messages"]
+            if isinstance(message, HumanMessage)
+        )
+        node_calls.append(text)
+        return {"messages": [AIMessage(content=text)]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        child = _create(client, input="B", previous_response_id=parent["id"])
+        assert _text(child) == "A|B"
+        assert client.portal is not None
+        stored_child = client.portal.call(provider.get_response, child["id"])
+        child_config = _config(stored_child)
+        child_state = await graph.aget_state(child_config)
+        assert not child_state.next
+        assert not child_state.tasks
+        assert not child_state.interrupts
+
+        snapshot = deepcopy(stored_child)
+        snapshot["status"] = "in_progress"
+        saved_output = deepcopy(snapshot["output"])
+        sibling = _create(client, input="C", previous_response_id=parent["id"])
+        assert _text(sibling) == "A|C"
+        latest = await graph.aget_state(
+            {"configurable": {"thread_id": child_config["configurable"]["thread_id"]}}
+        )
+        assert latest.values["messages"][-1].content == "A|C"
+
+        recovery_context.response_id = child["id"]
+        recovery_context.conversation_chain_id = child["id"]
+        recovery_context.persisted_response = snapshot
+        recovery_context._provider = provider
+        lookup = AsyncMock(side_effect=KeyError(parent["id"]))
+        monkeypatch.setattr(provider, "get_response", lookup)
+        build_input = AsyncMock(wraps=server.build_input)
+        monkeypatch.setattr(server, "build_input", build_input)
+        execute = MagicMock(wraps=server.graph.astream)
+        monkeypatch.setattr(server.graph, "astream", execute)
+        events = [
+            event
+            async for event in server._handle_create_async_gen(
+                cast(
+                    CreateResponse,
+                    {
+                        "input": "B",
+                        "previous_response_id": parent["id"],
+                        "background": True,
+                        "store": True,
+                    },
+                ),
+                recovery_context,
+                asyncio.Event(),
+            )
+        ]
+
+    response = events[-1]["response"]
+    assert response["status"] == "completed"
+    assert response["output"] == saved_output
+    assert node_calls == ["A", "A|B", "A|C"]
+    execute.assert_called_once()
+    assert execute.call_args.args[0] is None
+    assert (
+        execute.call_args.kwargs["config"]["configurable"]["checkpoint_id"]
+        == child_config["configurable"]["checkpoint_id"]
+    )
+    build_input.assert_not_awaited()
+    recovery_context.get_input_items.assert_not_awaited()
+    lookup.assert_not_awaited()
+
+
 @pytest.mark.parametrize("damage", ["partial", "malformed"])
 async def test_branch_recovery_rejects_damaged_progress_without_replaying_input(
     graph: CompiledStateGraph,
@@ -500,7 +587,12 @@ def test_custom_saver_config_is_available_before_checkpoint_reads(
     assert _text(response) == "A|B"
 
 
-def test_paused_parent_cannot_be_branched() -> None:
+@pytest.mark.parametrize("recovering", [False, True])
+async def test_paused_parent_cannot_be_branched(
+    recovery_context: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    recovering: bool,
+) -> None:
     def pause(state: MessagesState) -> dict[str, Any]:
         interrupt("Approval needed")
         return {}
@@ -509,16 +601,50 @@ def test_paused_parent_cannot_be_branched() -> None:
     builder.add_node("pause", pause)
     builder.add_edge(START, "pause")
     builder.add_edge("pause", END)
+    provider = InMemoryResponseProvider()
     server = ResponsesHostServer(
         builder.compile(checkpointer=InMemorySaver()),
-        store=InMemoryResponseProvider(),
+        store=provider,
         enable_response_branching=True,
     )
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
-        response = _create(client, input="B", previous_response_id=parent["id"])
-    assert parent["status"] == "completed"
+        assert parent["status"] == "completed"
+        assert client.portal is not None
+        stored_parent = client.portal.call(provider.get_response, parent["id"])
+        state = await server.graph.aget_state(_config(stored_parent))
+        assert state.next == ("pause",)
+        assert state.interrupts
+        build_input = AsyncMock(wraps=server.build_input)
+        monkeypatch.setattr(server, "build_input", build_input)
+        execute = MagicMock(wraps=server.graph.astream)
+        monkeypatch.setattr(server.graph, "astream", execute)
+        if recovering:
+            recovery_context._provider = provider
+            events = [
+                event
+                async for event in server._handle_create_async_gen(
+                    cast(
+                        CreateResponse,
+                        {
+                            "input": "B",
+                            "previous_response_id": parent["id"],
+                            "background": True,
+                            "store": True,
+                        },
+                    ),
+                    recovery_context,
+                    asyncio.Event(),
+                )
+            ]
+            response = events[-1]["response"]
+            recovery_context.get_input_items.assert_not_awaited()
+        else:
+            response = _create(client, input="B", previous_response_id=parent["id"])
+
     assert response["status"] == "failed"
+    build_input.assert_not_awaited()
+    execute.assert_not_called()
 
 
 @pytest.mark.parametrize("caller", ["user-b", None])
