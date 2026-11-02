@@ -328,9 +328,7 @@ def test_interrupt_continuation_replaces_or_removes_previous_instructions(
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(builder.compile(checkpointer=saver), store=provider)
     with TestClient(server.app) as client:
-        response = _create(
-            client, stream=stream, input="first", instructions="turn-A"
-        )
+        response = _create(client, stream=stream, input="first", instructions="turn-A")
         assert client.portal is not None
         paused = client.portal.call(
             server.graph.aget_state, _stored_config(client, provider, response)
@@ -666,9 +664,7 @@ async def test_branches_use_clean_final_checkpoints_without_changing_parent(
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("resume", [False, True])
-def test_parallel_completion_cleans_only_messages(
-    stream: bool, resume: bool
-) -> None:
+def test_parallel_completion_cleans_only_messages(stream: bool, resume: bool) -> None:
     seen: list[list[Any]] = []
 
     def left(state: _ParallelState) -> dict[str, Any]:
