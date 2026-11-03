@@ -1,6 +1,6 @@
 azure-functions>=1.18.0
-durabletask>=1.9.0,<2
-durabletask-azuremanaged>=1.9.0,<2
+durabletask>=1.13.0,<2
+durabletask-azuremanaged>=1.13.0,<2
 langgraph>=1.0.0,<2
 langchain-azure-compute[durabletask]
 azure-functions>=1.20.0

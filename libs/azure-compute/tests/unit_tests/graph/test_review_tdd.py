@@ -1718,8 +1718,8 @@ def test_p1_7_and_p1_8_pyproject_bounds_curated_beta_surface_and_no_leftovers() 
     pkg_root = Path(__file__).resolve().parents[3]
     pyproject_text = (pkg_root / "pyproject.toml").read_text(encoding="utf-8")
     assert '"langgraph>=1.0.2,<1.2"' in pyproject_text
-    assert '"durabletask>=1.9.0,<1.10"' in pyproject_text
-    assert '"durabletask-azuremanaged>=1.9.0,<1.10"' in pyproject_text
+    assert '"durabletask>=1.13.0,<1.14"' in pyproject_text
+    assert '"durabletask-azuremanaged>=1.13.0,<1.14"' in pyproject_text
     assert '"langgraph.*"' not in pyproject_text
 
     # Curated public __all__ surface
