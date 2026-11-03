@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, request_response
 
+from .._responses_host import _scope_thread_id, _thread_namespace
 from .._storage import state_store_client_scope
 from .checkpoint_ref import CheckpointRef
 from .hosting_runnable_config import HostingRunnableConfig
@@ -113,8 +114,6 @@ def _validate_branch_parent(
     context: ResponseContext,
 ) -> CheckpointRef:
     """Validate a branch parent and return its checked checkpoint reference."""
-    from .._responses_host import _scope_thread_id, _thread_namespace
-
     if parent.get("status") != "completed":
         raise _RequestValidationError(
             "The previous response must be completed.", "previous_response_id"
