@@ -822,6 +822,8 @@ class ResponsesHostServer:
     async def _response_branch_config(
         self, request: CreateResponse, context: ResponseContext
     ) -> RunnableConfig:
+        # _is_response_branch guarantees a non-empty previous_response_id here.
+        # Conversation-only requests use _resolve_thread_config instead.
         parent_id = cast(str, request["previous_response_id"])
         if context.is_recovery:
             parent = await _load_parent_response(parent_id, context)
