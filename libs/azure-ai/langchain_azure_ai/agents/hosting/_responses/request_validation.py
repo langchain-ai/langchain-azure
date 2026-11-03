@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Mapping
@@ -27,7 +28,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, request_response
 
-from .._responses_host import _scope_thread_id, _thread_namespace
 from .._storage import state_store_client_scope
 from .checkpoint_ref import CheckpointRef
 from .hosting_runnable_config import HostingRunnableConfig
@@ -40,6 +40,37 @@ logger = logging.getLogger(__name__)
 _request_id: ContextVar[str | None] = ContextVar(
     "responses_validation_request_id", default=None
 )
+
+_USER_NAMESPACE_PREFIX = "user-"
+_USER_NAMESPACE_SEPARATOR = ":"
+_USER_NAMESPACE_HASH = hashlib.sha256
+
+
+def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
+    """Namespace a LangGraph thread by the platform-provided user key."""
+    platform_context = getattr(context, "platform_context", None)
+    user_id_key = getattr(platform_context, "user_id_key", None)
+    if not isinstance(user_id_key, str) or not user_id_key:
+        return thread_id
+    user_namespace = _USER_NAMESPACE_HASH(user_id_key.encode()).hexdigest()
+    return (
+        f"{_USER_NAMESPACE_PREFIX}{user_namespace}"
+        f"{_USER_NAMESPACE_SEPARATOR}{thread_id}"
+    )
+
+
+def _thread_namespace(thread_id: str) -> str:
+    """Return a hosted thread's user namespace, or an empty string."""
+    prefix, separator, _ = thread_id.partition(_USER_NAMESPACE_SEPARATOR)
+    digest = prefix.removeprefix(_USER_NAMESPACE_PREFIX)
+    if (
+        separator
+        and prefix.startswith(_USER_NAMESPACE_PREFIX)
+        and len(digest) == _USER_NAMESPACE_HASH().digest_size * 2
+        and all(char in "0123456789abcdef" for char in digest)
+    ):
+        return prefix + separator
+    return ""
 
 
 class _RequestValidationError(Exception):

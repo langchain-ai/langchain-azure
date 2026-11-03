@@ -30,7 +30,6 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
@@ -100,9 +99,13 @@ from ._responses import (
 )
 from ._responses.request_validation import (
     _load_parent_response,
+    _scope_thread_id,
     _validate_branch_parent,
     _validate_branch_state,
     install_request_validation,
+)
+from ._responses.request_validation import (
+    _thread_namespace as _thread_namespace,
 )
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
@@ -149,9 +152,6 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
-_USER_NAMESPACE_PREFIX = "user-"
-_USER_NAMESPACE_SEPARATOR = ":"
-_USER_NAMESPACE_HASH = hashlib.sha256
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -273,33 +273,6 @@ def _message_count(
     skip_call_ids: frozenset[str] = frozenset(),
 ) -> int:
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
-
-
-def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
-    """Namespace a LangGraph thread by the platform-provided user key."""
-    platform_context = getattr(context, "platform_context", None)
-    user_id_key = getattr(platform_context, "user_id_key", None)
-    if not isinstance(user_id_key, str) or not user_id_key:
-        return thread_id
-    user_namespace = _USER_NAMESPACE_HASH(user_id_key.encode()).hexdigest()
-    return (
-        f"{_USER_NAMESPACE_PREFIX}{user_namespace}"
-        f"{_USER_NAMESPACE_SEPARATOR}{thread_id}"
-    )
-
-
-def _thread_namespace(thread_id: str) -> str:
-    """Return a hosted thread's user namespace, or an empty string."""
-    prefix, separator, _ = thread_id.partition(_USER_NAMESPACE_SEPARATOR)
-    digest = prefix.removeprefix(_USER_NAMESPACE_PREFIX)
-    if (
-        separator
-        and prefix.startswith(_USER_NAMESPACE_PREFIX)
-        and len(digest) == _USER_NAMESPACE_HASH().digest_size * 2
-        and all(char in "0123456789abcdef" for char in digest)
-    ):
-        return prefix + separator
-    return ""
 
 
 def _response_field(response: Any, name: str) -> str | None:
