@@ -1,5 +1,7 @@
 """Unit tests for `langchain_azure_ai.utils.math`."""
 
+from typing import Optional
+
 import numpy as np
 import pytest
 
@@ -55,21 +57,44 @@ def test_score_threshold_zero_excludes_negative_similarities() -> None:
     assert scores == pytest.approx([0.3])
 
 
-def test_exact_zero_similarity_match_is_not_dropped() -> None:
+@pytest.mark.parametrize("score_threshold", [None, 0.0, -0.0])
+def test_exact_zero_similarity_match_is_not_dropped(
+    score_threshold: Optional[float],
+) -> None:
     """A real similarity of exactly 0.0 must still be returned.
 
     `X` and `Y` here are orthogonal, so the only candidate has a genuine
-    cosine similarity of 0.0 -- which clears the default threshold of -1.0.
-    Using 0 as a sentinel for "filtered out by the threshold" must not be
-    confused with a legitimate score that happens to equal 0.
+    cosine similarity of 0.0. Using 0 as a sentinel for "filtered out by
+    the threshold" must not be confused with a legitimate score that
+    happens to equal 0. The explicit `0.0`/`-0.0` thresholds also pin down
+    that the eligibility check is inclusive (`>=`, not `>`) -- the default
+    (`None`) case alone would still pass against a `>` comparison.
     """
     x = [[1.0, 0.0]]
     y = [[0.0, 1.0]]
 
-    indices, scores = cosine_similarity_top_k(x, y)
+    indices, scores = cosine_similarity_top_k(x, y, score_threshold=score_threshold)
 
     assert indices == [(0, 0)]
     assert scores == pytest.approx([0.0])
+
+
+def test_negative_score_survives_alongside_a_filtered_candidate() -> None:
+    """A valid negative score must outrank a candidate the threshold excludes.
+
+    Ranking ineligible entries at 0 instead of -inf would put the excluded
+    -1.0 candidate ahead of the valid -0.5 one, since 0 > -0.5.
+    """
+    x = [[1.0, 0.0]]
+    y = [
+        [-0.5, np.sqrt(3) / 2],  # similarity -0.5, clears -0.75, must be kept
+        [-1.0, 0.0],  # similarity -1.0, must be excluded
+    ]
+
+    indices, scores = cosine_similarity_top_k(x, y, top_k=5, score_threshold=-0.75)
+
+    assert indices == [(0, 0)]
+    assert scores == pytest.approx([-0.5])
 
 
 def test_top_k_still_returns_matches_that_clear_the_threshold() -> None:
