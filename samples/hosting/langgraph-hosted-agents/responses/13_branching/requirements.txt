@@ -1,0 +1,6 @@
+./wheels/langchain_azure_ai-1.2.12-py3-none-any.whl[hosting,opentelemetry]
+langchain
+langchain-openai
+httpx
+python-dotenv
+opentelemetry-exporter-otlp-proto-http>=1.37
