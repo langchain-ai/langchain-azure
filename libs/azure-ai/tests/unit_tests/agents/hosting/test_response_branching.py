@@ -39,7 +39,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import StateSnapshot, interrupt
+from langgraph.types import Command, StateSnapshot, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -380,7 +380,7 @@ async def test_branch_recovery_from_finished_checkpoint_preserves_saved_output(
     assert response["output"] == saved_output
     assert node_calls == ["A", "A|B", "A|C"]
     execute.assert_called_once()
-    assert execute.call_args.args[0] is None
+    assert execute.call_args.args[0] == Command(resume={})
     assert (
         execute.call_args.kwargs["config"]["configurable"]["checkpoint_id"]
         == child_config["configurable"]["checkpoint_id"]
