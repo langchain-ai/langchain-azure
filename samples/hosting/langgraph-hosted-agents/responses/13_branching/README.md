@@ -124,8 +124,8 @@ In another terminal, with the same environment activated, run:
 python client.py
 ```
 
-The client sends five non-streaming requests and prints each response ID
-and assistant reply. The expected numbers are `10`, `11`, `12`, `10`, `11`.
+The client sends five non-streaming requests and prints assistant reply. 
+The expected numbers are `10`, `11`, `12`, `10`, `11`.
 All requests set `store: true` so their responses remain selectable.
 
 For a different host address or port:
