@@ -36,9 +36,9 @@ platform. Creating and managing that resource is outside this API path's scope.
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID. Lookup and parent selection follow ordinary continuation.
 - `previous_response_id` and `conversation` are mutually exclusive.
-- Request `store` controls response retention and defaults to `True`. Enabling
-  branching must not silently override `store=False`. See
-  [Request store behavior](#request-store-behavior) for response retention.
+- **`store=False` is not supported: the host returns HTTP 400 before streaming
+  or graph execution**, whether branching is enabled or disabled. Omit `store`
+  or pass `store=True`. See [Failures and limitations](#failures-and-limitations).
 - Tool outputs and approval decisions are valid continuation inputs. A graph
   pause alone must not cause an otherwise valid protocol request to be rejected.
 - With `previous_response_id`, a previous response's top-level `instructions`
@@ -111,9 +111,9 @@ if __name__ == "__main__":
     ).run(port=8088)
 ```
 
-  Server `store=provider` is an optional response-provider override, not a boolean.
-  `InMemorySaver` is for local demos; use a durable, history-preserving saver for
-  reuse after restart.
+Server `store=provider` is an optional response-provider override, not a boolean.
+`InMemorySaver` is for local demos; use a durable, history-preserving saver for
+reuse after restart.
 
 ### 2. Create a parent and two branches
 
@@ -202,12 +202,12 @@ them, not just the latest checkpoint.
 With `enable_response_branching=True`, request routing reuses ordinary
 continuation's admission and linkage rules:
 
-| Request linkage                   | Behavior                                                                                      |
-| --------------------------------- | --------------------------------------------------------------------------------------------- |
-| Neither parent nor `conversation` | Start a new root response in a new thread.                                                    |
-| `previous_response_id` only       | Start from the parent's exact checkpoint.                                                     |
-| `conversation` only               | Use ordinary continuation; conversation-head policy is outside this feature.                  |
-| Both parent and `conversation`    | Reject with HTTP 400.                                                                         |
+| Request linkage                   | Behavior                                                                     |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| Neither parent nor `conversation` | Start a new root response in a new thread.                                   |
+| `previous_response_id` only       | Start from the parent's exact checkpoint.                                    |
+| `conversation` only               | Use ordinary continuation; conversation-head policy is outside this feature. |
+| Both parent and `conversation`    | Reject with HTTP 400.                                                        |
 
 Omitted or `null` linkage fields do not select a parent or conversation.
 Resolve references within the request's authorized storage scope; a resource ID
@@ -232,17 +232,6 @@ or `instructions`.
 The constructor's existing automatic provider selection remains available with
 branching enabled or disabled; `store=provider` is an optional override.
 
-## Request `store` behavior
-
-Request `store` is a boolean and defaults to `True`. It controls retention of the
-current response, independently of the server's provider configuration. Enabling
-branching must honor this choice rather than force response retention.
-
-A response created with `store=False` is not retained and cannot later be selected
-as a response-ID parent. A branch requires a stored, accessible parent, regardless
-of whether the child itself uses `store=True` or `store=False`. The child's
-retention choice must not delete or modify its stored parent.
-
 Conversation-state isolation,
 temporary checkpoint cleanup, and full-input replay responsibilities also belong
 to a separate execution-lifecycle design. This branching feature does not define
@@ -253,15 +242,15 @@ those behaviors or add them as implementation or verification requirements.
 History-based continuation uses SDK-managed response and history storage.
 Checkpoint-based branching additionally needs graph checkpoints:
 
-| Data                                                               | Where it lives             | How to configure it                                |
-| ------------------------------------------------------------------ | -------------------------- | -------------------------------------------------- |
-| Response, status, input/output, and internal checkpoint references | SDK response provider      | Host default; optional `store=provider`            |
-| Graph state, pending writes, and checkpoint history                | LangGraph checkpoint saver | Graph: `checkpointer=...`                          |
+| Data                                                               | Where it lives             | How to configure it                     |
+| ------------------------------------------------------------------ | -------------------------- | --------------------------------------- |
+| Response, status, input/output, and internal checkpoint references | SDK response provider      | Host default; optional `store=provider` |
+| Graph state, pending writes, and checkpoint history                | LangGraph checkpoint saver | Graph: `checkpointer=...`               |
 
 The server uses its default response provider unless `store=provider` overrides
-it. The client's `store` is a boolean that defaults to `True` and controls
-retention of that response. Having a provider does not force every response to
-be retained.
+it. The client's `store` is a boolean that defaults to `True`, not a provider.
+Currently, omit it or pass `store=True`; `store=False` is rejected as described
+under [Failures and limitations](#failures-and-limitations).
 
 Response retention does not replace the graph's checkpointer. The application
 owns the graph saver's initialization, lifecycle, and general retention policy.
@@ -281,6 +270,13 @@ guarantees; this spec does not promise an identical retention period.
 
 ## Failures and limitations
 
+**`store=False` is not supported.** Any request that explicitly sets `store=False`
+returns **HTTP 400 with a JSON error before an SSE stream is opened or the graph
+is executed**. This applies to root responses, continuation, and branches, with
+branching enabled or disabled. The error has `code="invalid_request_error"`,
+`param="store"`, and the message `store=False is not supported yet.` Omit `store`
+or pass `store=True`.
+
 Check the response status or terminal SSE event, not only the HTTP status:
 execution errors can arrive as `status="failed"` or `response.failed` after
 HTTP admission. Parameter and reference validation must prevent graph execution;
@@ -289,16 +285,17 @@ OpenAI HTTP error and streaming contracts for the corresponding condition.
 Backend execution failures use public error code `server_error`; internal codes
 are logged. Exact reference-error statuses and codes need the verification below.
 
-| Problem                                                                                                             | Result and action                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Request includes `response_id`, an invalid parent ID, or both linkage fields                                        | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
-| Referenced response is missing or inaccessible                                                                      | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
-| `previous_response_id` refers to an unretained response                                                             | HTTP 400 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
-| Stored parent lacks a checkpoint reference or its graph state cannot be restored                                    | Backend failure. Restore the required data or choose another parent.                                                        |
-| Input contains approval or tool-result replies                                                                      | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
-| Exact checkpoint is missing or mismatched                                                                           | Failed response. Restore the required data or choose another parent; there is no fallback to the latest checkpoint.         |
-| Graph checkpoint write fails                                                                                        | Failed response. Progress is not published for the missing checkpoint; investigate the saver backend.                       |
-| SDK terminal response storage fails                                                                                 | The graph checkpoint alone cannot serve as a parent. Check SDK storage errors and the stored response status.               |
+| Problem                                                                          | Result and action                                                                                                           |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Request explicitly sets `store=False`                                            | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
+| Request includes `response_id`, an invalid parent ID, or both linkage fields     | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
+| Referenced response is missing or inaccessible                                   | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
+| `previous_response_id` refers to an unretained response                          | HTTP 400 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
+| Stored parent lacks a checkpoint reference or its graph state cannot be restored | Backend failure. Restore the required data or choose another parent.                                                        |
+| Input contains approval or tool-result replies                                   | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
+| Exact checkpoint is missing or mismatched                                        | Failed response. Restore the required data or choose another parent; there is no fallback to the latest checkpoint.         |
+| Graph checkpoint write fails                                                     | Failed response. Progress is not published for the missing checkpoint; investigate the saver backend.                       |
+| SDK terminal response storage fails                                              | The graph checkpoint alone cannot serve as a parent. Check SDK storage errors and the stored response status.               |
 
 - The supported deployment is one host process (one worker), not multiple host
   processes or distributed workers. Concurrent branch requests within that host
@@ -317,7 +314,7 @@ A **root response** has no parent. A **child response** selects a parent using
 | Name             | Meaning                                                                                                                                           |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Origin           | The parent's exact graph checkpoint, which identifies a child's starting point.                                                                   |
-| Progress         | The current response's latest confirmed graph checkpoint, referenced by SDK recovery metadata.                                                     |
+| Progress         | The current response's latest confirmed graph checkpoint, referenced by SDK recovery metadata.                                                    |
 | Final checkpoint | The last progress reference stored with a completed response. Parent eligibility is checked against the restored graph state and response output. |
 
 These names describe roles for checkpoint references, not copies of graph state.
@@ -374,10 +371,10 @@ acknowledgement that the SDK has persisted it; recovery uses the last snapshot
 the SDK actually saved.
 
 1. **Select.** Reuse ordinary continuation's request admission and parent
-  selection. For a supported finished parent, load its stored exact checkpoint
-  reference through `select_branch_checkpoint` within the platform's
-  authorization context. `branch_selection_scope` caches this selection only
-  for the request. A child without saved progress re-reads its stored parent.
+   selection. For a supported finished parent, load its stored exact checkpoint
+   reference through `select_branch_checkpoint` within the platform's
+   authorization context. `branch_selection_scope` caches this selection only
+   for the request. A child without saved progress re-reads its stored parent.
 2. **Validate.** For a selected parent, verify that its stored response is
    completed and has no outstanding function calls or MCP approval requests.
    After configuration hooks and graph-bound configuration merging, re-pin the
@@ -391,14 +388,14 @@ the SDK actually saved.
    `durability="sync"` and `updates`, `messages`, and `checkpoints` stream modes.
 4. **Publish progress.** For each graph checkpoint event, await
    `wait_for_checkpoint` until the underlying saver write succeeds. Then update
-  the checkpoint reference in `TaskStorageManager`, flush output events, and
-  emit `stream.checkpoint()` to request the SDK recovery snapshot. The graph
-  event alone does not confirm the graph write, and the snapshot request does
-  not confirm SDK persistence.
+   the checkpoint reference in `TaskStorageManager`, flush output events, and
+   emit `stream.checkpoint()` to request the SDK recovery snapshot. The graph
+   event alone does not confirm the graph write, and the snapshot request does
+   not confirm SDK persistence.
 5. **Finish.** After shutdown/cancellation checks and pending interrupt emission,
-   emit `response.completed` for SDK finalization. Request `store` controls
-  terminal response retention. A retained response keeps the same confirmed
-  final checkpoint reference.
+   emit `response.completed` for SDK finalization. Requests with `store=False`
+   are currently rejected at admission, before this stage. A retained response
+   keeps the same confirmed final checkpoint reference.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
 checkpoint alone cannot make a reusable parent: its response must also be stored
@@ -491,10 +488,10 @@ The branching helpers and saver wrapper are internal, not public extension point
 This revision changes the specification only. Implementation gaps and unverified
 behavior are distinguished below; neither indicates completed support.
 
-| Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
-| Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
+| Topic                         | Target contract                                                              | Implementation status                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Response storage provider     | Accept the host's default provider or an explicit `store=provider` override. | Automatic provider selection already exists and must remain available when branching is enabled. |
+| Request-scoped `instructions` | Do not inherit the parent's top-level instructions through its checkpoint.   | **Verification required:** Check checkpoint restoration against this rule.                       |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
 tool replies, approval decisions, and resume state between children, is deferred.
@@ -507,7 +504,8 @@ Before claiming compatibility, cover these observable scenarios:
   explicit provider override. Omitting `store` must not fail initialization;
   boolean constructor values are not response providers.
 - B and C can select A independently, including when a newer sibling exists.
-  A child with `store=False` does not delete or modify its stored parent.
+  Currently, a child with `store=False` receives HTTP 400 before streaming or
+  graph execution; its stored parent remains unchanged.
 - In-progress, failed, and cancelled parents receive a 4xx error under the common
   error contract before graph execution, without waiting or falling back to
   another response or intermediate progress.
@@ -546,11 +544,11 @@ Otherwise, the request is rejected under those rules; branching does not decide
 which parent a conversation request selects.
 
 - [ ] Validate stored parent outputs for unanswered tool calls before admitting
-  a branch; reaching `END` with no pending tasks or interrupts is not sufficient.
+      a branch; reaching `END` with no pending tasks or interrupts is not sufficient.
 - [ ] Reject requests that set both `previous_response_id` and `conversation`
-  with HTTP 400 before execution, instead of ignoring `conversation`.
+      with HTTP 400 before execution, instead of ignoring `conversation`.
 - [ ] Move parent eligibility and access checks before `response.created`.
-  Use the common HTTP 4xx/error-code contract for ineligible parents, including
-  `previous_response_not_found` for unretained responses, instead of
-  `response.failed` with `server_error`. Keep missing checkpoint data classified
-  as a backend failure.
+      Use the common HTTP 4xx/error-code contract for ineligible parents, including
+      `previous_response_not_found` for unretained responses, instead of
+      `response.failed` with `server_error`. Keep missing checkpoint data classified
+      as a backend failure.
