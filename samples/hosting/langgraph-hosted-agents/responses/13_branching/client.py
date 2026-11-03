@@ -47,7 +47,7 @@ def _create_response(
 
 
 def main() -> None:
-    """Branch, rewind, and regenerate from the same remembered number."""
+    """Branch, rewind, continue, and regenerate a remembered number."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8088")
     parser.add_argument(
@@ -79,7 +79,7 @@ def main() -> None:
     add_one = "Add 1 to the remembered number."
 
     print("\nB: branch from A, add 1 -> 11")
-    _create_response(
+    branch_b_id = _create_response(
         client,
         add_one,
         parent_id,
@@ -94,15 +94,23 @@ def main() -> None:
         token_provider,
     )
 
-    print("\nD: rewind to A, recall -> 10")
-    _create_response(
+    print("\nD: rewind to B after C, recall -> 11")
+    rewind_id = _create_response(
         client,
         "What number do you remember?",
-        parent_id,
+        branch_b_id,
         token_provider,
     )
 
-    print("\nE: regenerate B, same parent and input -> 11")
+    print("\nE: continue D, add 1 -> 12")
+    _create_response(
+        client,
+        add_one,
+        rewind_id,
+        token_provider,
+    )
+
+    print("\nF: regenerate B, same parent and input -> 11")
     _create_response(
         client,
         add_one,

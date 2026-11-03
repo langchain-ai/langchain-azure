@@ -17,25 +17,28 @@ See [main.py](main.py) for the full implementation.
 
 ### Branching, rewind, and regeneration
 
-The [client](client.py) asks the agent to remember 10, then selects that
-same starting point for four more requests:
+The [client](client.py) asks the agent to remember 10, creates branches B
+and C from A, then returns to B after C. Requests are sent in A-to-F order:
 
 ```text
 A: remember 10                    -> 10
 |-- B: add 1                      -> 11
+|   `-- D: recall                 -> 11  (rewind to B after C)
+|       `-- E: add 1              -> 12  (continue D)
 |-- C: add 2                      -> 12  (branch)
-|-- D: recall                     -> 10  (rewind to A)
-`-- E: add 1                      -> 11  (regenerate B)
+`-- F: add 1                      -> 11  (regenerate B)
 ```
 
 - **Branching:** B and C both select A, so adding 2 produces 12, not 13.
-- **Rewind:** D selects A after B and C have changed their own numbers.
-  It recalls 10 without deleting or modifying the existing branches.
-- **Regeneration:** E repeats B's input with the same parent A, not B.
+- **Rewind and continuation:** After C is created, D selects B and recalls
+  11. E then selects D and adds 1 to get 12, demonstrating that B's branch
+  remains usable without incorporating C's update. Existing branches are
+  not deleted or modified.
+- **Regeneration:** F repeats B's input with the same parent A, not B.
   It returns a new response ID. The answer is intentionally still 11;
   regeneration does not guarantee different output text.
 
-All three operations use `previous_response_id`; there are no separate
+All these operations use `previous_response_id`; there are no separate
 rewind or regenerate endpoints. Every request creates a new response.
 Keep its ID to select that version later. Reusing A never overwrites A.
 
@@ -116,7 +119,7 @@ azd ai agent run --no-client
 ```
 
 Use the same project endpoint and model deployment in `.env`. `--no-client`
-starts only the host so the branching client below can send its five
+starts only the host so the branching client below can send its six
 requests. Add `--port 8090` if port 8088 is already in use.
 
 ## Interacting with the agent
@@ -129,8 +132,8 @@ In another terminal, with the same environment activated, run:
 python client.py
 ```
 
-The client sends five non-streaming requests and prints assistant reply. 
-The expected numbers are `10`, `11`, `12`, `10`, `11`.
+The client sends six non-streaming requests and prints assistant reply.
+The expected numbers are `10`, `11`, `12`, `11`, `12`, `11`.
 
 For a different host address or port:
 
@@ -161,14 +164,22 @@ curl -X POST http://127.0.0.1:8088/responses \
   -d '{"input":"Add 2 to the remembered number.","previous_response_id":"<A_ID>"}'
 ```
 
-Rewind to A and recall 10, then regenerate B by resending its original
-input with the same parent A:
+Keep B's returned `id` as `<B_ID>`. After creating C, select B again (D),
+then use D's returned `id` as `<D_ID>` to continue it (E):
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"What number do you remember?","previous_response_id":"<A_ID>"}'
+  -d '{"input":"What number do you remember?","previous_response_id":"<B_ID>"}'
 
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<D_ID>"}'
+```
+
+Regenerate B by resending its original input with the same parent A (F):
+
+```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
   -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>"}'
@@ -206,7 +217,7 @@ python client.py --azure --base-url "https://<resource>.services.ai.azure.com/ap
 ```
 
 `--azure` obtains a token with `DefaultAzureCredential` and adds
-`api-version=v1`. The client sends the same A/B/C/D/E requests as the local
+`api-version=v1`. The client sends the same A/B/C/D/E/F requests as the local
 example, using `FoundryCheckpointSaver` on the hosted agent. See the
 [deployment guide](../../README.md#deploying-the-agent-to-foundry) for
 Foundry prerequisites.
