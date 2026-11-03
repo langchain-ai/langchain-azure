@@ -37,7 +37,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -97,6 +97,12 @@ from ._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
+)
+from ._responses.request_validation import (
+    _load_parent_response,
+    _validate_branch_parent,
+    _validate_branch_state,
+    install_request_validation,
 )
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
@@ -356,6 +362,7 @@ class ResponsesHostServer:
 
         A minimal non-streaming request is ``{"input": "Hello!"}``.
         Streaming requests use ``{"input": "Hello!", "stream": true}``.
+        ``store=False`` is not supported and returns HTTP 400 before streaming.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline
@@ -499,6 +506,8 @@ class ResponsesHostServer:
 
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self._app)
+
+        install_request_validation(self)
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
@@ -813,28 +822,21 @@ class ResponsesHostServer:
     async def _response_branch_config(
         self, request: CreateResponse, context: ResponseContext
     ) -> RunnableConfig:
-        parent_id = request.get("previous_response_id")
-        if not isinstance(parent_id, str) or not parent_id:
-            raise ValueError("previous_response_id must be a nonempty string.")
-        provider = getattr(context, "_provider", None)
-        if provider is None:
-            raise RuntimeError("Response branching requires a response provider.")
-        parent = await provider.get_response(
-            parent_id, context=context.platform_context
-        )
-        # shortcut: Ineligible parents (not completed, paused, or owned by another
-        # user) are rejected after response.created, so clients receive
-        # response.failed with server_error rather than a 4xx before execution.
-        if parent.get("id") != parent_id or parent.get("status") != "completed":
-            raise ValueError("The previous response must be completed.")
-        reference = TaskStorageManager.from_stream(
-            ResponseEventStream(response_id=parent_id, response=parent)
-        ).checkpoint_ref
-        if reference is None:
-            raise ValueError("The previous response has no saved graph checkpoint.")
-        namespace = _scope_thread_id("", context)
-        if _thread_namespace(reference.thread_id) != namespace:
-            raise ValueError("The previous response belongs to a different user.")
+        parent_id = cast(str, request["previous_response_id"])
+        if context.is_recovery:
+            parent = await _load_parent_response(parent_id, context)
+            reference = _validate_branch_parent(parent_id, parent, context)
+        else:
+            provider = getattr(context, "_provider")
+            parent = await provider.get_response(
+                parent_id, context=context.platform_context
+            )
+            reference = cast(
+                CheckpointRef,
+                TaskStorageManager.from_stream(
+                    ResponseEventStream(response_id=parent_id, response=parent)
+                ).checkpoint_ref,
+            )
         return HostingRunnableConfig.create_from_checkpoint(
             reference, context
         ).runnable_config
@@ -1078,21 +1080,9 @@ class ResponsesHostServer:
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
             if self._is_response_branch(request, context) and checkpoint_ref is None:
-                state = await self._graph.aget_state(config)
-                if (
-                    HostingRunnableConfig(state.config).checkpoint_ref
-                    != HostingRunnableConfig(config).checkpoint_ref
-                    or (state.config.get("configurable") or {}).get("checkpoint_ns", "")
-                    != ""
-                    or state.created_at is None
-                ):
-                    raise ValueError(
-                        "The previous response's graph checkpoint is missing."
-                    )
                 # shortcut: Assume no unanswered tool calls; validate parent outputs
                 # in follow-up.
-                if state.next or state.tasks or state.interrupts:
-                    raise ValueError("Branching requires a finished parent graph.")
+                _validate_branch_state(await self._graph.aget_state(config), config)
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent

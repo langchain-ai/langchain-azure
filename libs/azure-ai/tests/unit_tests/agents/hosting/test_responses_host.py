@@ -1124,10 +1124,38 @@ def _context(
     return context
 
 
-def test_non_streaming_request_returns_completed_response() -> None:
-    server = ResponsesHostServer(make_echo_graph())
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_is_rejected_before_execution(
+    monkeypatch: pytest.MonkeyPatch, streaming: bool, prefix: str
+) -> None:
+    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    graph_stream = MagicMock(wraps=server.graph.astream)
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
     with _client(server) as client:
-        resp = client.post("/responses", json={"input": "hello", "model": "test"})
+        resp = client.post(
+            f"{prefix}/responses",
+            json={"input": "hello", "stream": streaming, "store": False},
+            headers={"x-request-id": "store-validation-request"},
+        )
+    assert resp.status_code == 400, resp.text
+    assert resp.headers["content-type"] == "application/json"
+    error = resp.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "store"
+    assert error["message"] == "store=False is not supported yet."
+    assert error["additionalInfo"]["request_id"] == resp.headers["x-request-id"]
+    graph_stream.assert_not_called()
+
+
+@pytest.mark.parametrize("store", [None, True])
+def test_non_streaming_request_returns_completed_response(store: bool | None) -> None:
+    server = ResponsesHostServer(make_echo_graph())
+    request: dict[str, Any] = {"input": "hello", "model": "test"}
+    if store is not None:
+        request["store"] = store
+    with _client(server) as client:
+        resp = client.post("/responses", json=request)
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["status"] == "completed"
@@ -1142,13 +1170,16 @@ def test_non_streaming_request_returns_completed_response() -> None:
     assert "Echo: hello" in text
 
 
-def test_streaming_request_emits_sse_lifecycle_events() -> None:
+@pytest.mark.parametrize("store", [None, True])
+def test_streaming_request_emits_sse_lifecycle_events(store: bool | None) -> None:
     server = ResponsesHostServer(make_streaming_graph())
+    request: dict[str, Any] = {
+        "input": "ignored", "stream": True, "model": "test"
+    }
+    if store is not None:
+        request["store"] = store
     with _client(server) as client:
-        resp = client.post(
-            "/responses",
-            json={"input": "ignored", "stream": True, "model": "test"},
-        )
+        resp = client.post("/responses", json=request)
     assert resp.status_code == 200, resp.text
     events = _parse_sse(resp.text)
     types = [t for t, _ in events]

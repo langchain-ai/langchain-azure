@@ -352,7 +352,6 @@ async def test_non_string_text_does_not_corrupt_valid_neighbor(
                 json={
                     "input": "hello",
                     "stream": mode == "sse",
-                    "store": False,
                 },
             )
         assert result.status_code == 200
@@ -398,7 +397,7 @@ def test_invalid_annotation_container_preserves_http_answer(
     graph.add_edge("answer", END)
     with TestClient(ResponsesHostServer(graph.compile()).app) as client:
         result = client.post(
-            "/responses", json={"input": "hello", "stream": streaming, "store": False}
+            "/responses", json={"input": "hello", "stream": streaming}
         )
     assert result.status_code == 200
     response = (
@@ -942,7 +941,6 @@ def test_model_client_citations_reach_host_response(
             json={
                 "input": "Find the source",
                 "stream": streaming,
-                "store": False,
             },
         )
     assert result.status_code == 200
