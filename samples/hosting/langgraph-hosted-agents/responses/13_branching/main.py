@@ -31,18 +31,17 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
+    ResponsesHostServer,
+)
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-from langchain_azure_ai.agents.hosting import (
-    FoundryCheckpointSaver,
-    ResponsesHostServer,
-)
-from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 
 load_dotenv()
 
@@ -81,20 +80,20 @@ async def main() -> None:
         if AgentConfig.from_env().is_hosted
         else MemorySaver()
     )
-    async with checkpointer:
-        graph = create_agent(
-            _build_chat_model(),
-            tools=[],
-            system_prompt=(
-                "You remember a single integer. Follow requests to set, add to, "
-                "or recall it using this conversation's history. "
-                "Reply with only the current integer."
-            ),
-            checkpointer=checkpointer,
-        )
-        await ResponsesHostServer(graph, enable_response_branching=True).run_async(
-            port=int(os.environ.get("PORT", "8088"))
-        )
+
+    graph = create_agent(
+        _build_chat_model(),
+        system_prompt=(
+            "You remember a single integer. Follow requests to set, add to, "
+            "or recall it using this conversation's history. "
+            "Reply with only the current integer."
+        ),
+        checkpointer=checkpointer,
+    )
+
+    await ResponsesHostServer(graph, enable_response_branching=True).run_async(
+        port=int(os.environ.get("PORT", "8088"))
+    )
 
 
 if __name__ == "__main__":
