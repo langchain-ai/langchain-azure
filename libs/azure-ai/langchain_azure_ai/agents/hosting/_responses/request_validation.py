@@ -74,30 +74,33 @@ def _thread_namespace(thread_id: str) -> str:
 
 
 class _RequestValidationError(Exception):
-    """An admission failure with an OpenAI-compatible error payload."""
+    """An admission failure with structured error details."""
 
     def __init__(
         self,
         message: str,
         param: str | None,
         *,
-        status_code: int = 400,
-        code: str = "invalid_request_error",
+        status_code: int,
+        code: str,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
-        self.error = {
-            "message": message,
-            "type": "server_error" if status_code >= 500 else "invalid_request_error",
-            "code": code,
-            "param": param,
-        }
+        self.param = param
+        self.code = code
 
 
 def _error_response(
     error: _RequestValidationError, headers: Mapping[str, str] | None = None
 ) -> JSONResponse:
-    details: dict[str, Any] = dict(error.error)
+    is_server_error = error.status_code >= 500
+
+    details: dict[str, Any] = {
+        "message": str(error),
+        "type": "server_error" if is_server_error else "invalid_request_error",
+        "code": error.code,
+        "param": error.param,
+    }
     if request_id := _request_id.get():
         details["additionalInfo"] = {"request_id": request_id}
     return JSONResponse(
@@ -105,9 +108,7 @@ def _error_response(
         status_code=error.status_code,
         headers={
             **(headers or {}),
-            "x-platform-error-source": (
-                "platform" if error.status_code >= 500 else "user"
-            ),
+            "x-platform-error-source": "platform" if is_server_error else "user",
         },
     )
 
@@ -147,7 +148,10 @@ def _validate_branch_parent(
     """Validate a branch parent and return its checked checkpoint reference."""
     if parent.get("status") != "completed":
         raise _RequestValidationError(
-            "The previous response must be completed.", "previous_response_id"
+            "The previous response must be completed.",
+            "previous_response_id",
+            status_code=400,
+            code="invalid_request_error",
         )
 
     reference = TaskStorageManager.from_stream(
@@ -157,6 +161,8 @@ def _validate_branch_parent(
         raise _RequestValidationError(
             "The previous response has no saved graph checkpoint.",
             "previous_response_id",
+            status_code=400,
+            code="invalid_request_error",
         )
 
     if _thread_namespace(reference.thread_id) != _scope_thread_id("", context):
@@ -180,10 +186,15 @@ def _validate_branch_state(state: StateSnapshot, config: RunnableConfig) -> None
         raise _RequestValidationError(
             "The previous response's graph checkpoint is missing.",
             "previous_response_id",
+            status_code=400,
+            code="invalid_request_error",
         )
     if state.next or state.tasks or state.interrupts:
         raise _RequestValidationError(
-            "Branching requires a finished parent graph.", "previous_response_id"
+            "Branching requires a finished parent graph.",
+            "previous_response_id",
+            status_code=400,
+            code="invalid_request_error",
         )
 
 
@@ -260,7 +271,10 @@ def install_request_validation(server: ResponsesHostServer) -> None:
                 if isinstance(payload, dict) and payload.get("store") is False:
                     return _error_response(
                         _RequestValidationError(
-                            "store=False is not supported yet.", "store"
+                            "store=False is not supported yet.",
+                            "store",
+                            status_code=400,
+                            code="invalid_request_error",
                         )
                     )
                 return await create_response(request)
