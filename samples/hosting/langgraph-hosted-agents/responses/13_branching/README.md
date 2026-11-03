@@ -72,9 +72,10 @@ keep graph checkpoints in Foundry State Store.
   create its own host; branching does not support an external `app`.
 - Use `previous_response_id` alone for linkage in this sample. Do not send
   `conversation` in the same request.
-- This sample demonstrates foreground branching, not crash recovery of
-  in-flight work. See the [resilient sample](../10_resilient/README.md) for
-  background recovery.
+- This sample demonstrates foreground branching. Recovery is also supported
+  for forked requests when resilient background execution and persistent
+  storage are configured. See the [resilient sample](../10_resilient/README.md)
+  for background recovery setup.
 
 ## Running the Agent Host
 
