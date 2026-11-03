@@ -8,6 +8,14 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 > **Note:** This guide covers application hosting and runtime configuration. Moving existing LangGraph threads and checkpoints to another storage backend requires a separate data migration.
 
+## Choose the scope of the change
+
+Before changing the application, decide whether you need a read-only migration plan, a local hosting check, or a deployed agent. A plan does not require provisioning resources; local hosting does not require deployment. Follow only the stages needed for the agreed outcome.
+
+Preserve the existing graph, prompts, tools, model and search providers, and checkpointer unless a change is required and approved. Introduce the hosting adapter first, then verify the same application behavior before changing providers or storage.
+
+Hosting the graph through Responses does not automatically migrate LangGraph Server's thread and state APIs, custom HTTP routes, or Studio's graph and file browsing. Identify callers that depend on those interfaces and plan their adaptation separately. Distinguish Responses history, graph checkpoints, checkpointed virtual files, and the hosted filesystem when deciding what must persist; see [persistence and recovery](langgraph-to-foundry/05-persistence-and-recovery.md).
+
 ## Why host your LangGraph application on Foundry?
 
 Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform to help enterprises deliver production-quality AI agents.
