@@ -18,15 +18,29 @@ See [main.py](main.py) for the full implementation.
 ### Branching, rewind, and regeneration
 
 The [client](client.py) asks the agent to remember 10, creates branches B
-and C from A, then returns to B after C. Requests are sent in A-to-F order:
+and C from A, then returns to B after C.
+
+#### Call sequence
+
+Requests are sent in this order: `A -> B -> C -> D -> E -> F`.
+
+#### Branch relationships
+
+Nodes appear from top to bottom in call order. Connecting arrows show
+parent-child relationships, not the next call:
 
 ```text
-A: remember 10                    -> 10
-|-- B: add 1                      -> 11
-|   `-- D: recall                 -> 11  (rewind to B after C)
-|       `-- E: add 1              -> 12  (continue D)
-|-- C: add 2                      -> 12  (branch)
-`-- F: add 1                      -> 11  (regenerate B)
+A: remember 10 -> 10
+|
++----------------------> B: add 1 -> 11
+|                        |
++--> C: add 2 -> 12      |
+|                        |
+|                        `--> D: recall -> 11
+|                             |
+|                             `--> E: add 1 -> 12
+|
+`--> F: add 1 -> 11
 ```
 
 - **Branching:** B and C both select A, so adding 2 produces 12, not 13.

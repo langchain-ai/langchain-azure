@@ -36,8 +36,9 @@ platform. Creating and managing that resource is outside this API path's scope.
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID. Lookup and parent selection follow ordinary continuation.
 - `previous_response_id` and `conversation` are mutually exclusive.
-- Request `store` controls response retention and defaults to `True`. Enabling
-  branching must not silently override `store=False`. See
+- Request `store` controls response retention and defaults to `True`.
+  `store=False` is currently unsupported with branching enabled and must not be
+  silently treated as `store=True`. See
   [Request store behavior](#request-store-behavior) for response retention.
 - Tool outputs and approval decisions are valid continuation inputs. A graph
   pause alone must not cause an otherwise valid protocol request to be rejected.
@@ -235,13 +236,18 @@ branching enabled or disabled; `store=provider` is an optional override.
 ## Request `store` behavior
 
 Request `store` is a boolean and defaults to `True`. It controls retention of the
-current response, independently of the server's provider configuration. Enabling
-branching must honor this choice rather than force response retention.
+current response, independently of the server's provider configuration.
 
-A response created with `store=False` is not retained and cannot later be selected
-as a response-ID parent. A branch requires a stored, accessible parent, regardless
-of whether the child itself uses `store=True` or `store=False`. The child's
-retention choice must not delete or modify its stored parent.
+**Current scope:** With `enable_response_branching=True`, request `store=False`
+is not supported. Both root and child requests must omit `store` or set it to
+`True`. Support for `store=False` is deferred; it must not be silently treated as
+`store=True`.
+
+For future `store=False` support, an unretained response cannot later be selected
+as a response-ID parent. A branch still requires a stored, accessible parent,
+regardless of the child's retention choice. The child must not be retained when
+it uses `store=False`, and its retention choice must not delete or modify its
+stored parent. These are future compatibility requirements, not current support.
 
 Conversation-state isolation,
 temporary checkpoint cleanup, and full-input replay responsibilities also belong
@@ -260,8 +266,8 @@ Checkpoint-based branching additionally needs graph checkpoints:
 
 The server uses its default response provider unless `store=provider` overrides
 it. The client's `store` is a boolean that defaults to `True` and controls
-retention of that response. Having a provider does not force every response to
-be retained.
+retention of that response. Provider configuration does not imply support for
+`store=False` in the current branching scope.
 
 Response retention does not replace the graph's checkpointer. The application
 owns the graph saver's initialization, lifecycle, and general retention policy.
@@ -494,6 +500,7 @@ behavior are distinguished below; neither indicates completed support.
 | Topic                              | Target contract                                                                                                                                            | Implementation status                                                                                                                                        |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Response storage provider          | Accept the host's default provider or an explicit `store=provider` override.                                                                                 | Automatic provider selection already exists and must remain available when branching is enabled.                                                            |
+| Request `store=False`              | Preserve non-retention semantics when support is added.                                                                                                     | **Not supported in the current branching scope:** Omit request `store` or use `store=True`; support is deferred.                                               |
 | Request-scoped `instructions`      | Do not inherit the parent's top-level instructions through its checkpoint.                                                                                 | **Verification required:** Check checkpoint restoration against this rule.                                                                                   |
 
 **Future scope:** Branching from paused parent graphs, including isolation of
@@ -507,7 +514,7 @@ Before claiming compatibility, cover these observable scenarios:
   explicit provider override. Omitting `store` must not fail initialization;
   boolean constructor values are not response providers.
 - B and C can select A independently, including when a newer sibling exists.
-  A child with `store=False` does not delete or modify its stored parent.
+  These requests use `store=True` (the default); `store=False` support is deferred.
 - In-progress, failed, and cancelled parents receive a 4xx error under the common
   error contract before graph execution, without waiting or falling back to
   another response or intermediate progress.
