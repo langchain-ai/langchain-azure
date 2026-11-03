@@ -63,7 +63,7 @@ keep graph checkpoints in Foundry State Store.
 ### Requirements and limits
 
 - Branching is opt-in and disabled by default.
-- The parent response must be stored, completed, and have a readable saved
+- The parent response must be completed and have a readable saved
   checkpoint. Its graph must also have finished: branching from a paused
   graph or a pending human approval is not supported.
 - The checkpointer must preserve history and implement asynchronous
@@ -126,7 +126,6 @@ python client.py
 
 The client sends five non-streaming requests and prints assistant reply. 
 The expected numbers are `10`, `11`, `12`, `10`, `11`.
-All requests set `store: true` so their responses remain selectable.
 
 For a different host address or port:
 
@@ -141,7 +140,7 @@ Create the shared parent A:
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Remember the number 10.","store":true}'
+  -d '{"input":"Remember the number 10."}'
 ```
 
 Replace `<A_ID>` below with the returned `id`. Both requests select A,
@@ -150,11 +149,11 @@ not each other's response IDs:
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>"}'
 
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Add 2 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"Add 2 to the remembered number.","previous_response_id":"<A_ID>"}'
 ```
 
 Rewind to A and recall 10, then regenerate B by resending its original
@@ -163,11 +162,11 @@ input with the same parent A:
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"What number do you remember?","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"What number do you remember?","previous_response_id":"<A_ID>"}'
 
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>"}'
 ```
 
 ### Streaming
