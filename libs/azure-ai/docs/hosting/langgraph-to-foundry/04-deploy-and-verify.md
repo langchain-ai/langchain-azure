@@ -61,4 +61,4 @@ Check the final response status, expected tool calls, and application outputs. F
 
 Choose [persistence and recovery](05-persistence-and-recovery.md) when your application needs them. Use [diagnostics](06-diagnostics.md) to inspect requests and [evaluation](07-evaluation.md) to compare migration results.
 
-Previous: [Prepare the agent for deployment](03-prepare-deployment.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Enable persistence and recovery](05-persistence-and-recovery.md)
+Previous: [Prepare the agent for deployment](03-prepare-deployment.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Enable persistence and recovery](05-persistence-and-recovery.md)

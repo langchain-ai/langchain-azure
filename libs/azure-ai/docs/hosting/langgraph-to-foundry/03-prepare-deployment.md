@@ -169,7 +169,7 @@ The hosted agent identity also needs permission to read these connection credent
 
 The hosted runtime uses deployment configuration, not your local `.env`. Pass the model deployment name and connection name to the agent; the tool code from [Configure project connections](#configure-project-connections-for-third-party-endpoints) retrieves the secret at runtime. Foundry supplies the project endpoint automatically.
 
-The model settings below apply to the [Foundry-model path](../migrate-langgraph-to-foundry.md#model-choice). If you keep another provider, use the configuration required by that model client and retrieve its credentials through a project connection.
+The model settings below apply to the [Foundry-model path](../host-langgraph-on-foundry.md#model-choice). If you keep another provider, use the configuration required by that model client and retrieve its credentials through a project connection.
 
 This example uses the following values:
 
@@ -206,4 +206,4 @@ Restart the local host with the command from [Host and test the agent locally](0
 
 ## Next steps
 
-Previous: [Host and test the agent locally](02-run-locally.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Deploy and verify the agent](04-deploy-and-verify.md)
+Previous: [Host and test the agent locally](02-run-locally.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Deploy and verify the agent](04-deploy-and-verify.md)

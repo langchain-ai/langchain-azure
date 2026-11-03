@@ -129,4 +129,4 @@ The [recovery guide](https://learn.microsoft.com/azure/foundry/agents/how-to/rec
 
 ## Next steps
 
-Previous: [Deploy and verify the agent](04-deploy-and-verify.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Inspect logs and traces](06-diagnostics.md)
+Previous: [Deploy and verify the agent](04-deploy-and-verify.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Inspect logs and traces](06-diagnostics.md)

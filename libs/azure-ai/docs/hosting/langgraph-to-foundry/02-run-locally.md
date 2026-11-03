@@ -41,7 +41,7 @@ Make your application's configuration and credentials available before SDK and g
 
 If you keep the original Deep Research model, configure `ANTHROPIC_API_KEY` in your local `.env`.
 
-The following configuration assumes that you have completed the [Foundry model adaptation](../migrate-langgraph-to-foundry.md#model-choice). Use these same environment variable names in your model initialization:
+The following configuration assumes that you have completed the [Foundry model adaptation](../host-langgraph-on-foundry.md#model-choice). Use these same environment variable names in your model initialization:
 
 ```dotenv
 FOUNDRY_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
@@ -93,4 +93,4 @@ Verify that the response has `status: completed`, no error, and the expected sea
 
 ## Next steps
 
-Previous: [Prepare Foundry resources](01-prepare-resources.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Prepare the agent for deployment](03-prepare-deployment.md)
+Previous: [Prepare Foundry resources](01-prepare-resources.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Prepare the agent for deployment](03-prepare-deployment.md)

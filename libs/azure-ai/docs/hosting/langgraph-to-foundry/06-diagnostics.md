@@ -93,4 +93,4 @@ You can also find these traces in the Azure portal: open the Log Analytics works
 
 ## Next steps
 
-Previous: [Enable persistence and recovery](05-persistence-and-recovery.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Evaluate the migrated agent](07-evaluation.md)
+Previous: [Enable persistence and recovery](05-persistence-and-recovery.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Evaluate the migrated agent](07-evaluation.md)

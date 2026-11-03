@@ -41,4 +41,4 @@ Save both runs with the dataset version, evaluation settings, agent version, and
 
 ## Next steps
 
-Previous: [Inspect logs and traces](06-diagnostics.md) · [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Migration acceptance checklist](../migrate-langgraph-to-foundry.md#migration-acceptance-checklist)
+Previous: [Inspect logs and traces](06-diagnostics.md) · [Migration overview](../host-langgraph-on-foundry.md) · Next: [Migration acceptance checklist](../host-langgraph-on-foundry.md#migration-acceptance-checklist)

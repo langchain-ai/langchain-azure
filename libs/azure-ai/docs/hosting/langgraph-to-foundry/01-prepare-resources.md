@@ -1,10 +1,10 @@
 # Prepare Foundry resources
 
-Before hosting your existing LangGraph application on Foundry, prepare the resources it needs. This first step in the [migration guide](../migrate-langgraph-to-foundry.md) covers a Foundry project, model access, and search access. The Deep Research example uses a Foundry model deployment and Tavily search. You can reuse existing resources where possible.
+Before hosting your existing LangGraph application on Foundry, prepare the resources it needs. This first step in the [migration guide](../host-langgraph-on-foundry.md) covers a Foundry project, model access, and search access. The Deep Research example uses a Foundry model deployment and Tavily search. You can reuse existing resources where possible.
 
 ## Before you start
 
-Review the [common prerequisites](../migrate-langgraph-to-foundry.md#before-you-start). Have access to the application source code and your Azure subscription.
+Review the [common prerequisites](../host-langgraph-on-foundry.md#before-you-start). Have access to the application source code and your Azure subscription.
 
 ## Prepare resources
 
@@ -34,4 +34,4 @@ Before continuing, have the project endpoint, subscription ID, project ARM ID, p
 
 ## Next steps
 
-Previous: [Migration overview](../migrate-langgraph-to-foundry.md) · Next: [Host and test the agent locally](02-run-locally.md)
+Previous: [Migration overview](../host-langgraph-on-foundry.md) · Next: [Host and test the agent locally](02-run-locally.md)
