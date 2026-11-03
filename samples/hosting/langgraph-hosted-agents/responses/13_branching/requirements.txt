@@ -1,4 +1,4 @@
-./wheels/langchain_azure_ai-1.2.12-py3-none-any.whl[hosting,opentelemetry]
+langchain-azure-ai[hosting,opentelemetry]
 langchain
 langchain-openai
 httpx

@@ -1,4 +1,4 @@
-"""Create two response branches and continue each one independently.
+"""Demonstrate branching, rewind, and regeneration by remembering a number.
 
 Run ``python client.py`` after starting ``python main.py``.
 """
@@ -24,6 +24,8 @@ def _create_response(
 
     if token_provider:
         headers = {"Authorization": f"Bearer {token_provider()}"}
+    else:
+        headers = {}
 
     response = client.post("responses", json=body, headers=headers)
 
@@ -45,7 +47,7 @@ def _create_response(
 
 
 def main() -> None:
-    """Send the five-turn branching example to a running Responses host."""
+    """Branch, rewind, and regenerate from the same remembered number."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8088")
     parser.add_argument(
@@ -66,44 +68,45 @@ def main() -> None:
         timeout=120,
     )
 
-    print("\nA: shared starting point")
+    print("\nA: remember 10 -> 10")
     parent_id = _create_response(
         client,
-        "Remember our shared trip constraints: one day in Seattle, no car, "
-        "and vegetarian food. Acknowledge them in one sentence.",
+        "Remember the number 10.",
         None,
         token_provider,
     )
 
-    print("\nB: museum branch")
-    museum_id = _create_response(
+    add_one = "Add 1 to the remembered number."
+
+    print("\nB: branch from A, add 1 -> 11")
+    _create_response(
         client,
-        "For this version of the trip, focus on museums. Suggest an itinerary.",
+        add_one,
         parent_id,
         token_provider,
     )
 
-    print("\nC: outdoor branch")
-    outdoor_id = _create_response(
+    print("\nC: branch from A, add 2 -> 12")
+    _create_response(
         client,
-        "For this version of the trip, focus on parks and the waterfront. "
-        "Suggest an itinerary.",
+        "Add 2 to the remembered number.",
         parent_id,
         token_provider,
     )
 
-    print("\nD: continue B")
+    print("\nD: rewind to A, recall -> 10")
     _create_response(
         client,
-        "Summarize this version's activity preference, transport, and food.",
-        museum_id,
+        "What number do you remember?",
+        parent_id,
         token_provider,
     )
-    print("\nE: continue C")
+
+    print("\nE: regenerate B, same parent and input -> 11")
     _create_response(
         client,
-        "Summarize this version's activity preference, transport, and food.",
-        outdoor_id,
+        add_one,
+        parent_id,
         token_provider,
     )
 

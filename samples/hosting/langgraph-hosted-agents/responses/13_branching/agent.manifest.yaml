@@ -1,8 +1,8 @@
 name: langchain-azure-branching-responses
 description: >
-  A checkpointed LangGraph travel-planning agent hosted by Foundry over
-  the Responses protocol. Create independent branches from completed
-  responses with previous_response_id and continue each version separately.
+  A checkpointed number-memory agent hosted by Foundry over the Responses
+  protocol. Demonstrate branching, rewind, and regeneration by selecting
+  completed responses with previous_response_id.
 metadata:
   tags:
     - LangChain

@@ -2,8 +2,8 @@
 
 A checkpointed `create_agent` graph hosted as the **Responses protocol**
 with `enable_response_branching=True`. Clients use `previous_response_id`
-to create independent continuations from a completed response, rather
-than continuing from the latest checkpoint in the thread.
+to demonstrate branching, rewind, and regeneration with a remembered
+number instead of continuing from the latest checkpoint in the thread.
 
 ## How It Works
 
@@ -15,27 +15,29 @@ from `azure.ai.projects.AIProjectClient`.
 
 See [main.py](main.py) for the full implementation.
 
-### Branching graph
+### Branching, rewind, and regeneration
 
-The [client](client.py) creates a shared starting point, forks two versions
-of a Seattle day trip, and continues each version independently:
+The [client](client.py) asks the agent to remember 10, then selects that
+same starting point for four more requests:
 
 ```text
-A: Seattle, no car, vegetarian food
-|-- B: museums
-|   `-- D: summarize the museum version
-`-- C: parks and waterfront
-    `-- E: summarize the outdoor version
+A: remember 10                    -> 10
+|-- B: add 1                      -> 11
+|-- C: add 2                      -> 12  (branch)
+|-- D: recall                     -> 10  (rewind to A)
+`-- E: add 1                      -> 11  (regenerate B)
 ```
 
-Both B and C set `previous_response_id` to A's response ID. D selects B,
-even though C was created more recently; E selects C, even though D was
-created more recently. Both branches retain A's shared constraints, but
-neither inherits the other branch's activity preference.
+- **Branching:** B and C both select A, so adding 2 produces 12, not 13.
+- **Rewind:** D selects A after B and C have changed their own numbers.
+  It recalls 10 without deleting or modifying the existing branches.
+- **Regeneration:** E repeats B's input with the same parent A, not B.
+  It returns a new response ID. The answer is intentionally still 11;
+  regeneration does not guarantee different output text.
 
-Every request returns a new response ID. Keep those IDs on the client to
-select which version to continue. Sending another request with the same
-parent ID creates another sibling; it does not overwrite that parent.
+All three operations use `previous_response_id`; there are no separate
+rewind or regenerate endpoints. Every request creates a new response.
+Keep its ID to select that version later. Reusing A never overwrites A.
 
 ### Responses hosting
 
@@ -76,15 +78,10 @@ keep graph checkpoints in Foundry State Store.
 
 ## Running the Agent Host
 
-This sample requires a checkout of this repository, `uv`, and Python 3.13
-for the hosted runtime. The published `langchain-azure-ai==1.2.12` does not
-include `enable_response_branching`; build the wheel from this checkout
-instead. From the repository root:
+This sample uses `uv` and Python 3.13 for the hosted runtime. From this
+sample's directory:
 
 ```bash
-cd libs/azure-ai
-uv build --wheel --out-dir ../../samples/hosting/langgraph-hosted-agents/responses/13_branching/wheels
-cd ../../samples/hosting/langgraph-hosted-agents/responses/13_branching
 uv venv --python 3.13
 ```
 
@@ -119,7 +116,7 @@ requests. Add `--port 8090` if port 8088 is already in use.
 
 ## Interacting with the agent
 
-### Create and continue two branches
+### Run the number example
 
 In another terminal, with the same environment activated, run:
 
@@ -128,8 +125,7 @@ python client.py
 ```
 
 The client sends five non-streaming requests and prints each response ID
-and assistant reply. D should summarize the museum version, while E
-should summarize the outdoor version. Exact wording depends on the model.
+and assistant reply. The expected numbers are `10`, `11`, `12`, `10`, `11`.
 All requests set `store: true` so their responses remain selectable.
 
 For a different host address or port:
@@ -145,7 +141,7 @@ Create the shared parent A:
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Plan a day in Seattle with no car and vegetarian food.","store":true}'
+  -d '{"input":"Remember the number 10.","store":true}'
 ```
 
 Replace `<A_ID>` below with the returned `id`. Both requests select A,
@@ -154,15 +150,25 @@ not each other's response IDs:
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Focus this version on museums.","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
 
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input":"Focus this version on parks and the waterfront.","previous_response_id":"<A_ID>","store":true}'
+  -d '{"input":"Add 2 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
 ```
 
-To continue either branch, use that branch's returned `id` as the next
-`previous_response_id`.
+Rewind to A and recall 10, then regenerate B by resending its original
+input with the same parent A:
+
+```bash
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input":"What number do you remember?","previous_response_id":"<A_ID>","store":true}'
+
+curl -X POST http://127.0.0.1:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Add 1 to the remembered number.","previous_response_id":"<A_ID>","store":true}'
+```
 
 ### Streaming
 
@@ -172,7 +178,8 @@ events, including `response.output_text.delta` and `response.completed`.
 
 ## Deploying the Agent to Foundry
 
-Complete the wheel build and azd environment setup above, then deploy:
+Complete the dependency installation and azd environment setup above,
+then deploy:
 
 ```bash
 azd deploy
@@ -181,9 +188,9 @@ azd ai agent show
 
 The [azure.yaml](azure.yaml) uses direct-code deployment with Python 3.13
 and remote dependency resolution; Docker and a container registry are not
-required. The SDK wheel in `wheels/` is included in the deployment package,
-while [.agentignore](.agentignore) excludes local credentials, virtual
-environments, and azd state. The agent declares Responses protocol `2.0.0`
+required. Dependencies are installed from [requirements.txt](requirements.txt)
+during remote build. [.agentignore](.agentignore) excludes local credentials,
+virtual environments, and azd state. The agent declares Responses protocol `2.0.0`
 for deployment routing and Foundry state-store request context. No
 `azd provision` is needed when reusing an existing project and model.
 

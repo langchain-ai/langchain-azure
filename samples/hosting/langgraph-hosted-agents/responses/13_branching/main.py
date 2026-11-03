@@ -1,4 +1,4 @@
-"""Sample 13 - Responses API with completed-parent branching.
+"""Sample 13 - Responses API branching, rewind, and regeneration.
 
 Hosts a checkpointed ``create_agent`` graph with response branching enabled.
 Clients select a branch point with ``previous_response_id`` instead of
@@ -86,8 +86,9 @@ async def main() -> None:
             _build_chat_model(),
             tools=[],
             system_prompt=(
-                "You are a concise travel planner. Use the preferences in this "
-                "conversation to plan the trip. Keep replies to three sentences."
+                "You remember a single integer. Follow requests to set, add to, "
+                "or recall it using this conversation's history. "
+                "Reply with only the current integer."
             ),
             checkpointer=checkpointer,
         )

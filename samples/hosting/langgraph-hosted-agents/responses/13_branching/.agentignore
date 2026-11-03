@@ -5,5 +5,4 @@
 .env.*
 __pycache__/
 *.pyc
-!wheels/
-!wheels/*.whl
+wheels/

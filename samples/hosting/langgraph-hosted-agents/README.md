@@ -40,7 +40,7 @@ for the concepts and protocol comparison.
 | Add local, remote MCP, or managed Toolbox tools | [Tools](responses/02_tools/README.md), [MCP](responses/03_mcp/README.md), or [Foundry Toolbox](responses/04_foundry_toolbox/README.md) |
 | Add tracing or human approval | [Observability](responses/07_observability/README.md) or [HITL](responses/08_hitl/README.md) |
 | Recover background work after a restart | [Responses Resilient](responses/10_resilient/README.md) or [Invocations Resilient](invocations/04_resilient/README.md) |
-| Fork a conversation from a completed response | [Responses Branching](responses/13_branching/README.md) |
+| Branch, rewind, or regenerate from a completed response | [Responses Branching](responses/13_branching/README.md) |
 
 After choosing a sample, follow [local setup](#running-the-agent-host-locally),
 use its README for requests, then follow [deployment](#deploying-the-agent-to-foundry).
@@ -63,7 +63,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 10 | [Resilient](responses/10_resilient/) | Resilient background Responses with replayable SSE, crash recovery, durable checkpoints, HITL approval, cancellation, and optional active-turn steering. Includes a Textual recovery client. |
 | 11 | [LangChain middleware](responses/11_middleware/) | Native `HumanInTheLoopMiddleware` approve/edit/reject plus the official `@before_model` message-limit function. |
 | 12 | [Deep Agents](responses/12_deep_agents/) | Official Deep Research workflow with planning, research subagents, Foundry web search, checkpoint-backed virtual files, and Azure Blob Storage integration for downloadable reports. |
-| 13 | [Branching](responses/13_branching/) | Fork independent continuations from a completed response with `previous_response_id`, then continue each branch from its own checkpoint. |
+| 13 | [Branching](responses/13_branching/) | Remember a number to demonstrate branching, rewind, and regeneration with `previous_response_id`. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the

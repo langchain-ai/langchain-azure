@@ -11,7 +11,7 @@ services:
     kind: hosted
     name: langchain-azure-branching-responses
     description: >
-      A checkpointed travel-planning agent with independent response branches.
+      A number-memory agent demonstrating branching, rewind, and regeneration.
     codeConfiguration:
       runtime: python_3_13
       entryPoint: main.py
