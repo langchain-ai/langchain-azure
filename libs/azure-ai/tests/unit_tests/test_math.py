@@ -55,6 +55,23 @@ def test_score_threshold_zero_excludes_negative_similarities() -> None:
     assert scores == pytest.approx([0.3])
 
 
+def test_exact_zero_similarity_match_is_not_dropped() -> None:
+    """A real similarity of exactly 0.0 must still be returned.
+
+    `X` and `Y` here are orthogonal, so the only candidate has a genuine
+    cosine similarity of 0.0 -- which clears the default threshold of -1.0.
+    Using 0 as a sentinel for "filtered out by the threshold" must not be
+    confused with a legitimate score that happens to equal 0.
+    """
+    x = [[1.0, 0.0]]
+    y = [[0.0, 1.0]]
+
+    indices, scores = cosine_similarity_top_k(x, y)
+
+    assert indices == [(0, 0)]
+    assert scores == pytest.approx([0.0])
+
+
 def test_top_k_still_returns_matches_that_clear_the_threshold() -> None:
     """The ordinary path -- some rows pass the threshold -- is unaffected."""
     x = [[1.0, 0.0]]
