@@ -152,6 +152,7 @@ def test_branch_validation_precedes_stream(
     stream: bool,
 ) -> None:
     if failure == "paused":
+
         def pause(state: MessagesState) -> dict[str, Any]:
             interrupt("Approval needed")
             return {}

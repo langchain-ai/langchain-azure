@@ -396,9 +396,7 @@ def test_invalid_annotation_container_preserves_http_answer(
     graph.add_edge(START, "answer")
     graph.add_edge("answer", END)
     with TestClient(ResponsesHostServer(graph.compile()).app) as client:
-        result = client.post(
-            "/responses", json={"input": "hello", "stream": streaming}
-        )
+        result = client.post("/responses", json={"input": "hello", "stream": streaming})
     assert result.status_code == 200
     response = (
         next(

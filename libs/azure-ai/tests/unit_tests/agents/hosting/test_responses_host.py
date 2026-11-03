@@ -1173,9 +1173,7 @@ def test_non_streaming_request_returns_completed_response(store: bool | None) ->
 @pytest.mark.parametrize("store", [None, True])
 def test_streaming_request_emits_sse_lifecycle_events(store: bool | None) -> None:
     server = ResponsesHostServer(make_streaming_graph())
-    request: dict[str, Any] = {
-        "input": "ignored", "stream": True, "model": "test"
-    }
+    request: dict[str, Any] = {"input": "ignored", "stream": True, "model": "test"}
     if store is not None:
         request["store"] = store
     with _client(server) as client:
