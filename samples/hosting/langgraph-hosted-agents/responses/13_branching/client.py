@@ -42,7 +42,7 @@ def _create_response(
         for part in item["content"]
         if part["type"] == "output_text"
     )
-    print(f"{response_id}\n{text}")
+    print(f"Server response: {text}")
     return response_id
 
 
