@@ -20,26 +20,14 @@ text. Names are simple ASCII Markdown filenames, not paths. Blob authorization
 and network failures return handled tool errors: the named file remains editable,
 but no download link is returned. Unexpected programming errors still surface.
 
-## Checkpoint restore performance
-
-The pinned Deep Agents version uses `DeltaChannel` for messages and files. With
-`FoundryCheckpointSaver` backed by Foundry State Store, checkpoint restoration can
-be **significantly slower** as conversation history grows. Restoring state may
-require reading many earlier checkpoints, and State Store currently has no
-batch-get API.
-
-For now, use one of these workarounds:
-
-- Pass a custom `state_schema` to `create_deep_agent` that replaces the
-  delta-backed `messages` and `files` channels with ordinary reducer channels,
-  preserving their update and deletion semantics. The files override currently
-  uses a private Deep Agents reducer; see [Deep Agents #7376](https://github.com/langchain-ai/deepagents/issues/7376).
-- Use a compatible Deep Agents version without `DeltaChannel`.
-
-Full-value checkpoints write more data. If you change this sample's state schema
-or Deep Agents version, test restoring your existing checkpoints before resuming
-those conversations. `CosmosDBSaver` bulk-loads delta history and is not affected
-by this State Store limitation.
+> [!NOTE]
+> Deep Agents' `DeltaChannel` can make restoration **significantly slower** with
+> Foundry State Store, which has no batch-get API. [agent.py](agent.py) stores full
+> messages/files to avoid delta-history reads, at the cost of larger checkpoints.
+> This workaround uses a private reducer in the pinned Deep Agents version; see
+> [Deep Agents #7376](https://github.com/langchain-ai/deepagents/issues/7376).
+> `CosmosDBSaver` bulk-loads delta history and does not need this workaround.
+> If you change the schema or Deep Agents version, test restoring existing checkpoints.
 
 ## Setup and run
 
