@@ -30,14 +30,13 @@ Then call the local server::
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -75,7 +74,6 @@ from langchain_azure_ai.agents.hosting import (
 
 from ._checkpoint._checkpoint_reuse import (
     _checkpoint_reads,
-    _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
 from ._converters import (
@@ -97,6 +95,17 @@ from ._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
+)
+from ._responses.request_preparation import (
+    _load_parent_response,
+    _request_selection,
+    _scope_thread_id,
+    _validate_branch_parent,
+    _validate_branch_state,
+    install_request_validation,
+)
+from ._responses.request_preparation import (
+    _thread_namespace as _thread_namespace,
 )
 from ._storage import state_store_client_scope
 from ._storage.state_store_factory import (
@@ -143,9 +152,6 @@ ResolvedConversationManagementMode = Literal[
 
 METADATA_STEERABLE_CONVERSATION = "foundry.agent.steerable_conversation"
 _RECOVERY_STREAM_LOCK_WORKAROUND = "_langchain_azure_recovery_stream_lock"
-_USER_NAMESPACE_PREFIX = "user-"
-_USER_NAMESPACE_SEPARATOR = ":"
-_USER_NAMESPACE_HASH = hashlib.sha256
 
 
 def _stale_recovery_stream_lock_path(exc: RuntimeError) -> Optional[Path]:
@@ -248,7 +254,8 @@ def _validate_response_branching_checkpointer(checkpointer: object) -> None:
 
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
-    return getattr(graph, "checkpointer", None) is not None
+    checkpointer = getattr(graph, "checkpointer", None)
+    return checkpointer is not None and checkpointer is not False
 
 
 def _is_in_memory_checkpointer(checkpointer: Any) -> bool:
@@ -267,33 +274,6 @@ def _message_count(
     skip_call_ids: frozenset[str] = frozenset(),
 ) -> int:
     return len(build_messages_input(items, skip_call_ids=skip_call_ids)["messages"])
-
-
-def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
-    """Namespace a LangGraph thread by the platform-provided user key."""
-    platform_context = getattr(context, "platform_context", None)
-    user_id_key = getattr(platform_context, "user_id_key", None)
-    if not isinstance(user_id_key, str) or not user_id_key:
-        return thread_id
-    user_namespace = _USER_NAMESPACE_HASH(user_id_key.encode()).hexdigest()
-    return (
-        f"{_USER_NAMESPACE_PREFIX}{user_namespace}"
-        f"{_USER_NAMESPACE_SEPARATOR}{thread_id}"
-    )
-
-
-def _thread_namespace(thread_id: str) -> str:
-    """Return a hosted thread's user namespace, or an empty string."""
-    prefix, separator, _ = thread_id.partition(_USER_NAMESPACE_SEPARATOR)
-    digest = prefix.removeprefix(_USER_NAMESPACE_PREFIX)
-    if (
-        separator
-        and prefix.startswith(_USER_NAMESPACE_PREFIX)
-        and len(digest) == _USER_NAMESPACE_HASH().digest_size * 2
-        and all(char in "0123456789abcdef" for char in digest)
-    ):
-        return prefix + separator
-    return ""
 
 
 def _response_field(response: Any, name: str) -> str | None:
@@ -356,6 +336,9 @@ class ResponsesHostServer:
 
         A minimal non-streaming request is ``{"input": "Hello!"}``.
         Streaming requests use ``{"input": "Hello!", "stream": true}``.
+        Foreground requests may set ``store=False`` when the graph has no
+        checkpointer. With a checkpointer, the host returns HTTP 400 before
+        streaming or graph execution.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline
@@ -499,6 +482,8 @@ class ResponsesHostServer:
 
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self._app)
+
+        install_request_validation(self)
 
         # Wire the create handler.
         self._app.response_handler(self._handle_create_async_gen)
@@ -813,28 +798,19 @@ class ResponsesHostServer:
     async def _response_branch_config(
         self, request: CreateResponse, context: ResponseContext
     ) -> RunnableConfig:
-        parent_id = request.get("previous_response_id")
-        if not isinstance(parent_id, str) or not parent_id:
-            raise ValueError("previous_response_id must be a nonempty string.")
-        provider = getattr(context, "_provider", None)
-        if provider is None:
-            raise RuntimeError("Response branching requires a response provider.")
-        parent = await provider.get_response(
-            parent_id, context=context.platform_context
-        )
-        # shortcut: Ineligible parents (not completed, paused, or owned by another
-        # user) are rejected after response.created, so clients receive
-        # response.failed with server_error rather than a 4xx before execution.
-        if parent.get("id") != parent_id or parent.get("status") != "completed":
-            raise ValueError("The previous response must be completed.")
-        reference = TaskStorageManager.from_stream(
-            ResponseEventStream(response_id=parent_id, response=parent)
-        ).checkpoint_ref
-        if reference is None:
-            raise ValueError("The previous response has no saved graph checkpoint.")
-        namespace = _scope_thread_id("", context)
-        if _thread_namespace(reference.thread_id) != namespace:
-            raise ValueError("The previous response belongs to a different user.")
+        # _is_response_branch guarantees a non-empty previous_response_id here.
+        # Conversation-only requests use _resolve_thread_config instead.
+        parent_id = cast(str, request["previous_response_id"])
+        parent = await _load_parent_response(parent_id, context)
+        if context.is_recovery:
+            reference = _validate_branch_parent(parent_id, parent, context)
+        else:
+            reference = cast(
+                CheckpointRef,
+                TaskStorageManager.from_stream(
+                    ResponseEventStream(response_id=parent_id, response=parent)
+                ).checkpoint_ref,
+            )
         return HostingRunnableConfig.create_from_checkpoint(
             reference, context
         ).runnable_config
@@ -882,10 +858,12 @@ class ResponsesHostServer:
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
-                response = await provider.get_response(
-                    response_id,
-                    context=context.platform_context,
-                )
+                key = (id(provider), _scope_thread_id("", context), response_id)
+                response = _request_selection(context).parents.get(key)
+                if response is None:
+                    response = await provider.get_response(
+                        response_id, context=context.platform_context
+                    )
             except Exception:
                 logger.debug(
                     "Failed to resolve response chain for thread mapping",
@@ -1075,24 +1053,17 @@ class ResponsesHostServer:
                 )
             checkpoint_reads = _checkpoint_reads.get()
             if checkpoint_reads is not None:
+                if (
+                    getattr(self.build_runnable_config, "__func__", None)
+                    is not ResponsesHostServer.build_runnable_config
+                ):
+                    checkpoint_reads.cache = None
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
             if self._is_response_branch(request, context) and checkpoint_ref is None:
-                state = await self._graph.aget_state(config)
-                if (
-                    HostingRunnableConfig(state.config).checkpoint_ref
-                    != HostingRunnableConfig(config).checkpoint_ref
-                    or (state.config.get("configurable") or {}).get("checkpoint_ns", "")
-                    != ""
-                    or state.created_at is None
-                ):
-                    raise ValueError(
-                        "The previous response's graph checkpoint is missing."
-                    )
                 # shortcut: Assume no unanswered tool calls; validate parent outputs
                 # in follow-up.
-                if state.next or state.tasks or state.interrupts:
-                    raise ValueError("Branching requires a finished parent graph.")
+                _validate_branch_state(await self._graph.aget_state(config), config)
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -1275,7 +1246,7 @@ class ResponsesHostServer:
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
         features = self._hosting_features
-        with closing(_CheckpointReadContext()) as checkpoint_reads:
+        with closing(_request_selection(context).checkpoint_reads) as checkpoint_reads:
             async with state_store_client_scope(bind=False) as factory:
                 events = self.handle_create(request, context, cancellation_signal)
 

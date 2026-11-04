@@ -9,9 +9,10 @@ import asyncio
 import json
 from contextlib import nullcontext
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -19,6 +20,7 @@ import pytest
 from azure.ai.agentserver.core.platform_headers import USER_ID
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
+    PlatformContext,
     ResponseContext,
     ResponseEventStream,
     ResponsesAgentServerHost,
@@ -49,6 +51,10 @@ from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
 from langchain_azure_ai.agents.hosting._responses import (
     CheckpointRef,
     TaskStorageManager,
+)
+from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (
+    METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_THREAD_ID,
 )
 
 
@@ -140,6 +146,90 @@ def _create(client: TestClient, *, stream: bool = False, **body: Any) -> dict[st
 
 
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("file_provider", [False, True])
+@pytest.mark.parametrize(
+    "failure", ["response", "reference", "checkpoint", "status", "paused", "backend"]
+)
+def test_branch_validation_precedes_stream(
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    file_provider: bool,
+    stream: bool,
+) -> None:
+    if failure == "paused":
+
+        def pause(state: MessagesState) -> dict[str, Any]:
+            interrupt("Approval needed")
+            return {}
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("pause", pause)
+        builder.add_edge(START, "pause")
+        builder.add_edge("pause", END)
+        graph = builder.compile(checkpointer=InMemorySaver())
+    server = ResponsesHostServer(
+        graph,
+        store=None if file_provider else InMemoryResponseProvider(),
+        enable_response_branching=True,
+    )
+    provider = server.app._endpoint._provider
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert client.portal is not None
+        stored = client.portal.call(provider.get_response, parent["id"])
+        if failure == "response":
+            assert client.delete(f"/responses/{parent['id']}").status_code == 200
+        elif failure == "checkpoint":
+            saver = graph.checkpointer
+            assert isinstance(saver, InMemorySaver)
+            client.portal.call(
+                saver.adelete_thread, _config(stored)["configurable"]["thread_id"]
+            )
+        elif failure == "backend":
+            monkeypatch.setattr(
+                provider,
+                "get_response",
+                AsyncMock(side_effect=RuntimeError("private storage details")),
+            )
+        elif failure in {"reference", "status"}:
+            if failure == "reference":
+                parent_stream = ResponseEventStream(
+                    response_id=parent["id"], response=stored
+                )
+                parent_stream.internal_metadata.pop(METADATA_LANGGRAPH_CHECKPOINT_ID)
+                stored = parent_stream.response
+            else:
+                stored["status"] = "failed"
+            monkeypatch.setattr(
+                provider, "get_response", AsyncMock(return_value=stored)
+            )
+        execute = MagicMock(wraps=server.graph.astream)
+        monkeypatch.setattr(server.graph, "astream", execute)
+        response = client.post(
+            "/responses",
+            json={"input": "B", "previous_response_id": parent["id"], "stream": stream},
+            headers={"x-request-id": "branch-validation-request"},
+        )
+    expected_status = {"response": 404, "backend": 500}.get(failure, 400)
+    assert response.status_code == expected_status, response.text
+    assert response.headers["content-type"] == "application/json"
+    error = response.json()["error"]
+    assert error["additionalInfo"]["request_id"] == response.headers["x-request-id"]
+    if failure == "backend":
+        assert error["code"] == "server_error"
+        assert "private storage details" not in response.text
+    else:
+        assert error["param"] == "previous_response_id"
+        assert error["code"] == (
+            "previous_response_not_found"
+            if failure == "response"
+            else "invalid_request_error"
+        )
+    execute.assert_not_called()
+
+
+@pytest.mark.parametrize("stream", [False, True])
 def test_siblings_and_descendants_use_the_selected_parent(
     graph: CompiledStateGraph, monkeypatch: pytest.MonkeyPatch, stream: bool
 ) -> None:
@@ -186,6 +276,59 @@ def test_siblings_and_descendants_use_the_selected_parent(
     assert graph.get_state(_config(stored_parent)).values == parent_state.values
     chain_get.assert_not_awaited()
     chain_set.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("file_provider", [False, True])
+@pytest.mark.parametrize("branching", [False, True])
+def test_continuation_reuses_parent_and_selected_checkpoint(
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    branching: bool,
+    file_provider: bool,
+    stream: bool,
+) -> None:
+    server = ResponsesHostServer(
+        graph,
+        store=None if file_provider else InMemoryResponseProvider(),
+        enable_response_branching=branching,
+    )
+    provider = server.app._endpoint._provider
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert client.portal is not None
+        stored_parent = client.portal.call(provider.get_response, parent["id"])
+        selected = _config(stored_parent)["configurable"]
+        parent_reads = AsyncMock(wraps=provider.get_response)
+        checkpoint_reads = 0
+        get_tuple = InMemorySaver.aget_tuple
+
+        async def read_checkpoint(
+            saver: InMemorySaver, config: RunnableConfig
+        ) -> CheckpointTuple | None:
+            nonlocal checkpoint_reads
+            configurable = config.get("configurable") or {}
+            if (
+                configurable.get("thread_id") == selected["thread_id"]
+                and configurable.get("checkpoint_ns", "") == ""
+                and configurable.get("checkpoint_id") == selected["checkpoint_id"]
+            ):
+                checkpoint_reads += 1
+            return await get_tuple(saver, config)
+
+        monkeypatch.setattr(provider, "get_response", parent_reads)
+        monkeypatch.setattr(InMemorySaver, "aget_tuple", read_checkpoint)
+        child = _create(
+            client, input="B", previous_response_id=parent["id"], stream=stream
+        )
+
+    assert child["status"] == "completed"
+    assert _text(child) == "A|B"
+    parent_reads.assert_awaited_once()
+    assert parent_reads.await_args is not None
+    assert parent_reads.await_args.args == (parent["id"],)
+    if branching:
+        assert checkpoint_reads == 1
 
 
 def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -> None:
@@ -507,11 +650,17 @@ async def test_unavailable_parent_fails_without_executing_a_new_root(
                     asyncio.Event(),
                 )
             ]
-            response = events[-1]["response"]
+            assert events[-1]["response"]["status"] == "failed"
         else:
-            response = _create(client, input="B", previous_response_id=parent["id"])
+            response = client.post(
+                "/responses",
+                json={"input": "B", "previous_response_id": parent["id"]},
+            )
+            assert response.status_code == (
+                404 if failure in {"response", "reference"} else 400
+            )
+            assert response.json()["error"]["param"] == "previous_response_id"
 
-    assert response["status"] == "failed"
     execute.assert_not_awaited()
 
 
@@ -529,21 +678,29 @@ def test_checkpoint_cleanup_never_starts_a_new_root(
         assert parent["status"] == "completed"
         if cleanup_phase == "config":
             build_config = server.build_runnable_config
+            config_builds = 0
 
             async def cleanup_after_config(
                 request: CreateResponse, context: ResponseContext
             ) -> RunnableConfig:
+                nonlocal config_builds
                 config = await build_config(request, context)
-                await saver.adelete_thread(config["configurable"]["thread_id"])
+                config_builds += 1
+                if config_builds == 2:
+                    await saver.adelete_thread(config["configurable"]["thread_id"])
                 return config
 
             monkeypatch.setattr(server, "build_runnable_config", cleanup_after_config)
         else:
             get_state = server._graph.aget_state
+            validation_reads = 0
 
             async def cleanup_after_validation(config: RunnableConfig) -> StateSnapshot:
+                nonlocal validation_reads
                 state = await get_state(config)
-                await saver.adelete_thread(config["configurable"]["thread_id"])
+                validation_reads += 1
+                if validation_reads == 2:
+                    await saver.adelete_thread(config["configurable"]["thread_id"])
                 return state
 
             monkeypatch.setattr(server._graph, "aget_state", cleanup_after_validation)
@@ -641,19 +798,43 @@ async def test_paused_parent_cannot_be_branched(
                     asyncio.Event(),
                 )
             ]
-            response = events[-1]["response"]
+            assert events[-1]["response"]["status"] == "failed"
             recovery_context.get_input_items.assert_not_awaited()
         else:
-            response = _create(client, input="B", previous_response_id=parent["id"])
+            response = client.post(
+                "/responses",
+                json={"input": "B", "previous_response_id": parent["id"]},
+            )
+            assert response.status_code == 400
+            assert response.json()["error"]["param"] == "previous_response_id"
 
-    assert response["status"] == "failed"
     build_input.assert_not_awaited()
     execute.assert_not_called()
 
 
-@pytest.mark.parametrize("caller", ["user-b", None])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("caller", ["user-a", "user-b", None])
+@pytest.mark.parametrize(
+    ("parent_status", "reference_state"),
+    [
+        ("completed", "complete"),
+        ("failed", "complete"),
+        ("in_progress", "complete"),
+        ("completed", "missing"),
+        ("completed", "thread_only"),
+        ("completed", "checkpoint_only"),
+        ("completed", "empty_checkpoint"),
+        ("completed", "invalid_checkpoint"),
+        ("completed", "invalid_thread"),
+    ],
+)
 def test_parent_checkpoint_remains_user_scoped(
-    graph: CompiledStateGraph, caller: str | None
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    caller: str | None,
+    parent_status: Literal["completed", "failed", "in_progress"],
+    reference_state: str,
+    stream: bool,
 ) -> None:
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
@@ -662,13 +843,77 @@ def test_parent_checkpoint_remains_user_scoped(
         parent = client.post(
             "/responses", json={"input": "A"}, headers={USER_ID: "user-a"}
         ).json()
+        provider = server.app._endpoint._provider
+        assert client.portal is not None
+        stored_parent = client.portal.call(
+            partial(
+                provider.get_response,
+                parent["id"],
+                context=PlatformContext(user_id_key="user-a"),
+            )
+        )
+        assert stored_parent is not None
+        parent_stream = ResponseEventStream(
+            response_id=parent["id"], response=stored_parent
+        )
+        metadata = parent_stream.internal_metadata
+        if reference_state == "missing":
+            metadata.clear()
+        elif reference_state == "thread_only":
+            metadata.pop(METADATA_LANGGRAPH_CHECKPOINT_ID)
+        elif reference_state == "checkpoint_only":
+            metadata.pop(METADATA_LANGGRAPH_THREAD_ID)
+        elif reference_state == "empty_checkpoint":
+            metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = ""
+        elif reference_state == "invalid_checkpoint":
+            metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = 123
+        elif reference_state == "invalid_thread":
+            metadata[METADATA_LANGGRAPH_THREAD_ID] = 123
+        stored_parent = parent_stream.response
+        stored_parent["status"] = parent_status
+        monkeypatch.setattr(
+            provider, "get_response", AsyncMock(return_value=stored_parent)
+        )
+        execute = MagicMock(wraps=server.graph.astream)
+        monkeypatch.setattr(server.graph, "astream", execute)
         response = client.post(
             "/responses",
-            json={"input": "B", "previous_response_id": parent["id"]},
+            json={"input": "B", "previous_response_id": parent["id"], "stream": stream},
             headers={USER_ID: caller} if caller is not None else {},
-        ).json()
+        )
     assert parent["status"] == "completed"
-    assert response["status"] == "failed"
+    expected_status = 404
+    if caller == "user-a" and reference_state not in {
+        "missing",
+        "checkpoint_only",
+        "invalid_thread",
+    }:
+        expected_status = (
+            200
+            if reference_state == "complete" and parent_status == "completed"
+            else 400
+        )
+    assert response.status_code == expected_status, response.text
+    if expected_status == 200:
+        if stream:
+            assert "event: response.completed" in response.text
+        else:
+            assert response.json()["status"] == "completed"
+        return
+    execute.assert_not_called()
+    assert response.headers["content-type"] == "application/json"
+    error = response.json()["error"]
+    assert error["param"] == "previous_response_id"
+    if expected_status == 404:
+        assert error["code"] == "previous_response_not_found"
+        assert error["message"] == "The previous response was not found."
+    else:
+        assert error["code"] == "invalid_request_error"
+        assert error["message"] == (
+            "The previous response must be completed."
+            if reference_state == "complete"
+            else "The previous response has no saved graph checkpoint."
+        )
 
 
 def test_branching_requires_a_checkpointer_and_disabled_steering(
