@@ -2,9 +2,10 @@
 
 ## 1. Interface
 
-`ResponsesHostServer` hosts a compiled LangGraph graph through the Responses
-protocol. Agent Server provides the protocol; this host handles graph input,
-output, and state. Hosting is experimental. See also
+[`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) hosts a compiled
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph through the [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
+The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides the protocol; this host handles
+graph input, output, and state. Hosting is experimental. See also
 [Invocations hosting](invocations_protocol.md).
 
 ### Dependencies
@@ -14,12 +15,12 @@ Install `langchain-azure-ai[hosting]`. Key requirements from
 
 | Package | Required version |
 | --- | --- |
-| `langchain` | `>=1.2.12,<2.0.0` |
+| [`langchain`](https://docs.langchain.com/oss/python/langchain/overview) | `>=1.2.12,<2.0.0` |
 | `langgraph` | `>=1.2.16,<2.0` |
 | `azure-ai-agentserver-core` / `azure-ai-agentserver-responses` | `>=2.1.0b2,<3.0` |
 | `azure-ai-agentserver-invocations` | `>=1.1.0b1,<2.0` |
 
-Deep Agents is optional. Its graphs use the same LangGraph hosting interface;
+[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is optional. Its graphs use the same LangGraph hosting interface;
 the [Deep Research sample](../../../../samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/requirements.txt)
 pins `deepagents==0.7.28`.
 
@@ -29,35 +30,33 @@ pins `deepagents==0.7.28`.
 | --- | --- | --- |
 | `graph` | Required | The compiled graph to serve. |
 | `app` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
-| `options` | `None` | Use default `ResponsesServerOptions`: `resilient_background=False` and `steerable_conversations=False`. |
-| `store` | `None` | If not specified, uses `FileResponseStore` (JSON files) locally, or [`FoundryStorageProvider`](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/store/_foundry_provider.py) (Foundry Responses Storage API) on Foundry. |
-| `conversation_chain_store` | `None` | If not specified, uses `FoundryConversationChainStore`, backed by Foundry State Store, to retain the checkpoint reference for the next linear turn. |
+| `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
+| `store` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
+| `conversation_chain_store` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
 | `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
 | `prefix` | Empty | Add a prefix to the protocol routes. |
 | `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
 
-When supplying `app`, configure its host-level settings, including response
-storage, on that app. The graph's checkpointer is supplied when compiling the
-graph. The constructor's `store` provider and the request's `store` retention
-flag are separate controls.
+> [!NOTE]
+> When supplying `app`, configure its host-level settings, including response
+> storage, on that app. Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
+> The constructor's `store` provider and the request's `store` retention flag
+> are separate controls.
 
 Start serving with `run()` or `run_async()`; `.app` and `.graph` expose the
-underlying server and hosted graph. Subclasses can override input/configuration
-with `build_input()` and `build_runnable_config()`, HITL handling with
-`build_resume_command()` and `detect_rejection()`, or the handler with
-`handle_create()`. See the [host interface](../../langchain_azure_ai/agents/hosting/_responses_host.py)
-for details.
+underlying server and hosted graph.
 
-The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
-`--protocol responses` and `--option NAME=VALUE`. Configure other constructor
-parameters, including `app` and branching, through Python.
+> [!TIP]
+> The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
+> `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
+> parameters, including `app` and [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
 
 ## 2. Calling modes and input/output
 
 Request defaults are `store=true`, `stream=false`, and `background=false`.
 ✓ means supported under the stated conditions; × means unsupported.
 
-Create, retrieve, cancel, delete, input-item listing, and SSE formatting follow
+Create, retrieve, cancel, delete, input-item listing, and [server-sent events (SSE)](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) formatting follow
 [Agent Server Responses](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
 A create request returns JSON or SSE according to `stream`. Background execution
 requires `store=true`; stored background streams support reconnecting with
@@ -67,10 +66,15 @@ The default graph schema requires `messages`. Text, instructions, tool items,
 and Responses-native image/file input are supported with a compatible model.
 LangGraph message and update streams produce assistant text, tool calls/results,
 and model-provided reasoning summaries, citations, and usage. Custom graph state
-and stream events need custom conversion. Models and tools are configured on
+and custom stream events have no default mapping. Models and tools are configured on
 the graph; request `model` and `tools` do not reconfigure it.
 
 ## 3. Conversation and state
+
+> [!IMPORTANT]
+> When a graph has a checkpointer, requests must use `store=true` (the default).
+> `store=false` returns HTTP 400 before streaming or graph execution. Without a
+> checkpointer, foreground requests can use `store=false`.
 
 A LangGraph checkpointer determines the conversation's state source:
 
@@ -79,7 +83,7 @@ A LangGraph checkpointer determines the conversation's state source:
 | Without a checkpointer | Responses history resolved by the provider | History plus current input. |
 | With a checkpointer | Saved LangGraph state | Current input only. |
 
-`conversation.id` identifies a conversation thread. For `previous_response_id`,
+`conversation.id` identifies a conversation [thread](https://docs.langchain.com/oss/python/langgraph/persistence#threads). For `previous_response_id`,
 the host resolves the parent's conversation or root thread. Threads are scoped
 to the platform user when that identity is available. An in-memory saver keeps
 state within one process; a persistent saver is needed across restarts.
@@ -94,19 +98,26 @@ The repository provides the following implementations for different state roles:
 
 | Role | Implementation | Package / backend |
 | --- | --- | --- |
-| Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; Foundry State Store. |
-| Graph checkpoints | [`FoundryCheckpointSaver`](../../README.md#durable-graph-state) | `langchain-azure-ai`; Foundry State Store. Requires hosted request context. |
-| Graph checkpoints | [`CosmosDBSaver`](../../../azure-cosmosdb/README.md#host-a-persistent-langgraph-agent-on-azure) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
-| Graph long-term memory | [`AsyncCosmosDBStore`](../../../azure-cosmosdb/README.md#langgraph-store-long-term-memory) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
+| Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; durable state store. |
+| Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; durable state store. Requires hosted request context. |
+| Graph checkpoints | [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
+| Graph [long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory) | [`AsyncCosmosDBStore`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_store/AsyncCosmosDBStore) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
 
 Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
 one. Both hosts require the async `CosmosDBSaver` rather than
-`CosmosDBSaverSync`. Cosmos DB implementations require installing
+[`CosmosDBSaverSync`](https://reference.langchain.com/python/langchain-azure-cosmosdb/_langgraph_checkpoint_store/CosmosDBSaverSync). Cosmos DB implementations require installing
 `langchain-azure-cosmosdb` separately. Graph long-term memory is configured with
 `compile(store=...)`; the host's `store` parameter selects a response provider
 from Agent Server.
 
-### Branching and steering
+### Steering
+
+[Steering](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/docs/resilient-responses-developer-guide.md) uses `steerable_conversations=True` to queue the next input
+and stop the active turn. It enforces a linear chain and rejects a supplied
+parent that is no longer the latest response. A superseded response normally
+completes with partial output.
+
+### Branching
 
 Branching uses `enable_response_branching=True` with `previous_response_id`.
 It restores the named parent's checkpoint. Siblings can run sequentially or
@@ -118,36 +129,74 @@ unchanged.
 | --- | :---: | --- |
 | Branching + async, history-preserving checkpointer | ✓ | The parent response and its checkpoint must remain available to the current user. |
 | Branching without a checkpointer | × | Rejected at host construction. |
-| Branching + steering | × | Steering is linear: it queues the next input and stops the active turn. |
-| Branching from a paused graph | × | Includes HITL resume through `previous_response_id` in branching mode. Use ordinary continuation for workflows that pause. |
+| Branching + `steerable_conversations=True` | × | Currently unsupported. Disable steering to use branching. |
+| Branching from a paused graph | × | Includes [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) resume through `previous_response_id` in branching mode. Use ordinary continuation for workflows that pause. |
 | Branching + external `app` | × | Branching requires a host-created app. |
 | Branching + stored background recovery | ✓ | Subject to the recovery requirements below. |
 
-Steering enforces a linear chain and rejects a supplied parent that is no longer
-the latest response. Enabling branching leaves requests using only `conversation.id`
-on the ordinary continuation path. Send one linkage field: the current branch
-path prioritizes `previous_response_id` when both are supplied.
-
-Request `store=false` leaves a child unavailable for later response-ID branching
-while graph writes still occur. Parent system messages can remain in checkpoint
-state. Branch eligibility failures inside the handler produce a failed response.
+Enabling branching leaves requests using only `conversation.id` on the ordinary
+continuation path. Supply either `conversation.id` or `previous_response_id`.
+Parent system messages can remain in checkpoint state. Missing or inaccessible
+parents return HTTP 404; invalid branch parents or checkpoints return HTTP 400
+before streaming. Failures after admission can still produce a failed response.
 
 ## 4. Interrupts and recovery
 
 ### Human-in-the-loop
 
-LangGraph `interrupt()` pauses a checkpointed graph. The host exposes each pause
-as paired `function_call` and `mcp_approval_request` output items. The response
-can be `completed` while the graph remains paused. Send a matching
-`function_call_output` or `mcp_approval_response` in the next request's `input`;
-the host converts it into a LangGraph resume command.
+LangGraph [`interrupt()`](https://docs.langchain.com/oss/python/langgraph/interrupts) pauses a checkpointed graph. The host exposes two
+ways to answer the same pause; use either path. The response can be `completed`
+while the graph remains paused.
 
-Rich function outputs take precedence over approvals for the same interrupt.
-For custom interrupts, positive approval resumes; negative approval fails the
-request and leaves the graph paused. LangChain HITL middleware supports allowed per-action
-approval/rejection decisions. Conflicting or disallowed decisions fail the
-request. Partial parallel answers are supported; unmatched input re-emits
-outstanding pauses.
+| Resume path | Output item | Reply item |
+| --- | --- | --- |
+| Rich resume value or command | `function_call` | `function_call_output` |
+| Boolean approval | `mcp_approval_request` | `mcp_approval_response` |
+
+For one pause, routing fields from the emitted SSE events look like this:
+
+```json
+[
+  {"type": "response.output_item.done",
+   "item": {"type": "function_call", "call_id": "interrupt-1"}},
+  {"type": "response.output_item.done",
+   "item": {"type": "mcp_approval_request", "id": "mcpr_example", "server_label": "langgraph"}}
+]
+```
+
+Continue the same conversation with branching disabled. To provide a resume
+value, send a `function_call_output` using the emitted `call_id`:
+
+```json
+{
+  "conversation": {"id": "<same-conversation-id>"},
+  "input": [{"type": "function_call_output", "call_id": "interrupt-1",
+             "output": "{\"resume\":\"continue\"}"}]
+}
+```
+
+For a boolean decision, send an `mcp_approval_response` using the approval
+item's `id` as `approval_request_id`:
+
+```json
+{
+  "conversation": {"id": "<same-conversation-id>"},
+  "input": [{"type": "mcp_approval_response",
+             "approval_request_id": "mcpr_example", "approve": true}]
+}
+```
+
+The host converts the answer into a LangGraph resume command. For custom
+interrupts, positive approval resumes with the original interrupt value;
+negative approval fails the request and leaves it paused. [`HumanInTheLoopMiddleware`](https://docs.langchain.com/oss/python/langchain/human-in-the-loop)
+supports allowed per-action approval/rejection decisions. Conflicting or
+disallowed decisions fail the request. Partial parallel answers are supported;
+unmatched input re-emits outstanding pauses.
+
+> [!NOTE]
+> If both reply types answer the same interrupt, `function_call_output` takes
+> precedence. The `call_id` and `approval_request_id` come from different output
+> fields; copy each from the corresponding emitted item.
 
 ### Restart recovery
 
@@ -159,13 +208,17 @@ outstanding pauses.
 
 The response store retains protocol data, the conversation-chain store retains
 the checkpoint for the next linear turn, and the graph saver retains execution
-state. Request `store=false` does not disable graph or chain-state writes.
+state.
 
 Recovery uses the current response's saved graph progress, including for a
 branch child. Without saved progress, it processes the original input again.
-External effects can repeat across a recovery boundary. See the public
+
+> [!WARNING]
+> External effects can repeat across a recovery boundary.
+
+See the public
 [Agent Server resilience contract](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/docs/resilience-contract.md)
 for the protocol lifecycle.
 
-Client cancellation fails the handler with code `cancelled`; steering normally
-completes it with partial output. Shutdown recovery follows the conditions above.
+Client cancellation fails the handler with code `cancelled`. Shutdown recovery
+follows the conditions above.
