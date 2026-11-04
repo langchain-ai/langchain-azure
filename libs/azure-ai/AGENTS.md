@@ -13,6 +13,7 @@ Apply these instructions to `libs/azure-ai/` in addition to the [repository inst
 
 - Keep feature PRs focused and reviewable; exclude unrelated refactors, cleanup, and pre-existing bug fixes unless the feature requires them.
 - Compare suspected issues against the PR base before reporting them; pre-existing issues are non-blocking unless the feature requires a fix.
+- Understand the relevant call flow and change scope before reviewing details. Follow the requested focus, distinguish correctness findings from readability suggestions, and briefly state review coverage and limitations.
 - Prefer consistent behavior across existing and new feature paths. If alignment expands scope, document temporary differences with TODOs for a follow-up PR. Accept deferral of unrelated fixes or alignment when the feature works correctly without regressions.
 - When scope analysis shows a feature is too large for one reviewable PR, plan independently reviewable, working increments, each with its required tests and documentation. Record the plan and a TODO checklist in the relevant design or feature documentation, clearly separating the current PR's scope from deferred work.
 - Before opening a PR, consider using an available AI tool to review the proposed changes for issues. This is optional and does not replace human review.
@@ -40,6 +41,12 @@ When working on agent hosting, consult these upstream SDK implementations as nee
 - [azure-ai-agentserver-core](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/agentserver/azure-ai-agentserver-core)
 - [azure-ai-agentserver-responses](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/agentserver/azure-ai-agentserver-responses)
 - [azure-ai-agentserver-invocations](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/agentserver/azure-ai-agentserver-invocations)
+
+## Validation and Evidence
+
+- Match validation to changed behavior and affected consumers, reusing existing tests and checks. In integration and sample checks, exercise real SDK interfaces and execution paths, mock external service boundaries as appropriate, and assert observable contract behavior.
+- When adding or changing published-package examples, validate the affected examples with the documented versions and extras in a clean environment, and state any unreleased API prerequisites.
+- Report checks actually performed, results, and material coverage limits; distinguish source inspection, local/mock checks, and live-service validation. Include the tested revision and relevant environment when needed to interpret or reproduce results.
 
 ## Bug Fixes
 
