@@ -309,7 +309,7 @@ codes need the verification below.
 | Graph has a checkpointer and request sets `store=False`                          | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
 | Request includes `response_id`, an invalid parent ID, or both linkage fields     | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
 | Referenced response is missing or inaccessible                                   | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
-| `previous_response_id` refers to an unretained response                          | HTTP 400 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
+| `previous_response_id` refers to an unretained response                          | HTTP 404 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
 | Parent thread ID is missing, invalid, or belongs to another user during preflight | HTTP 404 JSON `previous_response_not_found` with a generic message. No SSE or graph execution.                                |
 | Owned parent has a missing or invalid checkpoint ID during preflight               | HTTP 400 JSON `invalid_request_error` for the selected parent. No SSE or graph execution.                                   |
 | Input contains approval or tool-result replies                                   | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
