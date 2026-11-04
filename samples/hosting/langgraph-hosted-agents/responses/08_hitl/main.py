@@ -150,27 +150,26 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any]) -> "object":
         return {"messages": [model.invoke(state["messages"])]}
 
     def approve_and_call_tool(state: MessagesState) -> dict:
-        """Pause for human approval, then execute the proposed tool call."""
+        """Approve every proposed call before executing any tools."""
         last = state["messages"][-1]
-        tool_call = last.tool_calls[0]  # type: ignore[attr-defined]
-        proposed: dict[str, Any] = {
-            "tool": tool_call["name"],
-            "arguments": tool_call["args"],
-        }
+        approved_calls: list[tuple[str, dict[str, Any]]] = []
+        for tool_call in last.tool_calls:  # type: ignore[attr-defined]
+            proposed: dict[str, Any] = {
+                "tool": tool_call["name"],
+                "arguments": tool_call["args"],
+            }
 
-        # On approve=True, the resume value is the original ``proposed``
-        # dict. On a ``function_call_output``-style resume the client can
-        # send a different payload (e.g. to override the arguments) — we
-        # use whatever the client returned for the actual invocation.
-        approved: Any = interrupt(proposed)
-        if not isinstance(approved, dict) or "tool" not in approved:
-            approved = proposed
+            approved: Any = interrupt(proposed)
+            if not isinstance(approved, dict) or "tool" not in approved:
+                approved = proposed
+            approved_calls.append((tool_call["id"], approved))
 
-        tool_fn = _TOOLS_BY_NAME[approved["tool"]]
-        result = tool_fn.invoke(approved.get("arguments") or {})
-        return {
-            "messages": [ToolMessage(content=str(result), tool_call_id=tool_call["id"])]
-        }
+        messages = []
+        for tool_call_id, approved in approved_calls:
+            tool_fn = _TOOLS_BY_NAME[approved["tool"]]
+            result = tool_fn.invoke(approved.get("arguments") or {})
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call_id))
+        return {"messages": messages}
 
     def should_continue(state: MessagesState) -> str:
         last = state["messages"][-1]

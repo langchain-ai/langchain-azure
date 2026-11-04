@@ -25,13 +25,17 @@ See [main.py](main.py) for the full implementation.
 
 ### Approval-style HITL
 
-The graph has three nodes:
+The graph has two nodes:
 
 - `agent` — invokes the chat model.
-- `approve_and_call_tool` — when the model emits a tool call, this
-  node pauses with `langgraph.types.interrupt(proposed)` where
-  `proposed` is the proposed tool name and arguments. On resume, it
-  invokes the tool and emits a `ToolMessage`.
+- `approve_and_call_tool` — pauses once per proposed tool call with
+  `langgraph.types.interrupt(proposed)`, where `proposed` contains the tool
+  name and arguments. Clients repeat the approval/resume exchange until all
+  calls are approved, optionally overriding individual calls through
+  `function_call_output`. Only then does the node execute the tools and emit
+  one `ToolMessage` per original call id. Collecting approvals before execution
+  avoids repeating earlier tool executions when LangGraph replays the node
+  after each interrupt (see [interrupt replay rules](https://docs.langchain.com/oss/python/langgraph/interrupts#rules-of-interrupts)).
 
 When the graph pauses, the host serializes the pending interrupt as
 **two** output items in the same response, both keyed by the same
