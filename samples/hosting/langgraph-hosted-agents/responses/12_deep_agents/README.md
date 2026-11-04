@@ -22,10 +22,10 @@ but no download link is returned. Unexpected programming errors still surface.
 
 > [!NOTE]
 > Deep Agents' `DeltaChannel` can make checkpoint restoration **significantly slower**
-> with Foundry State Store, which has no batch-get API. [agent.py](agent.py) stores full
-> messages/files to avoid delta-history reads, at the cost of larger checkpoints.
-> This workaround uses a private reducer in the pinned Deep Agents version; see
-> [Deep Agents #7376](https://github.com/langchain-ai/deepagents/issues/7376).
+> with Foundry State Store, especially as the number of conversation turns grows.
+> State Store has no batch-get API. [agent.py](agent.py) stores full messages/files
+> to avoid delta-history reads, at the cost of larger checkpoints.
+> This workaround uses a private reducer in the pinned Deep Agents version.
 > Another workaround is [Deep Agents 0.5.9](https://github.com/langchain-ai/deepagents/releases/tag/deepagents%3D%3D0.5.9),
 > which predates `DeltaChannel`. For that older API, remove `FullCheckpointState`,
 > its supporting imports, and the `state_schema` argument.
