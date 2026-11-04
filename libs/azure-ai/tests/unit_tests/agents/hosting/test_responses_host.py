@@ -1208,6 +1208,49 @@ def test_store_false_without_checkpointer_does_not_persist(
         storage_call.assert_not_awaited()
 
 
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_continuation_without_checkpointer_preserves_parent(
+    streaming: bool, prefix: str
+) -> None:
+    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    with _client(server) as client:
+        parent_response = client.post(
+            f"{prefix}/responses", json={"input": "parent", "store": True}
+        )
+        assert parent_response.status_code == 200, parent_response.text
+        parent = parent_response.json()
+        assert parent["status"] == "completed"
+        child_response = client.post(
+            f"{prefix}/responses",
+            json={
+                "input": "child",
+                "previous_response_id": parent["id"],
+                "store": False,
+                "stream": streaming,
+            },
+        )
+        assert child_response.status_code == 200, child_response.text
+        if streaming:
+            completed = [
+                payload
+                for kind, payload in _parse_sse(child_response.text)
+                if kind == "response.completed"
+            ]
+            assert len(completed) == 1, child_response.text
+            child = completed[0]["response"]
+        else:
+            child = child_response.json()
+        assert child["status"] == "completed"
+        assert child["previous_response_id"] == parent["id"]
+        assert child["output"]
+        assert client.get(f"{prefix}/responses/{child['id']}").status_code == 404
+        retained_parent = client.get(f"{prefix}/responses/{parent['id']}")
+        assert retained_parent.status_code == 200, retained_parent.text
+        assert retained_parent.json()["status"] == "completed"
+        assert retained_parent.json()["output"] == parent["output"]
+
+
 @pytest.mark.parametrize("store", [None, True])
 def test_non_streaming_request_returns_completed_response(store: bool | None) -> None:
     server = ResponsesHostServer(make_echo_graph())
