@@ -873,239 +873,250 @@ def check_07_observability() -> None:
 
 
 def check_06_pause_then_resume() -> None:
-    """responses/08_hitl: approval-style HITL — mcp_approval_request paired
-    with function_call; primary resume via mcp_approval_response; rejection
-    surfaces as response.failed; rich override still works via
-    function_call_output.
+    """responses/08_hitl: whole-turn approval, ID-bound edits/rejections,
+    validation recovery, matching tool results, and stale approval retries.
     """
     requires_foundry_endpoint()
     server = start_sample("responses/08_hitl/main.py")
-    try:
-        # ------------------------------------------------------------------
-        # Run A (primary path): approve via the OpenAI-standard
-        # mcp_approval_response. This is the headline UX.
-        # ------------------------------------------------------------------
-        conversation_a = f"e2e-hitl-approve-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run A — approve)", conversation_a)
 
-        _step("Run A turn 1 — POST /responses (expect paired approval items)")
-        first = _post(
+    def post_response(conversation_id: str, input_items: Any) -> dict[str, Any]:
+        response = _post(
             server,
             "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_a},
-            },
-            timeout=180.0,
+            json_body={"conversation": {"id": conversation_id}, "input": input_items},
+            timeout=300.0,
         )
-        _assert(first.status_code == 200, f"turn 1 HTTP 200 (got {first.status_code})")
-        first_payload = first.json()
-        _assert(first_payload["status"] == "completed", "turn 1 status == completed")
+        _assert(response.status_code == 200, f"HTTP 200 (got {response.status_code})")
+        return response.json()
+
+    def review_batch(
+        payload: dict[str, Any], cities: list[str]
+    ) -> tuple[str, str, list[dict[str, Any]]]:
+        _assert(payload["status"] == "completed", "approval response completed")
         approvals = [
             item
-            for item in first_payload["output"]
+            for item in payload["output"]
             if item.get("type") == "mcp_approval_request"
             and item.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
         interrupts = [
             item
-            for item in first_payload["output"]
+            for item in payload["output"]
             if item.get("type") == "function_call"
             and item.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
+        _assert(len(approvals) == len(interrupts) == 1, "one paired batch approval")
+        envelope = json.loads(approvals[0]["arguments"])
         _assert(
-            bool(approvals),
-            "turn 1 surfaces the OpenAI-standard mcp_approval_request item",
+            json.loads(interrupts[0]["arguments"]) == envelope
+            and envelope["interrupt_id"] == interrupts[0]["call_id"],
+            "both channels describe the same batch interrupt",
+        )
+        calls = envelope["value"]["tool_calls"]
+        _assert(len(calls) == len(cities), "all calls visible in the batch review")
+        _assert(
+            len({call["id"] for call in calls}) == len(calls)
+            and all(isinstance(call["id"], str) and call["id"] for call in calls),
+            "each tool call retains its unique ID",
         )
         _assert(
-            bool(interrupts),
-            "turn 1 also surfaces the paired function_call (advanced channel)",
+            all(call["name"] == "get_weather" for call in calls), "tool names retained"
         )
-        approval_id = approvals[0]["id"]
-        call_id = interrupts[0]["call_id"]
-        _kv("mcp_approval_request.id", approval_id)
-        _kv("function_call.call_id", call_id)
+        for city in cities:
+            _assert(
+                sum(
+                    city.lower() in call["arguments"]["location"].lower()
+                    for call in calls
+                )
+                == 1,
+                f"batch contains exactly one call for {city}",
+            )
         _assert(
-            approval_id == call_id,
-            "mcp_approval_request.id == function_call.call_id (same interrupt id)",
+            not any(
+                item.get("type") == "function_call_output" for item in payload["output"]
+            ),
+            "no tool results emitted during batch review",
         )
-        # Envelope shape: arguments JSON describes the proposed tool call.
-        try:
-            envelope = json.loads(approvals[0]["arguments"])
-        except (TypeError, ValueError):
-            envelope = None
-        _assert(
-            isinstance(envelope, dict)
-            and envelope.get("interrupt_id") == approval_id
-            and isinstance(envelope.get("value"), dict)
-            and envelope["value"].get("tool") == "get_weather",
-            "approval arguments envelope describes the proposed get_weather call",
-        )
+        return approvals[0]["id"], interrupts[0]["call_id"], calls
 
-        _step("Run A turn 2 — approve via mcp_approval_response")
-        second = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_a},
-                "input": [
+    def check_results(
+        payload: dict[str, Any], calls: list[dict[str, Any]], decision: str
+    ) -> None:
+        _assert(payload["status"] == "completed", "reviewed turn completed")
+        _assert(
+            not any(
+                item.get("type") == "mcp_approval_request" for item in payload["output"]
+            ),
+            "no extra approvals after reviewing the batch",
+        )
+        outputs = [
+            item
+            for item in payload["output"]
+            if item.get("type") == "function_call_output"
+        ]
+        _assert(
+            len(outputs) == len(calls)
+            and {item["call_id"] for item in outputs} == {call["id"] for call in calls},
+            "exactly one tool result per original call ID",
+        )
+        outputs_by_id = {item["call_id"]: item["output"] for item in outputs}
+        for call in calls:
+            location = call["arguments"]["location"]
+            if "paris" in location.lower():
+                if decision == "mixed":
+                    expected = "Tool call rejected by the reviewer."
+                else:
+                    location = "Vancouver" if decision == "edit" else location
+                    expected = f"It's sunny and 22C in {location}."
+            else:
+                expected = f"It's sunny and 22C in {location}."
+            _assert(
+                outputs_by_id[call["id"]] == expected,
+                f"correct result for {call['id']}",
+            )
+
+    try:
+        for decision in [
+            "approve",
+            "edit",
+            "reject",
+            "mixed",
+            "partial",
+            "partial_approve",
+            "invalid_arguments",
+            "invalid_arguments_approve",
+        ]:
+            recovering = decision.startswith(("partial", "invalid_arguments"))
+            conversation_id = f"e2e-hitl-{decision}-{uuid.uuid4().hex[:8]}"
+            _step(f"{decision}: review Seattle and Paris together")
+            payload = post_response(
+                conversation_id,
+                "Call get_weather exactly twice in the SAME model turn, once for "
+                "Seattle and once for Paris. After reviewing, summarize the results; "
+                "do not retry rejected tool calls.",
+            )
+            approval_id, call_id, calls = review_batch(payload, ["Seattle", "Paris"])
+            approval = {
+                "type": "mcp_approval_response",
+                "approval_request_id": approval_id,
+                "approve": decision != "reject",
+            }
+            resume: dict[str, Any] = approval
+            if decision in ("edit", "mixed") or recovering:
+                decisions = []
+                for call in reversed(calls):
+                    choice: dict[str, Any] = {"id": call["id"], "type": "approve"}
+                    if "paris" in call["arguments"]["location"].lower():
+                        if decision == "edit" or decision.startswith(
+                            "invalid_arguments"
+                        ):
+                            choice["type"] = "edit"
+                            choice["arguments"] = (
+                                {} if recovering else {"location": "Vancouver"}
+                            )
+                        elif decision == "mixed":
+                            choice["type"] = "reject"
+                    decisions.append(choice)
+                if decision.startswith("partial"):
+                    decisions = decisions[:1]
+                resume = {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps({"resume": {"decisions": decisions}}),
+                }
+            payload = post_response(conversation_id, [resume])
+            if recovering:
+                for attempt in range(2):
+                    retry_approval_id, retry_call_id, retry_calls = review_batch(
+                        payload, ["Seattle", "Paris"]
+                    )
+                    _assert(
+                        retry_call_id == call_id and retry_calls == calls,
+                        "invalid decisions keep the complete original batch pending",
+                    )
+                    error = next(
+                        json.loads(item["arguments"])["value"].get("validation_error")
+                        for item in payload["output"]
+                        if item.get("type") == "mcp_approval_request"
+                    )
+                    _assert(bool(error), "review prompt explains the validation error")
+                    if attempt == 0:
+                        payload = post_response(conversation_id, [resume])
+                if decision.endswith("_approve"):
+                    correction = {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": retry_approval_id,
+                        "approve": True,
+                    }
+                else:
+                    corrected = []
+                    for call in reversed(calls):
+                        choice = {"id": call["id"], "type": "approve"}
+                        if "paris" in call["arguments"]["location"].lower():
+                            choice.update(
+                                type="edit", arguments={"location": "Vancouver"}
+                            )
+                        corrected.append(choice)
+                    correction = {
+                        "type": "function_call_output",
+                        "call_id": retry_call_id,
+                        "output": json.dumps({"resume": {"decisions": corrected}}),
+                    }
+                payload = post_response(conversation_id, [correction])
+            if decision == "reject":
+                _assert(
+                    payload["status"] == "failed"
+                    and payload["error"]["code"] == "interrupt_rejected",
+                    "whole-batch rejection fails the turn",
+                )
+                _assert(
+                    not any(
+                        item.get("type") == "function_call_output"
+                        for item in payload["output"]
+                    ),
+                    "rejected batch emits no tool results",
+                )
+                continue
+            expected_decision = (
+                "edit" if recovering and not decision.endswith("_approve") else decision
+            )
+            check_results(payload, calls, expected_decision)
+            if decision != "approve":
+                continue
+
+            _step("new turn: stale approval cannot approve Tokyo and London")
+            payload = post_response(
+                conversation_id,
+                "Now call get_weather exactly twice in the SAME model turn: "
+                "Tokyo and London. Summarize only after approval.",
+            )
+            next_approval_id, next_call_id, next_calls = review_batch(
+                payload, ["Tokyo", "London"]
+            )
+            _assert(next_call_id != call_id, "new batch has a new interrupt identity")
+            payload = post_response(conversation_id, [approval])
+            retry_approval_id, retry_call_id, retry_calls = review_batch(
+                payload, ["Tokyo", "London"]
+            )
+            _assert(
+                retry_call_id == next_call_id and retry_calls == next_calls,
+                "retry of the old approval leaves the new batch unchanged and pending",
+            )
+            _assert(
+                next_approval_id != approval_id,
+                "new approval differs from old approval",
+            )
+            payload = post_response(
+                conversation_id,
+                [
                     {
                         "type": "mcp_approval_response",
-                        "approval_request_id": approval_id,
+                        "approval_request_id": retry_approval_id,
                         "approve": True,
                     }
                 ],
-            },
-            timeout=300.0,
-        )
-        _assert(second.status_code == 200, f"turn 2 HTTP 200 (got {second.status_code})")
-        second_payload = second.json()
-        _assert(second_payload["status"] == "completed", "turn 2 status == completed")
-        _assert(
-            not [
-                it
-                for it in second_payload["output"]
-                if it.get("type")
-                in ("function_call", "mcp_approval_request")
-                and it.get("name") == "__hosted_agent_adapter_interrupt__"
-            ],
-            "turn 2 does not re-interrupt after approve=true",
-        )
-        _assert(
-            "seattle" in _response_text(second_payload).lower(),
-            "turn 2 final text mentions seattle (tool ran with approved args)",
-        )
-
-        # ------------------------------------------------------------------
-        # Run B: reject via mcp_approval_response — the host should
-        # surface response.failed(code="interrupt_rejected").
-        # ------------------------------------------------------------------
-        conversation_b = f"e2e-hitl-reject-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run B — reject)", conversation_b)
-
-        _step("Run B turn 1 — POST /responses (expect approval prompt)")
-        firstb = _post(
-            server,
-            "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_b},
-            },
-            timeout=180.0,
-        )
-        _assert(
-            firstb.status_code == 200,
-            f"Run B turn 1 HTTP 200 (got {firstb.status_code})",
-        )
-        approvals_b = [
-            it
-            for it in firstb.json()["output"]
-            if it.get("type") == "mcp_approval_request"
-        ]
-        _assert(bool(approvals_b), "Run B turn 1 surfaces mcp_approval_request")
-        approval_id_b = approvals_b[0]["id"]
-
-        _step("Run B turn 2 — reject via mcp_approval_response")
-        secondb = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_b},
-                "input": [
-                    {
-                        "type": "mcp_approval_response",
-                        "approval_request_id": approval_id_b,
-                        "approve": False,
-                        "reason": "automated test rejection",
-                    }
-                ],
-            },
-            timeout=120.0,
-        )
-        _assert(
-            secondb.status_code == 200,
-            f"Run B turn 2 HTTP 200 (got {secondb.status_code})",
-        )
-        secondb_payload = secondb.json()
-        _assert(
-            secondb_payload["status"] == "failed",
-            f"Run B turn 2 status == failed (got {secondb_payload.get('status')!r})",
-        )
-        err = secondb_payload.get("error") or {}
-        _assert(
-            err.get("code") == "interrupt_rejected",
-            f"error.code == interrupt_rejected (got {err.get('code')!r})",
-        )
-        _assert(
-            approval_id_b in (err.get("message") or ""),
-            "rejection message references the interrupt id",
-        )
-
-        # ------------------------------------------------------------------
-        # Run C (advanced): override the proposed tool args via
-        # function_call_output (richer channel for non-vanilla clients).
-        # ------------------------------------------------------------------
-        conversation_c = f"e2e-hitl-override-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run C — function_call_output override)", conversation_c)
-
-        _step("Run C turn 1 — POST /responses (expect approval prompt)")
-        firstc = _post(
-            server,
-            "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_c},
-            },
-            timeout=180.0,
-        )
-        _assert(
-            firstc.status_code == 200,
-            f"Run C turn 1 HTTP 200 (got {firstc.status_code})",
-        )
-        interrupts_c = [
-            it
-            for it in firstc.json()["output"]
-            if it.get("type") == "function_call"
-            and it.get("name") == "__hosted_agent_adapter_interrupt__"
-        ]
-        _assert(bool(interrupts_c), "Run C turn 1 surfaces sentinel function_call")
-        call_id_c = interrupts_c[0]["call_id"]
-
-        _step("Run C turn 2 — override args via function_call_output")
-        override_payload = {
-            "resume": {
-                "tool": "get_weather",
-                "arguments": {"location": "Vancouver"},
-            }
-        }
-        secondc = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_c},
-                "input": [
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id_c,
-                        "output": json.dumps(override_payload),
-                    }
-                ],
-            },
-            timeout=300.0,
-        )
-        _assert(
-            secondc.status_code == 200,
-            f"Run C turn 2 HTTP 200 (got {secondc.status_code})",
-        )
-        secondc_payload = secondc.json()
-        _assert(
-            secondc_payload["status"] == "completed",
-            "Run C turn 2 status == completed",
-        )
-        _assert(
-            "vancouver" in _response_text(secondc_payload).lower(),
-            "Run C final text reflects the overridden location (Vancouver)",
-        )
+            )
+            check_results(payload, next_calls, "approve")
     finally:
         server.terminate()
 
