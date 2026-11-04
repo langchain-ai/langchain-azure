@@ -2,16 +2,16 @@
 
 This sample demonstrates an **approval-style HITL** flow using LangGraph's
 ``langgraph.types.interrupt``: before any tool runs, the graph pauses and
-asks the client to approve the proposed tool call. The pause is
+asks the client to review all tool calls from the same model turn. The pause is
 serialized to the wire as the **standard OpenAI ``mcp_approval_request``
 output item**, so any Responses-API client that already supports MCP
 server approvals can drive this agent without code changes.
 
 For each pending interrupt the host emits TWO paired output items in
-the same response, both keyed by the same LangGraph interrupt id:
+the same response, both referring to the same LangGraph interrupt id:
 
 * an ``mcp_approval_request`` item (``server_label == "langgraph"``,
-  ``arguments`` JSON contains the proposed tool call) — the
+  ``arguments`` JSON contains each call's ID, name, and arguments) — the
   OpenAI-standard channel; clients respond with an
   ``mcp_approval_response``, and
 * a ``function_call`` item with
@@ -41,12 +41,12 @@ tool::
     curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What is the weather in Seattle?","conversation":{"id":"demo-hitl-1"}}'
 
 The response ``output`` will contain an ``mcp_approval_request`` whose
-``arguments`` JSON describes the proposed tool call::
+``arguments`` JSON describes the complete proposed batch::
 
-    {"interrupt_id": "<id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
+    {"interrupt_id": "<id>", "value": {"tool_calls": [{"id": "<tool call id>", "name": "get_weather", "arguments": {"location": "Seattle"}}]}}
 
 **Primary path — approve via the standard MCP-approval channel.** The
-host resumes the graph and executes the tool::
+host resumes the graph and executes every call in the reviewed batch::
 
     curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"mcp_approval_response","approval_request_id":"<id>","approve":true}]}'
 
@@ -61,7 +61,7 @@ to inject a custom resume value or drive a LangGraph ``Command`` with
 ``update``/``goto`` fields, target the paired ``function_call`` item
 instead (its ``call_id`` is the same interrupt id)::
 
-    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"function_call_output","call_id":"<id>","output":"{\\"resume\\": {\\"tool\\":\\"get_weather\\",\\"arguments\\":{\\"location\\":\\"Vancouver\\"}}}"}]}'
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"conversation":{"id":"demo-hitl-1"},"input":[{"type":"function_call_output","call_id":"<id>","output":"{\\"resume\\": {\\"decisions\\":[{\\"id\\":\\"<tool call id>\\",\\"type\\":\\"edit\\",\\"arguments\\":{\\"location\\":\\"Vancouver\\"}}]}}"}]}'
 """
 
 from __future__ import annotations
@@ -150,25 +150,56 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any]) -> "object":
         return {"messages": [model.invoke(state["messages"])]}
 
     def approve_and_call_tool(state: MessagesState) -> dict:
-        """Approve every proposed call before executing any tools."""
+        """Review the whole model turn once, binding each decision to its call ID."""
         last = state["messages"][-1]
-        approved_calls: list[tuple[str, dict[str, Any]]] = []
-        for tool_call in last.tool_calls:  # type: ignore[attr-defined]
-            proposed: dict[str, Any] = {
-                "tool": tool_call["name"],
+        calls = [
+            {
+                "id": tool_call["id"],
+                "name": tool_call["name"],
                 "arguments": tool_call["args"],
             }
+            for tool_call in last.tool_calls  # type: ignore[attr-defined]
+        ]
+        proposed = {"tool_calls": calls}
+        review = interrupt(proposed)
+        if review == proposed:
+            decisions = [{"id": call["id"], "type": "approve"} for call in calls]
+        elif isinstance(review, dict) and isinstance(review.get("decisions"), list):
+            decisions = review["decisions"]
+        else:
+            raise ValueError("Expected the approved batch or ID-keyed decisions")
 
-            approved: Any = interrupt(proposed)
-            if not isinstance(approved, dict) or "tool" not in approved:
-                approved = proposed
-            approved_calls.append((tool_call["id"], approved))
+        if any(
+            not isinstance(decision, dict) or not isinstance(decision.get("id"), str)
+            for decision in decisions
+        ):
+            raise ValueError("Every decision must include a tool call ID")
+        decisions_by_id = {decision["id"]: decision for decision in decisions}
+        if len(decisions) != len(calls) or set(decisions_by_id) != {
+            call["id"] for call in calls
+        }:
+            raise ValueError("Expected exactly one decision for every proposed call ID")
+        for decision in decisions:
+            if decision.get("type") not in ("approve", "edit", "reject"):
+                raise ValueError("Decision type must be approve, edit, or reject")
+            if decision["type"] == "edit" and not isinstance(
+                decision.get("arguments"), dict
+            ):
+                raise ValueError("An edit decision must include arguments")
 
         messages = []
-        for tool_call_id, approved in approved_calls:
-            tool_fn = _TOOLS_BY_NAME[approved["tool"]]
-            result = tool_fn.invoke(approved.get("arguments") or {})
-            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call_id))
+        for call in calls:
+            decision = decisions_by_id[call["id"]]
+            if decision["type"] == "reject":
+                result = "Tool call rejected by the reviewer."
+            else:
+                arguments = (
+                    decision["arguments"]
+                    if decision["type"] == "edit"
+                    else call["arguments"]
+                )
+                result = _TOOLS_BY_NAME[call["name"]].invoke(arguments)
+            messages.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
         return {"messages": messages}
 
     def should_continue(state: MessagesState) -> str:
