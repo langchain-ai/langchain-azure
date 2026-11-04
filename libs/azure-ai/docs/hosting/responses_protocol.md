@@ -1,36 +1,61 @@
 # Responses hosting behavior
 
-## 1. Scope and defaults
+## 1. Interface
 
-This is a high-level summary of the default `ResponsesHostServer` on
-[main at `8fabe31`](https://github.com/langchain-ai/langchain-azure/commit/8fabe31),
-reviewed on 2026-11-04. Hosting is experimental. The lockfile uses Agent Server
-Core `2.3.0b2` and Responses `2.4.0b2`.
+`ResponsesHostServer` hosts a compiled LangGraph graph through the Responses
+protocol. Agent Server provides the protocol; this host handles graph input,
+output, and state. Hosting is experimental. See also
+[Invocations hosting](invocations_protocol.md).
 
-Agent Server provides the Responses protocol; this host maps requests to a
-LangGraph graph and converts its output. See also
-[Invocations hosting](invocations_protocol.md). ✓ means supported under the
-stated conditions; × means unsupported.
+### Dependencies
 
-| Control | Default | Purpose |
+Install `langchain-azure-ai[hosting]`. Key requirements from
+[the package manifest](../../pyproject.toml) are:
+
+| Package | Required version |
+| --- | --- |
+| `langchain` | `>=1.2.12,<2.0.0` |
+| `langgraph` | `>=1.2.16,<2.0` |
+| `azure-ai-agentserver-core` / `azure-ai-agentserver-responses` | `>=2.1.0b2,<3.0` |
+| `azure-ai-agentserver-invocations` | `>=1.1.0b1,<2.0` |
+
+Deep Agents is optional. Its graphs use the same LangGraph hosting interface;
+the [Deep Research sample](../../../../samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/requirements.txt)
+pins `deepagents==0.7.28`.
+
+### Constructor
+
+| Constructor parameter | Default | Purpose |
 | --- | --- | --- |
-| Request `store` | `true` | Retain the response for later retrieval. |
-| Host `store` (provider) | `None` (automatic) | Uses `FileResponseStore` locally or `FoundryStorageProvider` when hosted on Foundry; stores response records, items, status, and history. |
-| Host `conversation_chain_store` | `FoundryConversationChainStore` | Retain the checkpoint reference for the next linear turn. |
-| Request `stream` / `background` | `false` | Select SSE delivery / background execution. |
-| Server `resilient_background` / `steerable_conversations` | `False` | Enable restart recovery / steering. |
-| Host `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
-| Graph checkpointer | Application-supplied | Save graph state for later turns, interrupts, and recovery. |
+| `graph` | Required | The compiled graph to serve. |
+| `app` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
+| `options` | `None` | Use default `ResponsesServerOptions`: `resilient_background=False` and `steerable_conversations=False`. |
+| `store` | `None` (automatic) | Response provider: `FileResponseStore` locally or `FoundryStorageProvider` on Foundry. |
+| `conversation_chain_store` | `None` | Use `FoundryConversationChainStore` to retain the checkpoint reference for the next linear turn. |
+| `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
+| `prefix` | Empty | Add a prefix to the protocol routes. |
+| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
 
-The host's `store` selects a response provider; the request's `store` is a
-retention flag. When attaching to an existing `app`, configure its response
-provider on that app.
+When supplying `app`, configure its host-level settings, including response
+storage, on that app. The graph's checkpointer is supplied when compiling the
+graph. The constructor's `store` provider and the request's `store` retention
+flag are separate controls.
 
-Server options use `ResponsesServerOptions`. The [CLI](../../langchain_azure_ai/agents/hosting/run.py)
-supports `--protocol responses` and `--option NAME=VALUE`; branching is configured
-through the Python host constructor.
+Start serving with `run()` or `run_async()`; `.app` and `.graph` expose the
+underlying server and hosted graph. Subclasses can override input/configuration
+with `build_input()` and `build_runnable_config()`, HITL handling with
+`build_resume_command()` and `detect_rejection()`, or the handler with
+`handle_create()`. See the [host interface](../../langchain_azure_ai/agents/hosting/_responses_host.py)
+for details.
+
+The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
+`--protocol responses` and `--option NAME=VALUE`. Configure other constructor
+parameters, including `app` and branching, through Python.
 
 ## 2. Calling modes and input/output
+
+Request defaults are `store=true`, `stream=false`, and `background=false`.
+✓ means supported under the stated conditions; × means unsupported.
 
 Create, retrieve, cancel, delete, input-item listing, and SSE formatting follow
 [Agent Server Responses](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).

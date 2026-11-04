@@ -1,31 +1,47 @@
 # Invocations hosting behavior
 
-## 1. Scope and defaults
+## 1. Interface
 
-This is a high-level summary of the default `InvocationsHostServer` on
-[main at `8fabe31`](https://github.com/langchain-ai/langchain-azure/commit/8fabe31),
-reviewed on 2026-11-04. Hosting is experimental. The lockfile uses Agent Server
-Core `2.3.0b2`, Responses `2.4.0b2`, and Invocations `1.3.0b1`.
-
-[Agent Server Invocations](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
-provides HTTP routing and request context. This host defines the text/HITL body
-format and connects it to a LangGraph graph or compatible runnable. See
+`InvocationsHostServer` hosts a LangGraph graph or compatible runnable through
+HTTP invocations. Agent Server provides routing and request context; this host
+defines the text/HITL body format. Hosting is experimental. See
 [Responses hosting](responses_protocol.md) for richer input and output.
-✓ means supported under the stated conditions; × means unsupported.
 
-| Control | Default | Purpose |
+### Dependencies
+
+Install `langchain-azure-ai[hosting]`. The
+[shared dependency requirements](responses_protocol.md#dependencies) cover
+LangChain, LangGraph, and the three Agent Server packages. Deep Agents is
+optional and uses the same graph interface; its sample pin is listed there.
+
+### Constructor
+
+| Constructor parameter | Default | Purpose |
 | --- | --- | --- |
-| Request `stream` / `background` | `false` | Select SSE delivery / background execution. |
-| Server `resilient_background` / `steerable_conversations` | `False` | Enable background recovery / steering. |
-| Request `previous_invocation_id` | Unset | Require continuation from the latest invocation. |
-| Graph checkpointer | Application-supplied | Save graph state across turns, interrupts, and restarts. |
+| `graph` | Required | The graph or runnable to serve. |
+| `app` | `None` | Attach to an existing Invocations app, or create one when omitted. |
+| `options` | `None` | Use default `ResponsesServerOptions`: `resilient_background=False` and `steerable_conversations=False`. |
+| `output_parser` | `None` | Customize final response text extraction; the default uses the last AI message. |
+| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
 
-The Python constructor accepts server options through `ResponsesServerOptions`.
+When supplying `app`, configure its host-level settings on that app. The graph's
+checkpointer is supplied when compiling the graph. Start serving with `run()`
+or `run_async()`; `.app` and `.graph` expose the underlying server and runnable.
+
+Subclass hooks cover request parsing (`parse_request()`,
+`parse_execution_options()`), graph input (`build_input()`), configuration
+(`build_runnable_config()`, `build_task_runnable_config()`), and response text
+(`parse_output()`). See the [host interface](../../langchain_azure_ai/agents/hosting/_invoke_host.py)
+for details.
+
 The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
-`--protocol invocations`; configure these options through Python because
+`--protocol invocations`. Configure constructor parameters through Python;
 `--option` is only accepted for Responses.
 
 ## 2. Calling modes and input/output
+
+Request defaults are `stream=false` and `background=false`.
+✓ means supported under the stated conditions; × means unsupported.
 
 `POST /invocations` accepts a non-empty `message` string, or structured HITL
 answers described below. The default graph input uses `messages`; JSON
@@ -41,8 +57,9 @@ citations, and usage have no default structured output mapping here.
 | Background SSE | × | `background=true` with `stream=true` returns HTTP 400. |
 | SSE reconnect by cursor | × | There is no public stream-reconnect endpoint. |
 
-Enabling either server option puts all requests, including foreground requests,
-on the task-backed execution path. It also enables
+[Agent Server Invocations](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
+provides the HTTP endpoints. Enabling either server option puts all requests,
+including foreground requests, on the task-backed execution path. It also enables
 `GET /invocations/{id}` and `POST /invocations/{id}/cancel`. With both options
 off, requests execute directly. Background requests require
 `resilient_background=True` even when steering is enabled.
