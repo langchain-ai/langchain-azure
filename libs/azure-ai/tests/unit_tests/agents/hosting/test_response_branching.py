@@ -7,17 +7,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import multiprocessing
+import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
+from multiprocessing.connection import Connection
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, Literal, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from azure.ai.agentserver.core.platform_headers import USER_ID
+from azure.ai.agentserver.core.tasks import set_resilient_tasks_enabled
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     PlatformContext,
@@ -143,6 +149,135 @@ def _create(client: TestClient, *, stream: bool = False, **body: Any) -> dict[st
         ]
         return cast(dict[str, Any], events[-1]["response"])
     return cast(dict[str, Any], result.json())
+
+
+def _run_branch_crash_host(
+    state_root: str,
+    stream: bool,
+    recovery_response_id: str | None,
+    connection: Connection,
+) -> None:
+    os.environ["AGENTSERVER_STATE_ROOT"] = state_root
+    os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
+    os.environ.pop("FOUNDRY_AGENT_NAME", None)
+    os.environ.pop("FOUNDRY_AGENT_VERSION", None)
+    set_resilient_tasks_enabled(True)
+
+    async def run() -> None:
+        branch_started = Event()
+        branch_ids: list[str] = []
+        prepared: list[str] = []
+        recovered: list[bool] = []
+
+        async def prepare(state: MessagesState) -> dict[str, Any]:
+            prepared.append(str(state["messages"][-1].content))
+            return {}
+
+        async def answer(
+            state: MessagesState, config: RunnableConfig
+        ) -> dict[str, Any]:
+            text = "|".join(
+                str(message.content)
+                for message in state["messages"]
+                if isinstance(message, HumanMessage)
+            )
+            if text == "A|B":
+                context = config["configurable"]["response_context"]
+                if recovery_response_id is None:
+                    branch_ids.append(context.response_id)
+                    branch_started.set()
+                    await asyncio.Event().wait()
+                recovered.append(context.is_recovery)
+            return {"messages": [AIMessage(content=text)]}
+
+        async with AsyncSqliteSaver.from_conn_string(
+            str(Path(state_root) / "checkpoints.sqlite")
+        ) as saver:
+            builder = StateGraph(MessagesState)
+            builder.add_node("prepare", prepare)
+            builder.add_node("answer", answer)
+            builder.add_edge(START, "prepare")
+            builder.add_edge("prepare", "answer")
+            builder.add_edge("answer", END)
+            graph = builder.compile(checkpointer=saver)
+            server = ResponsesHostServer(
+                graph,
+                options=ResponsesServerOptions(resilient_background=True),
+                enable_response_branching=True,
+            )
+            provider = server.app._endpoint._provider
+
+            async def wait_for_response(response_id: str) -> ResponseObject:
+                async with asyncio.timeout(20):
+                    while True:
+                        response = await provider.get_response(response_id)
+                        if response is not None:
+                            if recovery_response_id is not None:
+                                if response["status"] not in {"queued", "in_progress"}:
+                                    return response
+                            else:
+                                reference = TaskStorageManager.from_stream(
+                                    ResponseEventStream(
+                                        response_id=response_id, response=response
+                                    )
+                                ).recovery_checkpoint_ref
+                                if reference is not None:
+                                    state = await graph.aget_state(_config(response))
+                                    if state.next == ("answer",):
+                                        return response
+                        await asyncio.sleep(0)
+
+            with TestClient(server.app) as client:
+                assert client.portal is not None
+                if recovery_response_id is None:
+                    parent = _create(client, input="A")
+                    stored_parent = client.portal.call(
+                        provider.get_response, parent["id"]
+                    )
+                    with ThreadPoolExecutor(max_workers=1) as requests:
+                        requests.submit(
+                            _create,
+                            client,
+                            input="B",
+                            previous_response_id=parent["id"],
+                            background=True,
+                            store=True,
+                            stream=stream,
+                        )
+                        assert branch_started.wait(10)
+                        progress = client.portal.call(
+                            wait_for_response, branch_ids[0]
+                        )
+                        sibling = _create(
+                            client, input="C", previous_response_id=parent["id"]
+                        )
+                        stored_sibling = client.portal.call(
+                            provider.get_response, sibling["id"]
+                        )
+                        connection.send((stored_parent, progress, stored_sibling))
+                        await asyncio.Event().wait()
+                else:
+                    response = client.portal.call(
+                        wait_for_response, recovery_response_id
+                    )
+                    stored = client.get(f"/responses/{recovery_response_id}")
+                    assert stored.status_code == 200, stored.text
+                    state = await graph.aget_state(_config(response))
+                    connection.send(
+                        (
+                            stored.json(),
+                            [
+                                message.content
+                                for message in state.values["messages"]
+                                if isinstance(message, HumanMessage)
+                            ],
+                            prepared,
+                            recovered,
+                        )
+                    )
+
+    with patch("azure.ai.agentserver.core._tracing._configure_tracing"):
+        asyncio.run(run())
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -358,6 +493,59 @@ def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -
     assert all(response.status_code == 200 for response in responses)
     assert all(response.json()["status"] == "completed" for response in responses)
     assert [_text(response.json()) for response in responses] == ["A|B", "A|C"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_branch_recovers_after_process_crash(tmp_path: Path, stream: bool) -> None:
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    processes = []
+    try:
+        crashing = context.Process(
+            target=_run_branch_crash_host,
+            args=(str(tmp_path), stream, None, sender),
+        )
+        processes.append(crashing)
+        crashing.start()
+        assert receiver.poll(30), "Branch did not persist its progress before crash"
+        parent, progress, sibling = receiver.recv()
+        assert progress["status"] == "in_progress"
+        assert _text(sibling) == "A|C"
+        assert (
+            _config(parent)["configurable"]["thread_id"]
+            == _config(progress)["configurable"]["thread_id"]
+        )
+        assert _config(progress) != _config(sibling)
+        crashing.kill()
+        crashing.join(10)
+        assert not crashing.is_alive()
+        assert crashing.exitcode != 0
+
+        recovering = context.Process(
+            target=_run_branch_crash_host,
+            args=(str(tmp_path), stream, progress["id"], sender),
+        )
+        processes.append(recovering)
+        recovering.start()
+        assert receiver.poll(30), "SDK did not automatically recover the branch"
+        response, messages, prepared, recovered = receiver.recv()
+        assert response["id"] == progress["id"]
+        assert response["previous_response_id"] == parent["id"]
+        assert response["status"] == "completed"
+        assert _text(response) == "A|B"
+        assert messages == ["A", "B"]
+        assert prepared == []
+        assert recovered == [True]
+        recovering.join(10)
+        assert recovering.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.kill()
+            process.join(10)
+            process.close()
+        receiver.close()
+        sender.close()
 
 
 @pytest.mark.parametrize("stream", [False, True])
