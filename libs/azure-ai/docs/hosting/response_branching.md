@@ -304,20 +304,20 @@ than an admission-time JSON error. Check the response status or terminal SSE
 event even when HTTP admission succeeded. Exact reference-error statuses and
 codes need the verification below.
 
-| Problem                                                                          | Result and action                                                                                                           |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Graph has a checkpointer and request sets `store=False`                          | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
-| Request includes `response_id`, an invalid parent ID, or both linkage fields     | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
-| Referenced response is missing or inaccessible                                   | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
-| `previous_response_id` refers to an unretained response                          | HTTP 404 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
-| Parent thread ID is missing, invalid, or belongs to another user during preflight | HTTP 404 JSON `previous_response_not_found` with a generic message. No SSE or graph execution.                                |
-| Owned parent has a missing or invalid checkpoint ID during preflight               | HTTP 400 JSON `invalid_request_error` for the selected parent. No SSE or graph execution.                                   |
-| Input contains approval or tool-result replies                                   | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
-| Exact checkpoint is missing or mismatched during preflight                       | HTTP 400 JSON `invalid_request_error` for the selected parent. No fallback to a latest checkpoint.                          |
-| Unexpected provider or checkpointer exception during preflight                   | HTTP 500 JSON `server_error` with a generic message; internal details are logged. No SSE or graph execution.                |
-| Checkpoint is lost or mismatched after HTTP admission                            | Failed response with `server_error`: `status="failed"` or SSE `response.failed`. HTTP admission has already succeeded.      |
-| Graph checkpoint write fails                                                     | Failed response. Progress is not published for the missing checkpoint; investigate the saver backend.                       |
-| SDK terminal response storage fails                                              | The graph checkpoint alone cannot serve as a parent. Check SDK storage errors and the stored response status.               |
+| Problem                                                                           | Result and action                                                                                                           |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Graph has a checkpointer and request sets `store=False`                           | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
+| Request includes `response_id`, an invalid parent ID, or both linkage fields      | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
+| Referenced response is missing or inaccessible                                    | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
+| `previous_response_id` refers to an unretained response                           | HTTP 404 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
+| Parent thread ID is missing, invalid, or belongs to another user during preflight | HTTP 404 JSON `previous_response_not_found` with a generic message. No SSE or graph execution.                              |
+| Owned parent has a missing or invalid checkpoint ID during preflight              | HTTP 400 JSON `invalid_request_error` for the selected parent. No SSE or graph execution.                                   |
+| Input contains approval or tool-result replies                                    | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
+| Exact checkpoint is missing or mismatched during preflight                        | HTTP 400 JSON `invalid_request_error` for the selected parent. No fallback to a latest checkpoint.                          |
+| Unexpected provider or checkpointer exception during preflight                    | HTTP 500 JSON `server_error` with a generic message; internal details are logged. No SSE or graph execution.                |
+| Checkpoint is lost or mismatched after HTTP admission                             | Failed response with `server_error`: `status="failed"` or SSE `response.failed`. HTTP admission has already succeeded.      |
+| Graph checkpoint write fails                                                      | Failed response. Progress is not published for the missing checkpoint; investigate the saver backend.                       |
+| SDK terminal response storage fails                                               | The graph checkpoint alone cannot serve as a parent. Check SDK storage errors and the stored response status.               |
 
 - The supported deployment is one host process (one worker), not multiple host
   processes or distributed workers. Concurrent branch requests within that host
