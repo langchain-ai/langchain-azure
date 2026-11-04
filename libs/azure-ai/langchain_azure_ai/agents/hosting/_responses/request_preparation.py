@@ -1,4 +1,4 @@
-"""Validate Responses requests before HTTP streaming or graph execution."""
+"""Prepare Responses requests for HTTP preflight and graph execution."""
 
 from __future__ import annotations
 
