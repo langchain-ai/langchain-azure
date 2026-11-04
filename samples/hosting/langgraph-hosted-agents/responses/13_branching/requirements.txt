@@ -1,6 +1,6 @@
-langchain-azure-ai[hosting,opentelemetry]
-langchain
-langchain-openai
-httpx
-python-dotenv
-opentelemetry-exporter-otlp-proto-http>=1.37
+langchain-azure-ai[hosting,opentelemetry]==1.3.0
+langchain==1.4.8
+langchain-openai==1.7.3
+httpx==0.28.1
+python-dotenv==1.2.4
+opentelemetry-exporter-otlp-proto-http==1.45.2
