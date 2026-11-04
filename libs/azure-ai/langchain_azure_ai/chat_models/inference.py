@@ -599,8 +599,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
         response = self._client.complete(
             messages=inference_messages,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         return self._create_chat_result(response)  # type: ignore[arg-type]
 
@@ -615,8 +614,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
         response = await self._async_client.complete(
             messages=inference_messages,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         return self._create_chat_result(response)  # type: ignore[arg-type]
 
@@ -634,8 +632,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             messages=inference_messages,
             stream=True,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         assert isinstance(response, Iterator)
 
@@ -666,8 +663,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             messages=inference_messages,
             stream=True,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         assert isinstance(response, AsyncIterator)
 

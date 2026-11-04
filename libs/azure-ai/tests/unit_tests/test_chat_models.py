@@ -579,3 +579,51 @@ def test_identifying_params_omit_unset_values() -> None:
         )
 
     assert llm._identifying_params == {}
+
+
+class _StopCall(Exception):
+    """Raised by the fake client once the request kwargs were captured."""
+
+
+@pytest.mark.parametrize("path", ["generate", "agenerate", "stream", "astream"])
+def test_per_call_override_wins_over_model_defaults(path: str) -> None:
+    """A per-call value replaces the model default even when that default is 0."""
+    with mock.patch(
+        "langchain_azure_ai.chat_models.inference.ChatCompletionsClient", autospec=True
+    ):
+        llm = AzureAIChatCompletionsModel(
+            endpoint="https://my-endpoint.inference.ai.azure.com",
+            credential="my-api-key",
+            model="my-model",
+            temperature=0,
+        )
+
+    captured: dict[str, Any] = {}
+
+    def fake_complete(**kwargs: Any) -> None:
+        captured.update(kwargs)
+        raise _StopCall
+
+    async def fake_acomplete(**kwargs: Any) -> None:
+        fake_complete(**kwargs)
+
+    llm._client = mock.Mock(complete=fake_complete)
+    llm._async_client = mock.Mock(complete=fake_acomplete)
+    messages = [HumanMessage(content="hi")]
+
+    async def run_async() -> None:
+        if path == "agenerate":
+            await llm._agenerate(messages, temperature=0.5)
+        else:
+            async for _ in llm._astream(messages, temperature=0.5):
+                pass
+
+    with pytest.raises(_StopCall):
+        if path == "generate":
+            llm._generate(messages, temperature=0.5)
+        elif path == "stream":
+            list(llm._stream(messages, temperature=0.5))
+        else:
+            asyncio.run(run_async())
+
+    assert captured["temperature"] == 0.5
