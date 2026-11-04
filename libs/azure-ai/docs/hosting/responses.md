@@ -10,7 +10,7 @@ graph input, output, and state. See also
 
 ### Dependencies
 
-Install `langchain-azure-ai[hosting]>=1.3.0`. It includes
+Install `langchain-azure-ai[hosting]`. It includes
 [LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph,
 and the Agent Server SDK. Dependency ranges are declared in
 [the package manifest](../../pyproject.toml).
