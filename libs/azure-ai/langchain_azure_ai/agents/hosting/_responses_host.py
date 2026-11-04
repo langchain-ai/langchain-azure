@@ -254,7 +254,8 @@ def _validate_response_branching_checkpointer(checkpointer: object) -> None:
 
 
 def _uses_langgraph_checkpointer(graph: "CompiledStateGraph") -> bool:
-    return getattr(graph, "checkpointer", None) is not None
+    checkpointer = getattr(graph, "checkpointer", None)
+    return checkpointer is not None and checkpointer is not False
 
 
 def _is_in_memory_checkpointer(checkpointer: Any) -> bool:

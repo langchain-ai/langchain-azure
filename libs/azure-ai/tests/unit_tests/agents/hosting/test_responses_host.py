@@ -1153,13 +1153,16 @@ def test_store_false_is_rejected_before_execution(
 @pytest.mark.parametrize("prefix", ["", "/v1"])
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("checkpointer", [None, False], ids=["default", "disabled"])
 def test_store_false_without_checkpointer_does_not_persist(
     monkeypatch: pytest.MonkeyPatch,
     streaming: bool,
     prefix: str,
     background: bool,
+    checkpointer: bool | None,
 ) -> None:
-    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    graph = make_echo_graph().builder.compile(checkpointer=checkpointer)
+    server = ResponsesHostServer(graph, prefix=prefix)
     graph_stream = MagicMock(wraps=server.graph.astream)
     monkeypatch.setattr(server.graph, "astream", graph_stream)
     provider = server.app._endpoint._provider
