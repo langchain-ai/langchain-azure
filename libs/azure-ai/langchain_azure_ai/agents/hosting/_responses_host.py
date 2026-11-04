@@ -858,7 +858,12 @@ class ResponsesHostServer:
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
-                response = await _load_parent_response(response_id, context)
+                key = (id(provider), _scope_thread_id("", context), response_id)
+                response = _request_selection(context).parents.get(key)
+                if response is None:
+                    response = await provider.get_response(
+                        response_id, context=context.platform_context
+                    )
             except Exception:
                 logger.debug(
                     "Failed to resolve response chain for thread mapping",
