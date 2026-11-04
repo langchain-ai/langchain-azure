@@ -28,18 +28,20 @@ See [main.py](main.py) for the full implementation.
 The graph has two nodes:
 
 - `agent` — invokes the chat model.
-- `approve_and_call_tool` — pauses **once for the whole model turn** with
+- `approve_and_call_tool` — pauses **for the whole model turn** with
   `langgraph.types.interrupt({"tool_calls": [...]})`, preserving every call's
   ID, name, and arguments. A standard MCP approval approves the whole batch.
   The rich channel accepts per-call approve/edit/reject decisions, matched by
   call ID rather than list position. The node validates the entire decision
-  set before executing any tools and emits one `ToolMessage` per original ID.
+  set and every accepted call's final arguments against its tool input schema
+  before executing any tools, then emits one `ToolMessage` per original ID.
 
 Do not loop over `interrupt()` in the same node to ask separate approval
 questions: those pauses share an interrupt ID, so retrying the previous
-approval could approve the next call. A single batch pause avoids that
-ambiguity and keeps tool execution after the only interrupt, rather than
-repeating execution on each [node replay](https://docs.langchain.com/oss/python/langgraph/interrupts#rules-of-interrupts).
+approval could approve the next call. Every review here presents the **same
+complete batch**; validation retries never advance to another individual call.
+All tool execution remains after successful validation, so invalid decisions
+cannot repeat earlier tool executions on [node replay](https://docs.langchain.com/oss/python/langgraph/interrupts#rules-of-interrupts).
 
 When the graph pauses, the host serializes the pending interrupt as
 **two** output items in the same response, both referring to the same
@@ -197,8 +199,21 @@ To decide per call, target the paired `function_call` item via
 call ID. `approve` keeps the original arguments, `edit` supplies replacement
 arguments without changing the tool name, and `reject` returns a rejection
 `ToolMessage` without executing that call. Missing, duplicate, or unknown IDs
-and invalid decision types fail before any tools execute. Decisions may be
+and invalid decision types are rejected before any tools execute. Edited
+arguments must also satisfy the tool's input schema; a dictionary alone is
+not enough (for example, `get_weather` requires `location`). Decisions may be
 returned in any order.
+
+An invalid review does **not** fail and strand the paused turn. The response
+contains a new approval prompt with the same original `tool_calls` and a
+`validation_error` explanation. Send a complete corrected decision set to that
+prompt's paired `function_call.call_id`, or use the latest MCP approval to
+approve the **original** proposed arguments, discarding the invalid edits.
+Repeating an invalid review simply re-prompts for that same batch.
+
+This preflight prevents argument-validation failures from partially executing
+a batch. It is not a transaction or an exactly-once guarantee for failures
+during tool execution.
 
 For a batch containing a single Seattle call, this changes its arguments:
 

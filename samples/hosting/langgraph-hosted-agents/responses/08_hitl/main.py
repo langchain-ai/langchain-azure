@@ -150,7 +150,7 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any]) -> "object":
         return {"messages": [model.invoke(state["messages"])]}
 
     def approve_and_call_tool(state: MessagesState) -> dict:
-        """Review the whole model turn once, binding each decision to its call ID."""
+        """Review the whole turn, retrying invalid decisions before any tools run."""
         last = state["messages"][-1]
         calls = [
             {
@@ -160,32 +160,64 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any]) -> "object":
             }
             for tool_call in last.tool_calls  # type: ignore[attr-defined]
         ]
-        proposed = {"tool_calls": calls}
-        review = interrupt(proposed)
-        if review == proposed:
-            decisions = [{"id": call["id"], "type": "approve"} for call in calls]
-        elif isinstance(review, dict) and isinstance(review.get("decisions"), list):
-            decisions = review["decisions"]
-        else:
-            raise ValueError("Expected the approved batch or ID-keyed decisions")
+        proposed: dict[str, Any] = {"tool_calls": calls}
+        while True:
+            review = interrupt(proposed)
+            try:
+                if review == proposed:
+                    decisions = [
+                        {"id": call["id"], "type": "approve"} for call in calls
+                    ]
+                elif isinstance(review, dict) and isinstance(
+                    review.get("decisions"), list
+                ):
+                    decisions = review["decisions"]
+                else:
+                    raise ValueError(
+                        "Expected the approved batch or ID-keyed decisions"
+                    )
 
-        if any(
-            not isinstance(decision, dict) or not isinstance(decision.get("id"), str)
-            for decision in decisions
-        ):
-            raise ValueError("Every decision must include a tool call ID")
-        decisions_by_id = {decision["id"]: decision for decision in decisions}
-        if len(decisions) != len(calls) or set(decisions_by_id) != {
-            call["id"] for call in calls
-        }:
-            raise ValueError("Expected exactly one decision for every proposed call ID")
-        for decision in decisions:
-            if decision.get("type") not in ("approve", "edit", "reject"):
-                raise ValueError("Decision type must be approve, edit, or reject")
-            if decision["type"] == "edit" and not isinstance(
-                decision.get("arguments"), dict
-            ):
-                raise ValueError("An edit decision must include arguments")
+                if any(
+                    not isinstance(decision, dict)
+                    or not isinstance(decision.get("id"), str)
+                    for decision in decisions
+                ):
+                    raise ValueError("Every decision must include a tool call ID")
+                decisions_by_id = {decision["id"]: decision for decision in decisions}
+                if len(decisions) != len(calls) or set(decisions_by_id) != {
+                    call["id"] for call in calls
+                }:
+                    raise ValueError(
+                        "Expected exactly one decision for every proposed call ID"
+                    )
+                for decision in decisions:
+                    if decision.get("type") not in ("approve", "edit", "reject"):
+                        raise ValueError(
+                            "Decision type must be approve, edit, or reject"
+                        )
+                    if decision["type"] == "edit" and not isinstance(
+                        decision.get("arguments"), dict
+                    ):
+                        raise ValueError("An edit decision must include arguments")
+
+                arguments_by_id: dict[str, dict[str, Any]] = {}
+                for call in calls:
+                    decision = decisions_by_id[call["id"]]
+                    if decision["type"] == "reject":
+                        continue
+                    arguments = (
+                        decision["arguments"]
+                        if decision["type"] == "edit"
+                        else call["arguments"]
+                    )
+                    schema = _TOOLS_BY_NAME[call["name"]].get_input_schema()
+                    arguments_by_id[call["id"]] = schema.model_validate(
+                        arguments
+                    ).model_dump()
+            except ValueError as error:
+                proposed = {"tool_calls": calls, "validation_error": str(error)}
+                continue
+            break
 
         messages = []
         for call in calls:
@@ -193,12 +225,9 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any]) -> "object":
             if decision["type"] == "reject":
                 result = "Tool call rejected by the reviewer."
             else:
-                arguments = (
-                    decision["arguments"]
-                    if decision["type"] == "edit"
-                    else call["arguments"]
+                result = _TOOLS_BY_NAME[call["name"]].invoke(
+                    arguments_by_id[call["id"]]
                 )
-                result = _TOOLS_BY_NAME[call["name"]].invoke(arguments)
             messages.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
         return {"messages": messages}
 

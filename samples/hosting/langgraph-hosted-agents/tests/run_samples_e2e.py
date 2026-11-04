@@ -874,7 +874,7 @@ def check_07_observability() -> None:
 
 def check_06_pause_then_resume() -> None:
     """responses/08_hitl: whole-turn approval, ID-bound edits/rejections,
-    matching tool results, and stale approval retries across batches.
+    validation recovery, matching tool results, and stale approval retries.
     """
     requires_foundry_endpoint()
     server = start_sample("responses/08_hitl/main.py")
@@ -913,7 +913,7 @@ def check_06_pause_then_resume() -> None:
             "both channels describe the same batch interrupt",
         )
         calls = envelope["value"]["tool_calls"]
-        _assert(len(calls) == len(cities), "all calls visible in the first pause")
+        _assert(len(calls) == len(cities), "all calls visible in the batch review")
         _assert(
             len({call["id"] for call in calls}) == len(calls)
             and all(isinstance(call["id"], str) and call["id"] for call in calls),
@@ -935,7 +935,7 @@ def check_06_pause_then_resume() -> None:
             not any(
                 item.get("type") == "function_call_output" for item in payload["output"]
             ),
-            "no tools executed before batch review",
+            "no tool results emitted during batch review",
         )
         return approvals[0]["id"], interrupts[0]["call_id"], calls
 
@@ -976,7 +976,17 @@ def check_06_pause_then_resume() -> None:
             )
 
     try:
-        for decision in ["approve", "edit", "reject", "mixed", "partial"]:
+        for decision in [
+            "approve",
+            "edit",
+            "reject",
+            "mixed",
+            "partial",
+            "partial_approve",
+            "invalid_arguments",
+            "invalid_arguments_approve",
+        ]:
+            recovering = decision.startswith(("partial", "invalid_arguments"))
             conversation_id = f"e2e-hitl-{decision}-{uuid.uuid4().hex[:8]}"
             _step(f"{decision}: review Seattle and Paris together")
             payload = post_response(
@@ -992,19 +1002,22 @@ def check_06_pause_then_resume() -> None:
                 "approve": decision != "reject",
             }
             resume: dict[str, Any] = approval
-            if decision in ("edit", "mixed", "partial"):
+            if decision in ("edit", "mixed") or recovering:
                 decisions = []
                 for call in reversed(calls):
                     choice: dict[str, Any] = {"id": call["id"], "type": "approve"}
-                    if (
-                        decision != "partial"
-                        and "paris" in call["arguments"]["location"].lower()
-                    ):
-                        choice["type"] = "edit" if decision == "edit" else "reject"
-                        if decision == "edit":
-                            choice["arguments"] = {"location": "Vancouver"}
+                    if "paris" in call["arguments"]["location"].lower():
+                        if decision == "edit" or decision.startswith(
+                            "invalid_arguments"
+                        ):
+                            choice["type"] = "edit"
+                            choice["arguments"] = (
+                                {} if recovering else {"location": "Vancouver"}
+                            )
+                        elif decision == "mixed":
+                            choice["type"] = "reject"
                     decisions.append(choice)
-                if decision == "partial":
+                if decision.startswith("partial"):
                     decisions = decisions[:1]
                 resume = {
                     "type": "function_call_output",
@@ -1012,18 +1025,44 @@ def check_06_pause_then_resume() -> None:
                     "output": json.dumps({"resume": {"decisions": decisions}}),
                 }
             payload = post_response(conversation_id, [resume])
-            if decision == "partial":
-                _assert(
-                    payload["status"] == "failed", "partial decisions fail the turn"
-                )
-                _assert(
-                    not any(
-                        item.get("type") == "function_call_output"
+            if recovering:
+                for attempt in range(2):
+                    retry_approval_id, retry_call_id, retry_calls = review_batch(
+                        payload, ["Seattle", "Paris"]
+                    )
+                    _assert(
+                        retry_call_id == call_id and retry_calls == calls,
+                        "invalid decisions keep the complete original batch pending",
+                    )
+                    error = next(
+                        json.loads(item["arguments"])["value"].get("validation_error")
                         for item in payload["output"]
-                    ),
-                    "no tools executed for a partial decision set",
-                )
-                continue
+                        if item.get("type") == "mcp_approval_request"
+                    )
+                    _assert(bool(error), "review prompt explains the validation error")
+                    if attempt == 0:
+                        payload = post_response(conversation_id, [resume])
+                if decision.endswith("_approve"):
+                    correction = {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": retry_approval_id,
+                        "approve": True,
+                    }
+                else:
+                    corrected = []
+                    for call in reversed(calls):
+                        choice = {"id": call["id"], "type": "approve"}
+                        if "paris" in call["arguments"]["location"].lower():
+                            choice.update(
+                                type="edit", arguments={"location": "Vancouver"}
+                            )
+                        corrected.append(choice)
+                    correction = {
+                        "type": "function_call_output",
+                        "call_id": retry_call_id,
+                        "output": json.dumps({"resume": {"decisions": corrected}}),
+                    }
+                payload = post_response(conversation_id, [correction])
             if decision == "reject":
                 _assert(
                     payload["status"] == "failed"
@@ -1035,10 +1074,13 @@ def check_06_pause_then_resume() -> None:
                         item.get("type") == "function_call_output"
                         for item in payload["output"]
                     ),
-                    "rejected batch executes no tools",
+                    "rejected batch emits no tool results",
                 )
                 continue
-            check_results(payload, calls, decision)
+            expected_decision = (
+                "edit" if recovering and not decision.endswith("_approve") else decision
+            )
+            check_results(payload, calls, expected_decision)
             if decision != "approve":
                 continue
 
