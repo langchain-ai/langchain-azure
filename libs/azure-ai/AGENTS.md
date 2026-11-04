@@ -11,7 +11,9 @@ Apply these instructions to `libs/azure-ai/` in addition to the [repository inst
 
 ## Change Scope and Reviewability
 
-- Keep feature PRs focused and small enough for comfortable human review. Avoid bundling unrelated refactors or cleanup.
+- Keep feature PRs focused and reviewable; exclude unrelated refactors, cleanup, and pre-existing bug fixes unless the feature requires them.
+- Compare suspected issues against the PR base before reporting them; pre-existing issues are non-blocking unless the feature requires a fix.
+- Prefer consistent behavior across existing and new feature paths. If alignment expands scope, document temporary differences with TODOs for a follow-up PR. Accept deferral of unrelated fixes or alignment when the feature works correctly without regressions.
 - When scope analysis shows a feature is too large for one reviewable PR, plan independently reviewable, working increments, each with its required tests and documentation. Record the plan and a TODO checklist in the relevant design or feature documentation, clearly separating the current PR's scope from deferred work.
 
 ## Public APIs and Documentation
