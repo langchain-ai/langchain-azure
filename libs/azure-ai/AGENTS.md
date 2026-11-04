@@ -6,7 +6,13 @@ Apply these instructions to `libs/azure-ai/` in addition to the [repository inst
 
 - Keep implementations concise, focused, and self-documenting through descriptive names, precise type hints, and straightforward control flow. Preserve correctness and clarity when simplifying code.
 - Reuse existing helpers and upstream abstractions; add new abstractions only when they solve a concrete need.
+- Keep directory and module organization consistent with existing conventions. Avoid excessively long files; split code by cohesive responsibilities when it improves readability and navigation, without unnecessary fragmentation.
 - Keep internal comments sparse. Explain non-obvious rationale or constraints rather than narrating what the code does.
+
+## Change Scope and Reviewability
+
+- Keep feature PRs focused and small enough for comfortable human review. Avoid bundling unrelated refactors or cleanup.
+- When scope analysis shows a feature is too large for one reviewable PR, plan independently reviewable, working increments, each with its required tests and documentation. Record the plan and a TODO checklist in the relevant design or feature documentation, clearly separating the current PR's scope from deferred work.
 
 ## Public APIs and Documentation
 
@@ -22,6 +28,8 @@ Apply these instructions to `libs/azure-ai/` in addition to the [repository inst
 - Consult the upstream documentation and relevant implementations when designing integrations or when API contracts or compatibility are uncertain. Verify behavior against the supported versions, not only the latest release.
 
 ## Agent Hosting
+
+- Treat performance as a critical requirement when changing hosting code. Avoid unnecessary or duplicate reads and writes to storage backends, checkpoint stores, response stores, and other persistence layers. Reuse data already available within the same request or execution when safe, without weakening durability, consistency, or isolation guarantees.
 
 When working on agent hosting, consult these upstream SDK implementations as needed:
 
