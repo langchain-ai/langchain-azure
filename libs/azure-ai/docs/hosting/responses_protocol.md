@@ -15,10 +15,16 @@ stated conditions; × means unsupported.
 | Control | Default | Purpose |
 | --- | --- | --- |
 | Request `store` | `true` | Retain the response for later retrieval. |
+| Host `store` (provider) | `None` (automatic) | Uses `FileResponseStore` locally or `FoundryStorageProvider` when hosted on Foundry; stores response records, items, status, and history. |
+| Host `conversation_chain_store` | `FoundryConversationChainStore` | Retain the checkpoint reference for the next linear turn. |
 | Request `stream` / `background` | `false` | Select SSE delivery / background execution. |
 | Server `resilient_background` / `steerable_conversations` | `False` | Enable restart recovery / steering. |
 | Host `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
 | Graph checkpointer | Application-supplied | Save graph state for later turns, interrupts, and recovery. |
+
+The host's `store` selects a response provider; the request's `store` is a
+retention flag. When attaching to an existing `app`, configure its response
+provider on that app.
 
 Server options use `ResponsesServerOptions`. The [CLI](../../langchain_azure_ai/agents/hosting/run.py)
 supports `--protocol responses` and `--option NAME=VALUE`; branching is configured
