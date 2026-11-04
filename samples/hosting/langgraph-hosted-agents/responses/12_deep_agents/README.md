@@ -36,9 +36,9 @@ For now, use one of these workarounds:
   uses a private Deep Agents reducer; see [Deep Agents #7376](https://github.com/langchain-ai/deepagents/issues/7376).
 - Use a compatible Deep Agents version without `DeltaChannel`.
 
-Full-value checkpoints write more data. Start new conversation threads when
-changing schemas or versions; compatibility with existing delta histories has
-not been validated. `CosmosDBSaver` bulk-loads delta history and is not affected
+Full-value checkpoints write more data. If you change this sample's state schema
+or Deep Agents version, test restoring your existing checkpoints before resuming
+those conversations. `CosmosDBSaver` bulk-loads delta history and is not affected
 by this State Store limitation.
 
 ## Setup and run
