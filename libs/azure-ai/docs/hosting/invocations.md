@@ -1,19 +1,20 @@
-# Invocations hosting behavior
+# Invocations hosting overview
 
 ## 1. Interface
 
 [`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) hosts a [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph or
 compatible runnable through HTTP invocations. The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides
 routing and request context; this host defines the text and
-[human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) request formats. Hosting is experimental. See
-[Responses hosting](responses_protocol.md) for richer input and output.
+[human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) request formats. See
+[Responses hosting](responses.md) for richer input and output.
 
 ### Dependencies
 
 Install `langchain-azure-ai[hosting]>=1.3.0`. The
-[shared dependency requirements](responses_protocol.md#dependencies) cover
-[LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph, and the three Agent Server packages. [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is
-optional and uses the same graph interface; its sample pin is listed there.
+[shared dependency requirements](responses.md#dependencies) cover
+[LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph,
+and the Agent Server SDK. [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
+is optional and uses the same graph interface.
 
 ### Constructor
 
@@ -72,7 +73,7 @@ An in-memory saver retains state within one process; restart recovery requires
 a persistent saver. Protocol result storage and graph state have separate
 lifetimes.
 
-The same [graph storage choices](responses_protocol.md#storage-choices) apply
+The same [graph storage choices](responses.md#storage-choices) apply
 here: [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) for the
 [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver)
 for [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview) checkpoints.
@@ -108,7 +109,7 @@ to a LangGraph resume command. This works with foreground JSON/SSE and
 background polling.
 
 > [!NOTE]
-> The [two HITL reply paths and event examples](responses_protocol.md#human-in-the-loop)
+> The [two HITL reply paths and event examples](responses.md#human-in-the-loop)
 > also apply here. Put the reply items in `message` and reuse `agent_session_id`;
 > Responses uses `input`.
 

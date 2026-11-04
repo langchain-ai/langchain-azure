@@ -1,28 +1,22 @@
-# Responses hosting behavior
+# Responses hosting overview
 
 ## 1. Interface
 
 [`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) hosts a compiled
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph through the [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
 The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides the protocol; this host handles
-graph input, output, and state. Hosting is experimental. See also
-[Invocations hosting](invocations_protocol.md).
+graph input, output, and state. See also
+[Invocations hosting](invocations.md).
 
 ### Dependencies
 
-Install `langchain-azure-ai[hosting]>=1.3.0`. Key requirements from
-[the package manifest](../../pyproject.toml) are:
+Install `langchain-azure-ai[hosting]>=1.3.0`. It includes
+[LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph,
+and the Agent Server SDK. Dependency ranges are declared in
+[the package manifest](../../pyproject.toml).
 
-| Package | Required version |
-| --- | --- |
-| [`langchain`](https://docs.langchain.com/oss/python/langchain/overview) | `>=1.2.12,<2.0.0` |
-| `langgraph` | `>=1.2.16,<2.0` |
-| `azure-ai-agentserver-core` / `azure-ai-agentserver-responses` | `>=2.1.0b2,<3.0` |
-| `azure-ai-agentserver-invocations` | `>=1.1.0b1,<2.0` |
-
-[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is optional. Its graphs use the same LangGraph hosting interface;
-the [Deep Research sample](../../../../samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/requirements.txt)
-pins `deepagents==0.7.28`.
+[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is optional
+and uses the same LangGraph hosting interface.
 
 ### Constructor
 

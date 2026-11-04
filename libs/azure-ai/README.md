@@ -215,8 +215,8 @@ if __name__ == "__main__":
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
 For current feature support and configuration combinations, see
-[Responses protocol](docs/hosting/responses_protocol.md) and
-[Invocations protocol](docs/hosting/invocations_protocol.md).
+[Responses hosting overview](docs/hosting/responses.md) and
+[Invocations hosting overview](docs/hosting/invocations.md).
 
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
