@@ -269,7 +269,7 @@ Checkpointed multi-turn conversations use an explicit `conversation.id`
 or run with `steerable_conversations=True`. Both modes are linear and preserve
 the latest LangGraph checkpoint for subsequent turns.
 
-To branch from a completed response instead, enable
+**[Experimental] Response branching:** To branch from a completed response, enable
 `ResponsesHostServer(graph, enable_response_branching=True)` with a
 history-preserving checkpointer, steering disabled, and no externally supplied
 `app`. Send
@@ -279,8 +279,8 @@ referencing the same parent create independent siblings. Each child saves its
 own checkpoint reference without advancing the shared conversation head.
 The parent response and its checkpoint must still be retained, and the graph
 must have finished; paused-parent branching is not supported.
-This option does not add request-instruction isolation or crash-recovery
-enhancements. When disabled, the existing execution path is unchanged.
+See the [response branching design](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md)
+for the target contract and current implementation gaps.
 
 For checkpointed graphs, each request resolves its saved input checkpoint reference
 once, including the saved task reference on recovery. Interrupt inspection and
@@ -382,6 +382,23 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 
 ## Changelog
+
+- **1.3.0**:
+
+  - **[NEW, Experimental]** We introduced opt-in response branching through `ResponsesHostServer(graph, enable_response_branching=True)`. Requests with `previous_response_id` start from the completed parent's exact saved checkpoint, creating independent siblings without advancing the shared conversation head. This requires a retained parent, a history-preserving async checkpointer, steering disabled, and no externally supplied `app`; paused-parent branching is not supported. See the [design document](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md) for usage scenarios and implementation gaps. [#1263](https://github.com/langchain-ai/langchain-azure/pull/1263) [#1260](https://github.com/langchain-ai/langchain-azure/pull/1260) [#1288](https://github.com/langchain-ai/langchain-azure/pull/1288)
+  - **[NEW]** We added `toolbox_version` to `AzureAIProjectToolbox` to select a specific toolbox version. Omitting it or setting it to `None` keeps the default toolbox endpoint. [#1294](https://github.com/langchain-ai/langchain-azure/pull/1294)
+  - **[Breaking]** We made `ResponsesHostServer` reject `store=False` with HTTP 400 before streaming or graph execution when a LangGraph checkpointer is configured. Clients must omit `store` or set `store=True`; foreground requests without a checkpointer still support `store=False`. Parent-response and branch-checkpoint validation also runs before streaming, returning HTTP 400/404 for invalid requests and a redacted HTTP 500 for unexpected backend failures. Clients must handle these HTTP errors before consuming Response or SSE events. [#1290](https://github.com/langchain-ai/langchain-azure/pull/1290)
+  - **[Breaking]** We removed `build_runnable_config_sync()` from the experimental `ResponsesHostServer`. Callers must use `await server.build_runnable_config(request, context)`. [#1250](https://github.com/langchain-ai/langchain-azure/pull/1250)
+  - **[Breaking]** We removed isolation and TTL mismatch validation from `FoundryCheckpointSaver` and `FoundryConversationChainStore`. Existing stores retain their settings without rejecting mismatches. The chain store's `on_mismatch` argument is now a deprecated compatibility option; `"fail"` no longer rejects mismatches. Applications must provision existing stores with the intended isolation and TTL. [#1235](https://github.com/langchain-ai/langchain-azure/pull/1235)
+  - **[Breaking]** We changed Responses execution errors from `internal_error` with exception details to `server_error` with the fixed message `An internal error occurred.`. Clients must update error-code handling and use server logs for details. [#1232](https://github.com/langchain-ai/langchain-azure/pull/1232)
+  - We fixed HITL resumes by requiring `langgraph>=1.2.16,<2.0`, preventing completed tasks and their side effects from running again when outstanding interrupts are answered. [#1258](https://github.com/langchain-ai/langchain-azure/pull/1258)
+  - We fixed Azure AI Inference streaming to preserve complete tool calls whose deltas omit `index`. [#1221](https://github.com/langchain-ai/langchain-azure/pull/1221) Thanks to [@pcbeingused333](https://github.com/pcbeingused333).
+  - We fixed `AzureAIOpenTelemetryTracer` to mark handled tool failures returned as `ToolMessage(status="error")` as failed spans. [#1160](https://github.com/langchain-ai/langchain-azure/pull/1160) Thanks to [@Ko-Ko-Kirk](https://github.com/Ko-Ko-Kirk).
+  - We fixed `cosine_similarity_top_k` to return empty results when no candidate qualifies, honor explicit zero limits and thresholds, and preserve eligible zero or negative similarity scores. [#1238](https://github.com/langchain-ai/langchain-azure/pull/1238) Thanks to [@cr-sbarbouche](https://github.com/cr-sbarbouche).
+  - We fixed `AzureCosmosDBMongoVCoreSemanticCache` to use a default similarity threshold of `0.5`, rejecting weak matches while preserving explicitly configured thresholds, including `0.0`. [#1241](https://github.com/langchain-ai/langchain-azure/pull/1241) Thanks to [@cr-sbarbouche](https://github.com/cr-sbarbouche).
+  - We reduced hosting storage overhead by reusing State Store clients within a handler and cached store bindings across requests. [#1232](https://github.com/langchain-ai/langchain-azure/pull/1232) [#1262](https://github.com/langchain-ai/langchain-azure/pull/1262)
+  - We reduced repeated checkpoint and pending-write reads within Responses requests while preserving normal durability writes and latest-checkpoint checks. [#1261](https://github.com/langchain-ai/langchain-azure/pull/1261)
+  - We cached response-chain root IDs to avoid repeatedly traversing response history. [#1251](https://github.com/langchain-ai/langchain-azure/pull/1251)
 
 - **1.2.12**:
 
