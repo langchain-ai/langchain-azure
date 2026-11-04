@@ -287,7 +287,9 @@ response cannot be retrieved after completion. `background=True` still requires
 `store=True`. This flag does not control application-managed storage or telemetry.
 
 Admission errors return a JSON error before an SSE stream is opened or the graph
-is executed. Missing checkpoint references and missing or mismatched checkpoints
+is executed. Foreign parents, or parents without a valid thread ID to establish
+ownership, return HTTP 404 with `previous_response_not_found`. Once ownership is
+established, incomplete checkpoint references and missing or mismatched checkpoints
 detected during preflight return HTTP 400 with `invalid_request_error`.
 The JSON response sets `error.param` to `previous_response_id`, identifying the
 request field that selected the parent whose checkpoint cannot be restored.
@@ -308,7 +310,8 @@ codes need the verification below.
 | Request includes `response_id`, an invalid parent ID, or both linkage fields     | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
 | Referenced response is missing or inaccessible                                   | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
 | `previous_response_id` refers to an unretained response                          | HTTP 400 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
-| Stored parent has no saved checkpoint reference during preflight                 | HTTP 400 JSON `invalid_request_error` for the selected parent. No SSE or graph execution.                                   |
+| Parent thread ID is missing, invalid, or belongs to another user during preflight | HTTP 404 JSON `previous_response_not_found` with a generic message. No SSE or graph execution.                                |
+| Owned parent has a missing or invalid checkpoint ID during preflight               | HTTP 400 JSON `invalid_request_error` for the selected parent. No SSE or graph execution.                                   |
 | Input contains approval or tool-result replies                                   | Validate the linked calls and use the appropriate continuation path; these input types are not blanket errors.              |
 | Exact checkpoint is missing or mismatched during preflight                       | HTTP 400 JSON `invalid_request_error` for the selected parent. No fallback to a latest checkpoint.                          |
 | Unexpected provider or checkpointer exception during preflight                   | HTTP 500 JSON `server_error` with a generic message; internal details are logged. No SSE or graph execution.                |

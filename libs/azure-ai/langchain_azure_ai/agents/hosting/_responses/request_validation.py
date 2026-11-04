@@ -31,7 +31,7 @@ from starlette.routing import Route, request_response
 from .._storage import state_store_client_scope
 from .checkpoint_ref import CheckpointRef
 from .hosting_runnable_config import HostingRunnableConfig
-from .task_storage_manager import TaskStorageManager
+from .task_storage_manager import METADATA_LANGGRAPH_THREAD_ID, TaskStorageManager
 
 if TYPE_CHECKING:
     from .._responses_host import ResponsesHostServer
@@ -146,25 +146,28 @@ def _validate_branch_parent(
     context: ResponseContext,
 ) -> CheckpointRef:
     """Validate a branch parent and return its checked checkpoint reference."""
-    reference = TaskStorageManager.from_stream(
-        ResponseEventStream(response_id=parent_id, response=parent)
-    ).checkpoint_ref
+    stream = ResponseEventStream(response_id=parent_id, response=parent)
+    thread_id = stream.internal_metadata.get(METADATA_LANGGRAPH_THREAD_ID)
+
+    if (
+        not isinstance(thread_id, str)
+        or not thread_id
+        or _thread_namespace(thread_id) != _scope_thread_id("", context)
+    ):
+        raise _RequestValidationError(
+            "The previous response was not found.",
+            "previous_response_id",
+            status_code=404,
+            code="previous_response_not_found",
+        )
+
+    reference = TaskStorageManager.from_stream(stream).checkpoint_ref
     if reference is None:
         raise _RequestValidationError(
             "The previous response has no saved graph checkpoint.",
             "previous_response_id",
             status_code=400,
             code="invalid_request_error",
-        )
-
-    # Check the namespace before status to avoid leaking another user's
-    # response existence or completion eligibility.
-    if _thread_namespace(reference.thread_id) != _scope_thread_id("", context):
-        raise _RequestValidationError(
-            "The previous response was not found.",
-            "previous_response_id",
-            status_code=404,
-            code="previous_response_not_found",
         )
     if parent.get("status") != "completed":
         raise _RequestValidationError(
@@ -173,6 +176,7 @@ def _validate_branch_parent(
             status_code=400,
             code="invalid_request_error",
         )
+
     return reference
 
 
