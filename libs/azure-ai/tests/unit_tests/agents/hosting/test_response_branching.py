@@ -9,9 +9,10 @@ import asyncio
 import json
 from contextlib import nullcontext
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -19,6 +20,7 @@ import pytest
 from azure.ai.agentserver.core.platform_headers import USER_ID
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
+    PlatformContext,
     ResponseContext,
     ResponseEventStream,
     ResponsesAgentServerHost,
@@ -753,7 +755,7 @@ def test_parent_checkpoint_remains_user_scoped(
     graph: CompiledStateGraph,
     monkeypatch: pytest.MonkeyPatch,
     caller: str | None,
-    parent_status: str,
+    parent_status: Literal["completed", "failed", "in_progress"],
 ) -> None:
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
@@ -765,8 +767,10 @@ def test_parent_checkpoint_remains_user_scoped(
         provider = server.app._endpoint._provider
         assert client.portal is not None
         stored_parent = client.portal.call(
-            lambda: provider.get_response(
-                parent["id"], context=SimpleNamespace(user_id_key="user-a")
+            partial(
+                provider.get_response,
+                parent["id"],
+                context=PlatformContext(user_id_key="user-a"),
             )
         )
         assert stored_parent is not None
