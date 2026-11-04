@@ -28,6 +28,7 @@ from azure.ai.inference.models import (  # type: ignore[import-untyped]  # noqa:
 from langchain_core.messages import (  # noqa: E402
     AIMessage,
     AIMessageChunk,
+    BaseMessage,
     ChatMessage,
     HumanMessage,
     SystemMessage,
@@ -609,7 +610,7 @@ def test_per_call_override_wins_over_model_defaults(path: str) -> None:
 
     llm._client = mock.Mock(complete=fake_complete)
     llm._async_client = mock.Mock(complete=fake_acomplete)
-    messages = [HumanMessage(content="hi")]
+    messages: list[BaseMessage] = [HumanMessage(content="hi")]
 
     async def run_async() -> None:
         if path == "agenerate":
