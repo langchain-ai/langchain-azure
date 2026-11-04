@@ -101,14 +101,11 @@ The repository provides the following implementations for different state roles:
 | Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; durable state store. |
 | Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; durable state store. Requires hosted request context. |
 | Graph checkpoints | [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
-| Graph [long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory) | [`AsyncCosmosDBStore`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_store/AsyncCosmosDBStore) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
 
 Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
 one. Both hosts require the async `CosmosDBSaver` rather than
 [`CosmosDBSaverSync`](https://reference.langchain.com/python/langchain-azure-cosmosdb/_langgraph_checkpoint_store/CosmosDBSaverSync). Cosmos DB implementations require installing
-`langchain-azure-cosmosdb` separately. Graph long-term memory is configured with
-`compile(store=...)`; the host's `store` parameter selects a response provider
-from Agent Server.
+`langchain-azure-cosmosdb` separately.
 
 ### Steering
 

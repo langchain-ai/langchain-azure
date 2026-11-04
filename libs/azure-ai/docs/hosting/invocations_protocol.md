@@ -75,8 +75,7 @@ lifetimes.
 The same [graph storage choices](responses_protocol.md#storage-choices) apply
 here: [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) for the
 [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver)
-for [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview) checkpoints, and
-[`AsyncCosmosDBStore`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_store/AsyncCosmosDBStore) for graph [long-term memory](https://docs.langchain.com/oss/python/langchain/long-term-memory).
+for [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview) checkpoints.
 
 | Conversation feature | Supported | Conditions / behavior |
 | --- | :---: | --- |
