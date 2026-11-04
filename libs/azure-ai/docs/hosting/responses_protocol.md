@@ -30,8 +30,8 @@ pins `deepagents==0.7.28`.
 | `graph` | Required | The compiled graph to serve. |
 | `app` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
 | `options` | `None` | Use default `ResponsesServerOptions`: `resilient_background=False` and `steerable_conversations=False`. |
-| `store` | `None` (automatic) | Response provider: `FileResponseStore` locally or `FoundryStorageProvider` on Foundry. |
-| `conversation_chain_store` | `None` | Use `FoundryConversationChainStore` to retain the checkpoint reference for the next linear turn. |
+| `store` | `None` | If not specified, uses `FileResponseStore` (JSON files) locally, or [`FoundryStorageProvider`](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/azure/ai/agentserver/responses/store/_foundry_provider.py) (Foundry Responses Storage API) on Foundry. |
+| `conversation_chain_store` | `None` | If not specified, uses `FoundryConversationChainStore`, backed by Foundry State Store, to retain the checkpoint reference for the next linear turn. |
 | `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
 | `prefix` | Empty | Add a prefix to the protocol routes. |
 | `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
@@ -87,6 +87,24 @@ state within one process; a persistent saver is needed across restarts.
 Ordinary checkpointed continuation uses the saved conversation-chain checkpoint
 when available. Without one, LangGraph selects the latest checkpoint in the
 thread. Exact selection of an older response's checkpoint requires branching.
+
+### Storage choices
+
+The repository provides the following implementations for different state roles:
+
+| Role | Implementation | Package / backend |
+| --- | --- | --- |
+| Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; Foundry State Store. |
+| Graph checkpoints | [`FoundryCheckpointSaver`](../../README.md#durable-graph-state) | `langchain-azure-ai`; Foundry State Store. Requires hosted request context. |
+| Graph checkpoints | [`CosmosDBSaver`](../../../azure-cosmosdb/README.md#host-a-persistent-langgraph-agent-on-azure) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
+| Graph long-term memory | [`AsyncCosmosDBStore`](../../../azure-cosmosdb/README.md#langgraph-store-long-term-memory) | `langchain-azure-cosmosdb`; Azure Cosmos DB for NoSQL. |
+
+Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
+one. Both hosts require the async `CosmosDBSaver` rather than
+`CosmosDBSaverSync`. Cosmos DB implementations require installing
+`langchain-azure-cosmosdb` separately. Graph long-term memory is configured with
+`compile(store=...)`; the host's `store` parameter selects a response provider
+from Agent Server.
 
 ### Branching and steering
 

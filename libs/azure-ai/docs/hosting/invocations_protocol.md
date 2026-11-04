@@ -73,6 +73,10 @@ An in-memory saver retains state within one process; restart recovery requires
 a persistent saver. Protocol result storage and graph state have separate
 lifetimes.
 
+The same [graph storage choices](responses_protocol.md#storage-choices) apply
+here: `FoundryCheckpointSaver` for Foundry State Store, async `CosmosDBSaver`
+for Cosmos DB checkpoints, and `AsyncCosmosDBStore` for graph long-term memory.
+
 | Conversation feature | Supported | Conditions / behavior |
 | --- | :---: | --- |
 | Checkpointed multi-turn state | ✓ | Reuse the same session and user context. |
@@ -111,7 +115,7 @@ state and invocation storage must also survive the restart.
 The host resumes from saved graph progress, reuses a saved final result when
 available, or processes the original input again when no progress was saved.
 External effects can repeat across a recovery boundary. Invocation state is
-file-backed locally and Foundry-backed when hosted. Terminal results remain
+backed by local files or, when hosted, Foundry State Store. Terminal results remain
 retrievable for 30 days, separately from short-lived replay events and graph
 checkpoint retention.
 
