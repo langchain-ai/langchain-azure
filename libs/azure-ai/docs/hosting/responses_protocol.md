@@ -10,7 +10,7 @@ graph input, output, and state. Hosting is experimental. See also
 
 ### Dependencies
 
-Install `langchain-azure-ai[hosting]`. Key requirements from
+Install `langchain-azure-ai[hosting]>=1.3.0`. Key requirements from
 [the package manifest](../../pyproject.toml) are:
 
 | Package | Required version |
@@ -138,7 +138,8 @@ can become a new parent.
 
 Parent system messages can remain in checkpoint state. Missing or inaccessible
 parents return HTTP 404; invalid branch parents or checkpoints return HTTP 400
-before streaming. Errors during graph execution return a response with
+before streaming. Unexpected storage errors during these checks return HTTP 500.
+Errors during graph execution return a response with
 `status="failed"`; streaming clients receive a `response.failed` event.
 
 ## 4. Interrupts and recovery
@@ -191,8 +192,8 @@ The host converts the answer into a LangGraph resume command. For custom
 interrupts, positive approval resumes with the original interrupt value;
 negative approval fails the request and leaves it paused. [`HumanInTheLoopMiddleware`](https://docs.langchain.com/oss/python/langchain/human-in-the-loop)
 supports allowed per-action approval/rejection decisions. Conflicting or
-disallowed decisions fail the request. Partial parallel answers are supported;
-unmatched input re-emits outstanding pauses.
+disallowed decisions fail the request. Independent parallel interrupts can be
+answered separately; unmatched input re-emits outstanding pauses.
 
 > [!NOTE]
 > If both reply types answer the same interrupt, `function_call_output` takes

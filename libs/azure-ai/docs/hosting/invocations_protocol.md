@@ -10,7 +10,7 @@ routing and request context; this host defines the text and
 
 ### Dependencies
 
-Install `langchain-azure-ai[hosting]`. The
+Install `langchain-azure-ai[hosting]>=1.3.0`. The
 [shared dependency requirements](responses_protocol.md#dependencies) cover
 [LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph, and the three Agent Server packages. [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is
 optional and uses the same graph interface; its sample pin is listed there.
