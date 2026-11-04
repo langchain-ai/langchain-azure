@@ -23,7 +23,7 @@ class FullCheckpointState(DeepAgentState):
     """Persist full messages and files because State Store has no batch-get API."""
 
     messages: Required[Annotated[list[AnyMessage], add_messages]]
-    # shortcut: pinned private reducer, replace when a public delta opt-out exists.
+    # Workaround: reuse Deep Agents' private reducer for full-value file state.
     files: NotRequired[Annotated[dict[str, FileData], _file_data_reducer]]
 
 
