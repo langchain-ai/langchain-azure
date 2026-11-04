@@ -20,10 +20,11 @@ from research_agent.prompts import RESEARCHER_INSTRUCTIONS, WORKFLOW_INSTRUCTION
 
 
 class FullCheckpointState(DeepAgentState):
-    """Work around State Store delta-history reads with full messages and files.
+    """Improve checkpoint restore performance at the cost of larger checkpoints.
 
-    State Store has no batch-get API. This schema reuses Deep Agents' private
-    file reducer from the pinned version to preserve update/deletion semantics.
+    This State Store performance workaround stores full messages and files to avoid
+    delta-history reads. It reuses Deep Agents' private file reducer from the
+    pinned version to preserve update and deletion semantics.
     """
 
     messages: Required[Annotated[list[AnyMessage], add_messages]]
@@ -61,7 +62,7 @@ def build_agent(
         system_prompt=WORKFLOW_INSTRUCTIONS,
         subagents=[researcher],
         middleware=[TodoListMiddleware()],
-        # Checkpoint restore workaround for State Store; see README.md.
+        # Checkpoint restore performance workaround for State Store; see README.md.
         state_schema=FullCheckpointState,
         checkpointer=checkpointer,
         name="foundry-deep-research-agent",
