@@ -748,8 +748,12 @@ async def test_paused_parent_cannot_be_branched(
 
 
 @pytest.mark.parametrize("caller", ["user-b", None])
+@pytest.mark.parametrize("parent_status", ["completed", "failed", "in_progress"])
 def test_parent_checkpoint_remains_user_scoped(
-    graph: CompiledStateGraph, caller: str | None
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    caller: str | None,
+    parent_status: str,
 ) -> None:
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
@@ -758,6 +762,18 @@ def test_parent_checkpoint_remains_user_scoped(
         parent = client.post(
             "/responses", json={"input": "A"}, headers={USER_ID: "user-a"}
         ).json()
+        provider = server.app._endpoint._provider
+        assert client.portal is not None
+        stored_parent = client.portal.call(
+            lambda: provider.get_response(
+                parent["id"], context=SimpleNamespace(user_id_key="user-a")
+            )
+        )
+        assert stored_parent is not None
+        stored_parent["status"] = parent_status
+        monkeypatch.setattr(
+            provider, "get_response", AsyncMock(return_value=stored_parent)
+        )
         response = client.post(
             "/responses",
             json={"input": "B", "previous_response_id": parent["id"]},
@@ -765,7 +781,10 @@ def test_parent_checkpoint_remains_user_scoped(
         )
     assert parent["status"] == "completed"
     assert response.status_code == 404
-    assert response.json()["error"]["param"] == "previous_response_id"
+    error = response.json()["error"]
+    assert error["param"] == "previous_response_id"
+    assert error["code"] == "previous_response_not_found"
+    assert error["message"] == "The previous response was not found."
 
 
 def test_branching_requires_a_checkpointer_and_disabled_steering(

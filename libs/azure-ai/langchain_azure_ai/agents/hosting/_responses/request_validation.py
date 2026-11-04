@@ -146,14 +146,6 @@ def _validate_branch_parent(
     context: ResponseContext,
 ) -> CheckpointRef:
     """Validate a branch parent and return its checked checkpoint reference."""
-    if parent.get("status") != "completed":
-        raise _RequestValidationError(
-            "The previous response must be completed.",
-            "previous_response_id",
-            status_code=400,
-            code="invalid_request_error",
-        )
-
     reference = TaskStorageManager.from_stream(
         ResponseEventStream(response_id=parent_id, response=parent)
     ).checkpoint_ref
@@ -165,12 +157,21 @@ def _validate_branch_parent(
             code="invalid_request_error",
         )
 
+    # Check the namespace before status to avoid leaking another user's
+    # response existence or completion eligibility.
     if _thread_namespace(reference.thread_id) != _scope_thread_id("", context):
         raise _RequestValidationError(
             "The previous response was not found.",
             "previous_response_id",
             status_code=404,
             code="previous_response_not_found",
+        )
+    if parent.get("status") != "completed":
+        raise _RequestValidationError(
+            "The previous response must be completed.",
+            "previous_response_id",
+            status_code=400,
+            code="invalid_request_error",
         )
     return reference
 
