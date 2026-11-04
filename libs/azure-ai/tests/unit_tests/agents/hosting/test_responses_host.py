@@ -1965,7 +1965,10 @@ async def test_recovery_resumes_from_current_response_checkpoint(
         monkeypatch,
     )
 
-    assert graph_input is None
+    assert isinstance(graph_input, Command)
+    assert graph_input.resume == {}
+    assert graph_input.update is None
+    assert graph_input.goto == ()
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
     context.get_input_items.assert_not_awaited()

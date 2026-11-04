@@ -134,11 +134,16 @@ def _item_to_message(item: Any) -> AnyMessage | None:
     if _is_message(item):
         content = _content_to_message_content(item["content"])
         role = item["role"]
-        role_value = getattr(role, "value", role)
-        cls = _ROLE_TO_MESSAGE_CLS.get(str(role_value))
+        role_value = str(getattr(role, "value", role))
+        cls = _ROLE_TO_MESSAGE_CLS.get(role_value)
         if cls is None:
             return None
-        return cls(content=content)
+        return cls(
+            content=content,
+            additional_kwargs=(
+                {"__openai_role__": "developer"} if role_value == "developer" else {}
+            ),
+        )
 
     if _is_function_call(item):
         return AIMessage(
