@@ -27,6 +27,13 @@ See [main.py](main.py) for the full implementation.
 - returns standard LangChain `BaseTool` instances ready to plug into any
   LangGraph / LangChain agent.
 
+By default, `AzureAIProjectToolbox` uses the toolbox's default version.
+To pin a specific version when constructing the toolbox:
+
+```python
+toolbox = AzureAIProjectToolbox(toolbox_name="agent-tools", toolbox_version="1")
+```
+
 Because `AzureAIProjectToolbox.get_tools()` is asynchronous, this sample
 fetches the tools once at startup with `asyncio.run(...)` and then
 builds the `create_agent` graph synchronously — the same shape as

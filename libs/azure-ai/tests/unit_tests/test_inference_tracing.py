@@ -8,6 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 # Skip tests cleanly if required deps are not present.
 # These guards must come *before* the optional imports below so that
@@ -26,6 +27,7 @@ from langchain_core.messages import (  # noqa: E402
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
 from opentelemetry import trace as otel_trace  # noqa: E402
 from opentelemetry.sdk.resources import Resource  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
@@ -176,6 +178,170 @@ def reset_global_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(once, "_done", False)
     monkeypatch.setattr(tracing, "otel_trace", otel_trace)
+
+
+@pytest.fixture
+def span_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(tracing.otel_trace, "get_tracer", provider.get_tracer)
+    try:
+        yield exporter
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("record_content", [False, True], ids=["redacted", "content"])
+@pytest.mark.parametrize("failure", ["tool_error", "validation_error"])
+async def test_structured_tool_handled_error_span(
+    span_exporter: InMemorySpanExporter,
+    use_async: bool,
+    record_content: bool,
+    failure: str,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(
+        auto_configure_azure_monitor=False, enable_content_recording=record_content
+    )
+
+    def fail(value: int) -> str:
+        raise ToolException("private tool failure")
+
+    async def afail(value: int) -> str:
+        return fail(value)
+
+    tool = StructuredTool.from_function(
+        fail,
+        coroutine=afail,
+        description="A failing tool",
+        handle_tool_error=True,
+        handle_validation_error=True,
+    )
+    tool_input: Any = {
+        "type": "tool_call",
+        "id": "call-fail",
+        "name": tool.name,
+        "args": {"value": 1 if failure == "tool_error" else "private invalid input"},
+    }
+    if use_async:
+        expected = await tool.ainvoke(tool_input)
+        result = await tool.ainvoke(tool_input, config={"callbacks": [tracer]})
+    else:
+        expected = tool.invoke(tool_input)
+        result = tool.invoke(tool_input, config={"callbacks": [tracer]})
+
+    assert result == expected
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert result.tool_call_id == "call-fail"
+    assert result.content == (
+        "private tool failure"
+        if failure == "tool_error"
+        else "Tool input validation error"
+    )
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "execute_tool fail"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description is None
+    assert span.attributes is not None
+    assert span.attributes.get(tracing.Attrs.ERROR_TYPE) == "_OTHER"
+    assert not span.events
+    payload = json.loads(str(span.attributes[tracing.Attrs.TOOL_CALL_RESULT]))
+    assert payload == {
+        "name": tool.name,
+        "tool_call_id": "call-fail",
+        "content": result.content if record_content else "[redacted]",
+    }
+    if not record_content:
+        assert "private" not in span.to_json()
+    assert not tracer._spans
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("tool_call", [False, True], ids=["raw", "tool_message"])
+@pytest.mark.parametrize("output", ["error text", {"status": "error", "value": 42}])
+async def test_structured_tool_success_span(
+    span_exporter: InMemorySpanExporter,
+    use_async: bool,
+    tool_call: bool,
+    output: Any,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+
+    def succeed(value: int) -> Any:
+        return output
+
+    async def asucceed(value: int) -> Any:
+        return succeed(value)
+
+    tool = StructuredTool.from_function(
+        succeed, coroutine=asucceed, description="A successful tool"
+    )
+    tool_input: Any = {"value": 1}
+    if tool_call:
+        tool_input = {
+            "type": "tool_call",
+            "id": "call-success",
+            "name": tool.name,
+            "args": tool_input,
+        }
+    if use_async:
+        expected = await tool.ainvoke(tool_input)
+        result = await tool.ainvoke(tool_input, config={"callbacks": [tracer]})
+    else:
+        expected = tool.invoke(tool_input)
+        result = tool.invoke(tool_input, config={"callbacks": [tracer]})
+    assert result == expected
+    if tool_call:
+        assert isinstance(result, ToolMessage)
+        assert result.status == "success"
+    else:
+        assert result == output
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes is not None
+    assert tracing.Attrs.ERROR_TYPE not in span.attributes
+    assert not tracer._spans
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("failure", ["tool_error", "validation_error"])
+async def test_structured_tool_unhandled_error_span(
+    span_exporter: InMemorySpanExporter,
+    use_async: bool,
+    failure: str,
+) -> None:
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+    error = ToolException("unhandled failure")
+
+    def fail(value: int) -> str:
+        raise error
+
+    async def afail(value: int) -> str:
+        return fail(value)
+
+    tool = StructuredTool.from_function(
+        fail, coroutine=afail, description="An unhandled failing tool"
+    )
+    error_type = ToolException if failure == "tool_error" else ValidationError
+    with pytest.raises(error_type) as raised:
+        tool_input = {"value": 1 if failure == "tool_error" else "invalid"}
+        if use_async:
+            await tool.ainvoke(tool_input, config={"callbacks": [tracer]})
+        else:
+            tool.invoke(tool_input, config={"callbacks": [tracer]})
+    if failure == "tool_error":
+        assert raised.value is error
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == str(raised.value)
+    assert span.attributes is not None
+    assert span.attributes[tracing.Attrs.ERROR_TYPE] == error_type.__name__
+    assert tracing.Attrs.TOOL_CALL_RESULT not in span.attributes
+    assert not tracer._spans
 
 
 def get_last_span_for(

@@ -139,6 +139,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
 
     DEFAULT_DATABASE_NAME = "CosmosMongoVCoreCacheDB"
     DEFAULT_COLLECTION_NAME = "CosmosMongoVCoreCacheColl"
+    DEFAULT_SCORE_THRESHOLD = 0.5
 
     def __init__(
         self,
@@ -214,7 +215,11 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             l_search: l value for index searching.
                 Default value is 40, range from 10 to 10000.
                 Only vector-diskann search supports this.
-            score_threshold: Maximum score used to filter the vector search documents.
+            score_threshold: Minimum similarity a stored entry's nearest neighbor
+                must reach to be served as a cache hit; weaker matches are
+                treated as a cache miss instead of being returned as a false
+                match. Defaults to `DEFAULT_SCORE_THRESHOLD` (0.5) when not
+                provided -- `None` does not disable filtering.
             application_name: Application name for the client for tracking and logging
             compression: compression type for vector indexes.
             pq_compressed_dims: Number of dimensions after compression for product
@@ -321,7 +326,11 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             kind=self.kind,
             ef_search=self.ef_search,
             l_search=self.l_search,
-            score_threshold=self.score_threshold or 0.0,
+            score_threshold=(
+                self.DEFAULT_SCORE_THRESHOLD
+                if self.score_threshold is None
+                else self.score_threshold
+            ),
             oversampling=self.oversampling,
             pre_filter={"metadata.llm_string": llm_string},
         )
