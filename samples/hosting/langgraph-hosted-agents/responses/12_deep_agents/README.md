@@ -23,13 +23,11 @@ but no download link is returned. Unexpected programming errors still surface.
 > [!NOTE]
 > Deep Agents' `DeltaChannel` can make checkpoint restoration **significantly slower**
 > with Foundry State Store, especially as the number of conversation turns grows.
-> [agent.py](agent.py) stores full messages/files to avoid delta-history reads,
-> at the cost of larger checkpoints.
-> This performance workaround uses a private reducer in the pinned Deep Agents version.
+> This sample includes a performance workaround to improve restore speed, at the
+> cost of larger checkpoints.
 > Another performance workaround is [Deep Agents 0.5.9](https://github.com/langchain-ai/deepagents/releases/tag/deepagents%3D%3D0.5.9),
-> which predates `DeltaChannel`. For that older API, remove `FullCheckpointState`,
-> its supporting imports, and the `state_schema` argument.
-> `CosmosDBSaver` bulk-loads delta history and does not need this performance workaround.
+> which predates `DeltaChannel`; downgrading requires adapting the sample to its older API.
+> `CosmosDBSaver` does not need this performance workaround.
 > If you change the schema or Deep Agents version, test restoring existing checkpoints.
 
 ## Setup and run
