@@ -335,7 +335,9 @@ class ResponsesHostServer:
 
         A minimal non-streaming request is ``{"input": "Hello!"}``.
         Streaming requests use ``{"input": "Hello!", "stream": true}``.
-        ``store=False`` is not supported and returns HTTP 400 before streaming.
+        Foreground requests may set ``store=False`` when the graph has no
+        checkpointer. With a checkpointer, the host returns HTTP 400 before
+        streaming or graph execution.
 
     The host owns an internal :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline

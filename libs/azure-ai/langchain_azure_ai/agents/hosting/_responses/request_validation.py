@@ -269,10 +269,15 @@ def install_request_validation(server: ResponsesHostServer) -> None:
                     payload = await request.json()
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     return await create_response(request)
-                if isinstance(payload, dict) and payload.get("store") is False:
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("store") is False
+                    and server._graph_has_checkpointer
+                ):
                     return _error_response(
                         _RequestValidationError(
-                            "store=False is not supported yet.",
+                            "store=False is not supported when a LangGraph "
+                            "checkpointer is configured.",
                             "store",
                             status_code=400,
                             code="invalid_request_error",

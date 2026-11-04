@@ -36,9 +36,10 @@ platform. Creating and managing that resource is outside this API path's scope.
 - `conversation` identifies a separate persistent conversation resource. It is
   not a response ID. Lookup and parent selection follow ordinary continuation.
 - `previous_response_id` and `conversation` are mutually exclusive.
-- **`store=False` is not supported: the host returns HTTP 400 before streaming
-  or graph execution**, whether branching is enabled or disabled. Omit `store`
-  or pass `store=True`. See [Failures and limitations](#failures-and-limitations).
+- **With a LangGraph checkpointer, `store=False` returns HTTP 400 before
+  streaming or graph execution**, whether branching is enabled or disabled.
+  Without a checkpointer, foreground requests may use `store=False`.
+  See [Failures and limitations](#failures-and-limitations).
 - Tool outputs and approval decisions are valid continuation inputs. A graph
   pause alone must not cause an otherwise valid protocol request to be rejected.
 - With `previous_response_id`, a previous response's top-level `instructions`
@@ -249,8 +250,9 @@ Checkpoint-based branching additionally needs graph checkpoints:
 
 The server uses its default response provider unless `store=provider` overrides
 it. The client's `store` is a boolean that defaults to `True`, not a provider.
-Currently, omit it or pass `store=True`; `store=False` is rejected as described
-under [Failures and limitations](#failures-and-limitations).
+With a graph checkpointer, omit it or pass `store=True`; `store=False` is rejected
+as described under [Failures and limitations](#failures-and-limitations).
+Without a checkpointer, foreground requests may use `store=False`.
 
 Response retention does not replace the graph's checkpointer. The application
 owns the graph saver's initialization, lifecycle, and general retention policy.
@@ -270,12 +272,19 @@ guarantees; this spec does not promise an identical retention period.
 
 ## Failures and limitations
 
-**`store=False` is not supported.** Any request that explicitly sets `store=False`
-returns **HTTP 400 with a JSON error before an SSE stream is opened or the graph
+**With a LangGraph checkpointer, `store=False` is not supported.** Such requests
+return **HTTP 400 with a JSON error before an SSE stream is opened or the graph
 is executed**. This applies to root responses, continuation, and branches, with
 branching enabled or disabled. The error has `code="invalid_request_error"`,
-`param="store"`, and the message `store=False is not supported yet.` Omit `store`
-or pass `store=True`.
+`param="store"`, and the message
+`store=False is not supported when a LangGraph checkpointer is configured.`
+Omit `store` or pass `store=True`.
+
+Without a graph checkpointer, foreground requests may set `store=False`.
+The SDK does not persist the response or create a durable task or replay stream,
+and the default host does not write conversation-chain checkpoint state. The
+response cannot be retrieved after completion. `background=True` still requires
+`store=True`. This flag does not control application-managed storage or telemetry.
 
 Admission errors return a JSON error before an SSE stream is opened or the graph
 is executed. Missing checkpoint references and missing or mismatched checkpoints
@@ -295,7 +304,7 @@ codes need the verification below.
 
 | Problem                                                                          | Result and action                                                                                                           |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Request explicitly sets `store=False`                                            | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
+| Graph has a checkpointer and request sets `store=False`                          | HTTP 400 with `invalid_request_error`, before SSE or graph execution. Omit `store` or use `store=True`.                     |
 | Request includes `response_id`, an invalid parent ID, or both linkage fields     | HTTP 400 before execution. Omit `response_id`; use a nonempty string or `null` for the parent, and choose one linkage type. |
 | Referenced response is missing or inaccessible                                   | Return the corresponding OpenAI-compatible reference error before graph execution. Do not substitute a new root response.   |
 | `previous_response_id` refers to an unretained response                          | HTTP 400 with `previous_response_not_found`; do not restore an internal checkpoint in place of the missing response.        |
@@ -404,8 +413,8 @@ the SDK actually saved.
    not confirm SDK persistence.
 5. **Finish.** After shutdown/cancellation checks and pending interrupt emission,
    emit `response.completed` for SDK finalization. Requests with `store=False`
-   are currently rejected at admission, before this stage. A retained response
-   keeps the same confirmed final checkpoint reference.
+   are rejected at admission for checkpointed graphs, before this stage. A
+   retained response keeps the same confirmed final checkpoint reference.
 
 Graph writes and SDK response storage are **not a transaction**. A graph
 checkpoint alone cannot make a reusable parent: its response must also be stored

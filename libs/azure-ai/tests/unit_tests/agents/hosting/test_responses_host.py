@@ -1129,7 +1129,7 @@ def _context(
 def test_store_false_is_rejected_before_execution(
     monkeypatch: pytest.MonkeyPatch, streaming: bool, prefix: str
 ) -> None:
-    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    server = ResponsesHostServer(make_checkpointed_echo_graph(), prefix=prefix)
     graph_stream = MagicMock(wraps=server.graph.astream)
     monkeypatch.setattr(server.graph, "astream", graph_stream)
     with _client(server) as client:
@@ -1143,9 +1143,69 @@ def test_store_false_is_rejected_before_execution(
     error = resp.json()["error"]
     assert error["type"] == "invalid_request_error"
     assert error["param"] == "store"
-    assert error["message"] == "store=False is not supported yet."
+    assert error["message"] == (
+        "store=False is not supported when a LangGraph checkpointer is configured."
+    )
     assert error["additionalInfo"]["request_id"] == resp.headers["x-request-id"]
     graph_stream.assert_not_called()
+
+
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("background", [False, True])
+def test_store_false_without_checkpointer_does_not_persist(
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    prefix: str,
+    background: bool,
+) -> None:
+    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    graph_stream = MagicMock(wraps=server.graph.astream)
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    provider = server.app._endpoint._provider
+    storage_calls: list[AsyncMock] = []
+    for owner, method in (
+        (provider, "create_response"),
+        (provider, "update_response"),
+        (server.app._orchestrator, "_start_resilient_background"),
+        (streams, "get_or_create"),
+        (server._conversation_chain_store, "set"),
+    ):
+        storage_call = AsyncMock(side_effect=AssertionError("Unexpected storage write"))
+        monkeypatch.setattr(owner, method, storage_call)
+        storage_calls.append(storage_call)
+    with _client(server) as client:
+        resp = client.post(
+            f"{prefix}/responses",
+            json={
+                "input": "hello",
+                "stream": streaming,
+                "background": background,
+                "store": False,
+            },
+        )
+        if background:
+            assert resp.status_code == 400, resp.text
+            assert resp.json()["error"]["param"] == "background"
+            graph_stream.assert_not_called()
+        else:
+            assert resp.status_code == 200, resp.text
+            if streaming:
+                completed = [
+                    payload
+                    for kind, payload in _parse_sse(resp.text)
+                    if kind == "response.completed"
+                ]
+                assert len(completed) == 1, resp.text
+                response = completed[0]["response"]
+            else:
+                response = resp.json()
+            assert response["status"] == "completed"
+            assert response["output"]
+            graph_stream.assert_called_once()
+            assert client.get(f"{prefix}/responses/{response['id']}").status_code == 404
+    for storage_call in storage_calls:
+        storage_call.assert_not_awaited()
 
 
 @pytest.mark.parametrize("store", [None, True])
