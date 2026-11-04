@@ -119,8 +119,13 @@ completes with partial output.
 Branching uses `enable_response_branching=True` with `previous_response_id`.
 It restores the named parent's checkpoint. Siblings can run sequentially or
 concurrently: children B and C of A see A+B and A+C respectively. Each child
-can become a new parent; branch children leave the shared conversation head
-unchanged.
+can become a new parent.
+
+> [!NOTE]
+> Branching requires `previous_response_id`; omit `conversation` on a branch
+> request. Using only `conversation.id` continues the conversation normally,
+> even when branching is enabled. Each branch saves its own response and graph
+> checkpoint without updating `conversation_chain_store`.
 
 | Combination | Supported | Notes |
 | --- | :---: | --- |
@@ -131,11 +136,10 @@ unchanged.
 | Branching + external `app` | × | Branching requires a host-created app. |
 | Branching + stored background recovery | ✓ | Subject to the recovery requirements below. |
 
-Enabling branching leaves requests using only `conversation.id` on the ordinary
-continuation path. Supply either `conversation.id` or `previous_response_id`.
 Parent system messages can remain in checkpoint state. Missing or inaccessible
 parents return HTTP 404; invalid branch parents or checkpoints return HTTP 400
-before streaming. Failures after admission can still produce a failed response.
+before streaming. Errors during graph execution return a response with
+`status="failed"`; streaming clients receive a `response.failed` event.
 
 ## 4. Interrupts and recovery
 
