@@ -269,7 +269,7 @@ Checkpointed multi-turn conversations use an explicit `conversation.id`
 or run with `steerable_conversations=True`. Both modes are linear and preserve
 the latest LangGraph checkpoint for subsequent turns.
 
-**Experimental response branching:** To branch from a completed response, enable
+**[Experimental] Response branching:** To branch from a completed response, enable
 `ResponsesHostServer(graph, enable_response_branching=True)` with a
 history-preserving checkpointer, steering disabled, and no externally supplied
 `app`. Send
