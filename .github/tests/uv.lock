@@ -1064,7 +1064,7 @@ wheels = [
 
 [[package]]
 name = "langchain-azure-ai"
-version = "1.2.12"
+version = "1.2.13"
 source = { editable = "../../libs/azure-ai" }
 dependencies = [
     { name = "aiohttp" },
