@@ -245,9 +245,7 @@ def _run_branch_crash_host(
                             stream=stream,
                         )
                         assert branch_started.wait(10)
-                        progress = client.portal.call(
-                            wait_for_response, branch_ids[0]
-                        )
+                        progress = client.portal.call(wait_for_response, branch_ids[0])
                         sibling = _create(
                             client, input="C", previous_response_id=parent["id"]
                         )
