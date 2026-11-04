@@ -278,6 +278,59 @@ def test_siblings_and_descendants_use_the_selected_parent(
     chain_set.assert_not_awaited()
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("file_provider", [False, True])
+@pytest.mark.parametrize("branching", [False, True])
+def test_continuation_reuses_parent_and_selected_checkpoint(
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    branching: bool,
+    file_provider: bool,
+    stream: bool,
+) -> None:
+    server = ResponsesHostServer(
+        graph,
+        store=None if file_provider else InMemoryResponseProvider(),
+        enable_response_branching=branching,
+    )
+    provider = server.app._endpoint._provider
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A")
+        assert client.portal is not None
+        stored_parent = client.portal.call(provider.get_response, parent["id"])
+        selected = _config(stored_parent)["configurable"]
+        parent_reads = AsyncMock(wraps=provider.get_response)
+        checkpoint_reads = 0
+        get_tuple = InMemorySaver.aget_tuple
+
+        async def read_checkpoint(
+            saver: InMemorySaver, config: RunnableConfig
+        ) -> CheckpointTuple | None:
+            nonlocal checkpoint_reads
+            configurable = config.get("configurable") or {}
+            if (
+                configurable.get("thread_id") == selected["thread_id"]
+                and configurable.get("checkpoint_ns", "") == ""
+                and configurable.get("checkpoint_id") == selected["checkpoint_id"]
+            ):
+                checkpoint_reads += 1
+            return await get_tuple(saver, config)
+
+        monkeypatch.setattr(provider, "get_response", parent_reads)
+        monkeypatch.setattr(InMemorySaver, "aget_tuple", read_checkpoint)
+        child = _create(
+            client, input="B", previous_response_id=parent["id"], stream=stream
+        )
+
+    assert child["status"] == "completed"
+    assert _text(child) == "A|B"
+    parent_reads.assert_awaited_once()
+    assert parent_reads.await_args is not None
+    assert parent_reads.await_args.args == (parent["id"],)
+    if branching:
+        assert checkpoint_reads == 1
+
+
 def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -> None:
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True

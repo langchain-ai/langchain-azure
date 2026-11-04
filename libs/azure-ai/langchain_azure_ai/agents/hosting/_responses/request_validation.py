@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import Mapping
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from functools import wraps
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, request_response
 
+from .._checkpoint._checkpoint_reuse import _CheckpointReadContext
 from .._storage import state_store_client_scope
 from .checkpoint_ref import CheckpointRef
 from .hosting_runnable_config import HostingRunnableConfig
@@ -44,6 +46,27 @@ _request_id: ContextVar[str | None] = ContextVar(
 _USER_NAMESPACE_PREFIX = "user-"
 _USER_NAMESPACE_SEPARATOR = ":"
 _USER_NAMESPACE_HASH = hashlib.sha256
+
+
+@dataclass
+class _RequestSelection:
+    """Share parent selection and checkpoint reads within one response context."""
+
+    parents: dict[tuple[int, str, str], ResponseObject] = field(default_factory=dict)
+    checkpoint_reads: _CheckpointReadContext = field(
+        default_factory=_CheckpointReadContext
+    )
+
+
+def _request_selection(context: ResponseContext) -> _RequestSelection:
+    selection = getattr(context, "_langchain_azure_request_selection", None)
+    if (
+        not isinstance(selection, _RequestSelection)
+        or not selection.checkpoint_reads.active
+    ):
+        selection = _RequestSelection()
+        setattr(context, "_langchain_azure_request_selection", selection)
+    return selection
 
 
 def _scope_thread_id(thread_id: str, context: ResponseContext) -> str:
@@ -119,6 +142,10 @@ async def _load_parent_response(
     provider = getattr(context, "_provider", None)
     if provider is None:
         raise RuntimeError("Response validation requires a response provider.")
+    parents = _request_selection(context).parents
+    key = (id(provider), _scope_thread_id("", context), parent_id)
+    if key in parents:
+        return parents[key]
     try:
         parent = await provider.get_response(
             parent_id, context=context.platform_context
@@ -137,6 +164,7 @@ async def _load_parent_response(
             status_code=404,
             code="previous_response_not_found",
         )
+    parents[key] = parent
     return parent
 
 
@@ -214,7 +242,10 @@ async def _validate_request(
         return
     _validate_branch_parent(parent_id, parent, context)
     config = await server.build_runnable_config(request, context)
-    _validate_branch_state(await server.graph.aget_state(config), config)
+    checkpoint_reads = _request_selection(context).checkpoint_reads
+    checkpoint_reads.pin(getattr(server.graph, "checkpointer", None), config)
+    with checkpoint_reads.bind():
+        _validate_branch_state(await server.graph.aget_state(config), config)
 
 
 def install_request_validation(server: ResponsesHostServer) -> None:

@@ -74,7 +74,6 @@ from langchain_azure_ai.agents.hosting import (
 
 from ._checkpoint._checkpoint_reuse import (
     _checkpoint_reads,
-    _CheckpointReadContext,
     _RequestCheckpointSaver,
 )
 from ._converters import (
@@ -99,6 +98,7 @@ from ._responses import (
 )
 from ._responses.request_validation import (
     _load_parent_response,
+    _request_selection,
     _scope_thread_id,
     _validate_branch_parent,
     _validate_branch_state,
@@ -801,14 +801,10 @@ class ResponsesHostServer:
         # _is_response_branch guarantees a non-empty previous_response_id here.
         # Conversation-only requests use _resolve_thread_config instead.
         parent_id = cast(str, request["previous_response_id"])
+        parent = await _load_parent_response(parent_id, context)
         if context.is_recovery:
-            parent = await _load_parent_response(parent_id, context)
             reference = _validate_branch_parent(parent_id, parent, context)
         else:
-            provider = getattr(context, "_provider")
-            parent = await provider.get_response(
-                parent_id, context=context.platform_context
-            )
             reference = cast(
                 CheckpointRef,
                 TaskStorageManager.from_stream(
@@ -862,10 +858,7 @@ class ResponsesHostServer:
         while response_id and response_id not in seen:
             seen.add(response_id)
             try:
-                response = await provider.get_response(
-                    response_id,
-                    context=context.platform_context,
-                )
+                response = await _load_parent_response(response_id, context)
             except Exception:
                 logger.debug(
                     "Failed to resolve response chain for thread mapping",
@@ -1055,6 +1048,11 @@ class ResponsesHostServer:
                 )
             checkpoint_reads = _checkpoint_reads.get()
             if checkpoint_reads is not None:
+                if (
+                    getattr(self.build_runnable_config, "__func__", None)
+                    is not ResponsesHostServer.build_runnable_config
+                ):
+                    checkpoint_reads.cache = None
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
             if self._is_response_branch(request, context) and checkpoint_ref is None:
@@ -1243,7 +1241,7 @@ class ResponsesHostServer:
         cancellation_signal: asyncio.Event,
     ) -> AsyncIterator[Any]:
         features = self._hosting_features
-        with closing(_CheckpointReadContext()) as checkpoint_reads:
+        with closing(_request_selection(context).checkpoint_reads) as checkpoint_reads:
             async with state_store_client_scope(bind=False) as factory:
                 events = self.handle_create(request, context, cancellation_signal)
 
