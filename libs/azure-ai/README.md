@@ -383,7 +383,7 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
-- **1.2.13**:
+- **1.3.0**:
 
   - **[NEW, Experimental]** We introduced opt-in response branching through `ResponsesHostServer(graph, enable_response_branching=True)`. Requests with `previous_response_id` start from the completed parent's exact saved checkpoint, creating independent siblings without advancing the shared conversation head. This requires a retained parent, a history-preserving async checkpointer, steering disabled, and no externally supplied `app`; paused-parent branching is not supported. See the [design document](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md) for usage scenarios and implementation gaps. [#1263](https://github.com/langchain-ai/langchain-azure/pull/1263) [#1260](https://github.com/langchain-ai/langchain-azure/pull/1260) [#1288](https://github.com/langchain-ai/langchain-azure/pull/1288)
   - **[NEW]** We added `toolbox_version` to `AzureAIProjectToolbox` to select a specific toolbox version. Omitting it or setting it to `None` keeps the default toolbox endpoint. [#1294](https://github.com/langchain-ai/langchain-azure/pull/1294)
