@@ -1,5 +1,6 @@
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
@@ -605,6 +606,51 @@ def test_semantic_hybrid_search_returns_matching_answer() -> None:
     doc, _score, _reranker_score = docs[0]
     assert doc.metadata["id"] == "doc-1"
     assert doc.metadata["answers"] == {"text": "the answer", "highlights": "the answer"}
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_reorder_mmr_returns_empty_for_no_results() -> None:
+    """The sync MMR reorder helper returns an empty list when the search
+    yielded no candidates."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _reorder_results_with_maximal_marginal_relevance,
+        _resolve_field_names,
+    )
+
+    result = _reorder_results_with_maximal_marginal_relevance(
+        iter([]),  # type: ignore[arg-type]
+        query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+        field_names=_resolve_field_names(),
+    )
+    assert result == []
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_areorder_mmr_returns_empty_for_no_results() -> None:
+    """The async MMR reorder helper must also return an empty list, mirroring
+    the sync path, instead of raising a ValueError when unpacking an empty
+    ``zip`` of results."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _areorder_results_with_maximal_marginal_relevance,
+        _resolve_field_names,
+    )
+
+    async def _empty_results() -> AsyncIterator[Dict[Any, Any]]:
+        return
+        yield  # pragma: no cover  -- makes this an (empty) async generator
+
+    async def _run() -> List[Any]:
+        return await _areorder_results_with_maximal_marginal_relevance(
+            _empty_results(),  # type: ignore[arg-type]
+            query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+            field_names=_resolve_field_names(),
+        )
+
+    assert asyncio.run(_run()) == []
 
 
 @pytest.mark.requires("azure.search.documents")
