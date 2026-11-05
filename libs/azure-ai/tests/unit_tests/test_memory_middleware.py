@@ -206,12 +206,13 @@ async def test_memory_middleware_async_hook_does_not_block_event_loop() -> None:
     loop_thread = threading.get_ident()
     calling_threads: list[int] = []
 
+    def begin_update_memories(**_: Any) -> Mock:
+        calling_threads.append(threading.get_ident())
+        return Mock(update_id="u1")
+
     mock_client = Mock()
     mock_client.beta.memory_stores.begin_update_memories = Mock(
-        side_effect=lambda **_: (
-            calling_threads.append(threading.get_ident()),
-            Mock(update_id="u1"),
-        )[1]
+        side_effect=begin_update_memories
     )
 
     with patch(
