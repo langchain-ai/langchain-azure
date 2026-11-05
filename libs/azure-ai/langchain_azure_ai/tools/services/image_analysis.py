@@ -5,9 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Annotated, Any, Dict, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from azure.core.exceptions import HttpResponseError
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.tools import ArgsSchema, BaseTool
 from langchain_core.utils import pre_init
@@ -61,7 +60,8 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
     args_schema: Annotated[Optional[ArgsSchema], SkipValidation()] = ImageInput
     """The input args schema for the tool."""
 
-    visual_features: Optional[VisualFeatures] = None
+    visual_features: Optional[List[VisualFeatures]] = None
+    """The visual features to extract. If not specified, all features are used."""
 
     @pre_init
     def validate_environment(cls, values: Dict) -> Any:
@@ -117,36 +117,28 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
         self, source: str, source_type: Literal["url", "path", "base64"]
     ) -> Dict:
         """Analyze an image using the Image Analysis client."""
-        try:
-            if source_type == "base64":
-                image_data = base64.b64decode(source)
+        if source_type == "base64":
+            image_data = base64.b64decode(source)
 
-                result = self._client.analyze(
-                    image_data=image_data,
-                    visual_features=self.visual_features,  # type: ignore[arg-type]
-                )
-            elif source_type == "path":
-                with open(source, "rb") as f:
-                    image_data = f.read()
+            result = self._client.analyze(
+                image_data=image_data,
+                visual_features=self.visual_features,  # type: ignore[arg-type]
+            )
+        elif source_type == "path":
+            with open(source, "rb") as f:
+                image_data = f.read()
 
-                result = self._client.analyze(
-                    image_data=image_data,
-                    visual_features=self.visual_features,  # type: ignore[arg-type]
-                )
-            elif source_type == "url":
-                result = self._client.analyze_from_url(
-                    image_url=source,
-                    visual_features=self.visual_features,  # type: ignore[arg-type]
-                )
-            else:
-                raise ValueError(f"Invalid image path: {source}")
-        except HttpResponseError as e:
-            return {
-                "status_code": e.status_code,
-                "error_code": e.error.code if e.error else None,
-                "error_message": e.error.message if e.error else None,
-                "error_details": e.error.details if e.error else None,
-            }
+            result = self._client.analyze(
+                image_data=image_data,
+                visual_features=self.visual_features,  # type: ignore[arg-type]
+            )
+        elif source_type == "url":
+            result = self._client.analyze_from_url(
+                image_url=source,
+                visual_features=self.visual_features,  # type: ignore[arg-type]
+            )
+        else:
+            raise ValueError(f"Invalid image path: {source}")
 
         res_dict = result.as_dict()
 
@@ -173,7 +165,10 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
             output["smartCrops"] = results["smartCropsResult"]["values"]
 
         if "captionResult" in results:
-            output["captions"] = results["captionResult"]["captions"]
+            output["caption"] = results["captionResult"]
+
+        if "denseCaptionsResult" in results:
+            output["denseCaptions"] = results["denseCaptionsResult"]["values"]
 
         return json.dumps(output, indent=2)
 
@@ -191,4 +186,4 @@ class AzureAIImageAnalysisTool(BaseTool, AIServicesService):
 
             return self._format_image_analysis_result(image_analysis_result)
         except Exception as e:
-            raise RuntimeError(f"Error while running {self.name}: {e}")
+            raise RuntimeError(f"Error while running {self.name}: {e}") from e
