@@ -3,6 +3,7 @@
 This repository contains the following packages with Azure integrations with LangChain:
 
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
+- [langchain-azure-compute](./libs/azure-compute)
 - [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
@@ -10,6 +11,18 @@ This repository contains the following packages with Azure integrations with Lan
 - [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
 
 **Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
+
+## LangGraph on Azure
+
+Build with Azure models using the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain), or bring an existing compiled graph to Microsoft Foundry with the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents).
+The [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) cover local runs and deployment, including [hosting an existing graph without changing its implementation](./samples/hosting/langgraph-hosted-agents/responses/09_run/README.md).
+For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
+
+## Samples
+
+- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
+- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
+- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
 
 # Quick Start with langchain-azure-ai
 
@@ -24,7 +37,7 @@ This package includes:
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 * [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 
-Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
 ### Install langchain-azure
 
@@ -36,6 +49,8 @@ pip install -U langchain-azure-ai
 
 Use any Foundry Model with OpenAI-compatible APIs:
 
+We recommend the [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) when your model and endpoint support it. Set `use_responses_api=True` as shown below. If you prefer Chat Completions and your model and endpoint support it, set `use_responses_api=False` instead.
+
 ```python
 from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
@@ -44,7 +59,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 model = AzureAIOpenAIApiChatModel(
     project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
     credential=DefaultAzureCredential(), # requires Azure AI Developer role. If using keys, use parameter `endpoint` instead of `project_endpoint`.
-    model="gpt-5"                        # use any OpenAI-compatible model, like Mistral-Large-3
+    model="gpt-5",                       # your model deployment name
+    use_responses_api=True,
 )
 
 messages = [
@@ -126,4 +142,3 @@ You're not a genius and you don't love programming!
 # Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
-

@@ -1,0 +1,1 @@
+"""Web adapter for the mortgage processing sample."""

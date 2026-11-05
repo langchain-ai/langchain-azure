@@ -182,7 +182,7 @@ def test_build_messages_input_drops_orphan_tool_message() -> None:
     must be filtered out so the chat model isn't sent an invalid
     ``role: tool`` message without a preceding ``tool_calls``.
 
-    This guards against a poisoned conversation store where a failed
+    This guards against poisoned conversation history where a failed
     earlier request persisted a ``function_call_output`` that never had
     a paired tool call.
     """

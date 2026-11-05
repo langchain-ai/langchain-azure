@@ -1,0 +1,25 @@
+name: langchain-azure-middleware-responses
+description: >
+  A LangChain create_agent using built-in HumanInTheLoopMiddleware and one
+  custom before_model hook, hosted on Foundry without rewriting agent logic.
+metadata:
+  tags:
+    - LangChain
+    - LangGraph
+    - Middleware
+    - Human-in-the-loop
+    - Responses Protocol
+    - Streaming
+template:
+  name: langchain-azure-middleware-responses
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 2.0.0
+  environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
+resources:
+  - kind: model
+    id: gpt-4.1-mini
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME

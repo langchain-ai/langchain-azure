@@ -1,8 +1,27 @@
 """Middleware for Azure AI LangChain/LangGraph agent integrations.
 
-This module provides middleware classes for powered by Microsoft
-Foundry.  Pass them via the ``middleware`` parameter of any
-LangChain ``create_agent`` factory:
+This module provides middleware classes powered by Microsoft Foundry.
+Pass a Content Safety guardrail policy to LangChain ``create_agent`` to
+apply its configured controls at agent, model, and tool boundaries:
+
+.. code-block:: python
+
+    from langchain.agents import create_agent
+    from langchain_azure_ai.agents.middleware import (
+        AzureContentSafetyPolicyMiddleware,
+    )
+
+    policy_agent = create_agent(
+        model="azure_ai:gpt-4.1",
+        middleware=[
+            AzureContentSafetyPolicyMiddleware(
+                policy_id="your-guardrail-id",
+                endpoint="https://your-resource.cognitiveservices.azure.com",
+            ),
+        ],
+    )
+
+Alternatively, compose individual Content Safety middleware:
 
 .. code-block:: python
 
@@ -51,6 +70,7 @@ if TYPE_CHECKING:
     from langchain_azure_ai.agents.middleware.content_safety import (
         AzureContentModerationForImagesMiddleware,
         AzureContentModerationMiddleware,
+        AzureContentSafetyPolicyMiddleware,
         AzureGroundednessMiddleware,
         AzurePromptShieldMiddleware,
         AzureProtectedMaterialMiddleware,
@@ -59,6 +79,7 @@ if TYPE_CHECKING:
         ImageModerationInput,
         PromptShieldInput,
         TextModerationInput,
+        UnifiedModerationEvaluation,
         get_content_safety_annotations,
         print_content_safety_annotations,
     )
@@ -70,11 +91,13 @@ __all__ = [
     "AzureGroundednessMiddleware",
     "AzureProtectedMaterialMiddleware",
     "AzurePromptShieldMiddleware",
+    "AzureContentSafetyPolicyMiddleware",
     "ContentSafetyViolationError",
     "GroundednessInput",
     "ImageModerationInput",
     "PromptShieldInput",
     "TextModerationInput",
+    "UnifiedModerationEvaluation",
     "print_content_safety_annotations",
     "get_content_safety_annotations",
 ]
@@ -96,6 +119,9 @@ _module_lookup = {
     "AzurePromptShieldMiddleware": (
         "langchain_azure_ai.agents.middleware.content_safety"
     ),
+    "AzureContentSafetyPolicyMiddleware": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
     "ContentSafetyViolationError": (
         "langchain_azure_ai.agents.middleware.content_safety"
     ),
@@ -103,6 +129,9 @@ _module_lookup = {
     "ImageModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
     "PromptShieldInput": "langchain_azure_ai.agents.middleware.content_safety",
     "TextModerationInput": "langchain_azure_ai.agents.middleware.content_safety",
+    "UnifiedModerationEvaluation": (
+        "langchain_azure_ai.agents.middleware.content_safety"
+    ),
     "print_content_safety_annotations": (
         "langchain_azure_ai.agents.middleware.content_safety"
     ),

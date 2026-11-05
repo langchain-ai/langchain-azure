@@ -29,6 +29,7 @@ import importlib.metadata
 import importlib.util
 import logging
 import os
+from collections.abc import Callable
 from typing import Any, Final
 
 logger = logging.getLogger(__name__)
@@ -52,8 +53,9 @@ USER_AGENT_TELEMETRY_DISABLED_ENV_VAR: Final[str] = (
 
 _FOUNDRY_HOSTING_ENV_VAR: Final[str] = "FOUNDRY_HOSTING_ENVIRONMENT"
 
-# Insertion-ordered prefix registry (dict-as-ordered-set).
-_user_agent_prefixes: "dict[str, None]" = {}
+# Insertion-ordered prefix registry. Keys identify registrations so dynamic
+# prefixes can be updated in place without changing their emission order.
+_user_agent_prefixes: "dict[str, str | Callable[[], str]]" = {}
 _hosted_env_detected: bool = False
 
 
@@ -76,7 +78,25 @@ def add_user_agent_prefix(prefix: str) -> None:
         prefix: The token to register. Empty strings are ignored.
     """
     if prefix:
-        _user_agent_prefixes.setdefault(prefix, None)
+        _user_agent_prefixes.setdefault(prefix, prefix)
+
+
+def set_user_agent_prefix(key: str, prefix: "str | Callable[[], str]") -> None:
+    """Register or replace a named UA prefix.
+
+    The key retains its insertion position when its value changes, allowing
+    feature-bearing prefixes to evolve without leaving stale tokens behind.
+    Callable prefixes are resolved each time :func:`get_user_agent` runs.
+
+    Args:
+        key: Stable identifier for the registration.
+        prefix: The token or token provider to emit. An empty string removes
+            the registration.
+    """
+    if isinstance(prefix, str) and not prefix:
+        _user_agent_prefixes.pop(key, None)
+        return
+    _user_agent_prefixes[key] = prefix
 
 
 def _detect_hosted_environment() -> None:
@@ -135,7 +155,16 @@ def get_user_agent() -> str:
     _detect_hosted_environment()
     if not _user_agent_prefixes:
         return BASE_USER_AGENT
-    return " ".join((*_user_agent_prefixes.keys(), BASE_USER_AGENT))
+    prefixes: list[str] = []
+    for prefix in _user_agent_prefixes.values():
+        try:
+            resolved = prefix() if callable(prefix) else prefix
+        except Exception:
+            logger.debug("Skipping failing User-Agent prefix provider.", exc_info=True)
+            continue
+        if resolved:
+            prefixes.append(resolved)
+    return " ".join((*filter(None, prefixes), BASE_USER_AGENT))
 
 
 def with_user_agent(headers: "dict[str, Any] | None" = None) -> "dict[str, Any]":

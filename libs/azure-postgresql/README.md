@@ -12,7 +12,7 @@ This way, you can leverage your Azure Database for PostgreSQL instances as secur
 and fast vector stores for your LangChain workflows.
 
 > [!NOTE]
-> `langchain-azure-postgresql` currently supports Python 3.10 and above.
+> `langchain-azure-postgresql` currently supports Python 3.11 and above.
 
 ## Installation
 
@@ -85,39 +85,46 @@ $ source .venv/bin/activate # or, as appropriate for your shell, e.g., fish
 ```
 
 Once the development environment is synchronized and activated, you can start
-contributing changes to the package. For test automation, the package leverages
-[`tox`][tox-link], a test automation and standardization framework in Python.
-
-There are some pre-defined test environments and labels managed by `tox`:
+contributing changes to the package. The Makefile runs tools directly through
+`uv` in the selected Python environment:
 
 ```cmd
-$ tox list
-default environments:
-lint    -> Run lint checks on the code base
-package -> Run packaging checks on the code base
-type    -> Run type checks on the code base
-3.10    -> Run tests under Python 3.10
-3.11    -> Run tests under Python 3.11
-3.12    -> Run tests under Python 3.12
-3.13    -> Run tests under Python 3.13
+$ make help    # list available commands (also the default for make)
+$ make test    # run tests and package doctests
+$ make lint    # run lint checks
+$ make format  # format Python code and sort imports
+$ make type    # run type checks
+$ make package # build and check distributions
+$ make vuln    # check dependencies for vulnerabilities
 ```
 
-The default environments are for running lint checks, packaging checks, type
-checks, and end-to-end tests for different Python versions, respectively. You
-can selectively run an environment via, e.g., `tox run -e lint`, or, otherwise,
-run the full suite of tests via `tox`. There is a special label called `test`,
-which will run _only_ the end-to-end tests for all the supported Python versions
-and can be run via the following:
+As before, the Makefile lint targets report findings without failing the build.
+CI runs `make lint_package` for package sources and `make lint_tests` for tests.
+
+`make test` and `make tests` run the full test suite and package doctests once in
+the selected environment. The `integration_test` and `integration_tests` targets
+run only compile-marked integration tests, rather than repeating the full suite.
+
+The shared CI matrix selects Python 3.11 and 3.14; the package continues to support
+Python 3.11 through 3.14. Set the PostgreSQL connection environment variables to
+run the database-backed tests:
 
 ```cmd
-$ PGHOST=<host>.postgres.database.azure.com PGPASSWORD='your_password' tox run -m test
+$ PGHOST=<host>.postgres.database.azure.com PGPASSWORD='your_password' make test
 # logs stripped for brevity
 ```
+
+To select individual tests, pass pytest arguments through `TEST_FILE`, for example
+`make test TEST_FILE=tests/langchain/test_shared.py`.
 
 For more information on the supported test flags and environment variables, please
 check the output of `pytest --help`.
 
 [uv-link]: https://docs.astral.sh/uv/
-[tox-link]: https://tox.wiki/
 
 ## Changelog
+
+- **1.0.2**:
+
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We added Python 3.14 to the supported runtime and test matrix. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

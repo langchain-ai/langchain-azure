@@ -548,6 +548,7 @@ def print_content_safety_annotations(msg: BaseMessage) -> None:
         "protected_material": "Protected Material",
         "prompt_injection": "Prompt Injection",
         "groundedness": "Groundedness",
+        "unified_moderation": "Unified Moderation",
     }
 
     for i, annotation in enumerate(annotations, 1):

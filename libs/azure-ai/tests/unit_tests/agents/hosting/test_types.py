@@ -12,8 +12,10 @@ pytest.importorskip("azure.ai.agentserver.responses")
 
 from langchain_azure_ai.agents import hosting  # noqa: E402
 from langchain_azure_ai.agents.hosting import (  # noqa: E402
+    ConversationChainStoreProtocol,
     CreateResponse,
     FoundryCheckpointSaver,
+    FoundryConversationChainStore,
     InvocationAgentServerHost,
     ResponseContext,
     ResponseEventStream,
@@ -25,8 +27,10 @@ from langchain_azure_ai.agents.hosting import (  # noqa: E402
 
 def test_hosting_reexports_sdk_types() -> None:
     exported_types = [
+        ConversationChainStoreProtocol,
         CreateResponse,
         FoundryCheckpointSaver,
+        FoundryConversationChainStore,
         InvocationAgentServerHost,
         ResponseContext,
         ResponseEventStream,
@@ -44,8 +48,26 @@ def test_hosting_reexports_sdk_types() -> None:
     assert FoundryCheckpointSaver.__module__.startswith(
         "langchain_azure_ai.agents.hosting"
     )
+    assert ConversationChainStoreProtocol.__module__.startswith(
+        "langchain_azure_ai.agents.hosting"
+    )
+    assert FoundryConversationChainStore.__module__.startswith(
+        "langchain_azure_ai.agents.hosting"
+    )
     assert all(
         exported_type.__module__.startswith("azure.ai.agentserver.responses")
         for exported_type in exported_types
-        if exported_type not in {FoundryCheckpointSaver, InvocationAgentServerHost}
+        if exported_type
+        not in {
+            ConversationChainStoreProtocol,
+            FoundryCheckpointSaver,
+            FoundryConversationChainStore,
+            InvocationAgentServerHost,
+        }
     )
+
+
+def test_hosting_keeps_checkpoint_ref_internal() -> None:
+    assert "CheckpointRef" not in hosting.__all__
+    with pytest.raises(AttributeError):
+        getattr(hosting, "CheckpointRef")

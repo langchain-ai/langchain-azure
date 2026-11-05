@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from itertools import cycle
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 from langchain_core.documents import Document
@@ -30,11 +30,6 @@ from ...common import (
 )
 from ...common._shared import _run_coroutine_in_sync
 from .._shared import Filter, _embedding_to_numpy, _filter_to_sql
-
-if sys.version_info < (3, 11):
-    from typing_extensions import Self
-else:
-    from typing import Self
 
 if sys.version_info < (3, 12):
     from typing_extensions import override
@@ -1093,6 +1088,13 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                 else:
                     metadata_columns = []
 
+                filter_expression = _filter_to_sql(
+                    filter,
+                    metadata_columns
+                    if isinstance(self.metadata_columns, list)
+                    else self.metadata_columns,
+                )
+
                 # do reranking for the following cases:
                 #   - binary or scalar quantizations (for HNSW and IVFFlat), or
                 #   - product quantization (for DiskANN)
@@ -1167,7 +1169,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=_filter_to_sql(filter),
+                        filter_expression=filter_expression,
                         expression=(
                             sql.SQL(
                                 "binary_quantize({embedding_column})::bit({embedding_dim}) {op} binary_quantize({query})"
@@ -1237,7 +1239,7 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
                             )
                         ),
                         table_name=sql.Identifier(self.schema_name, self.table_name),
-                        filter_expression=_filter_to_sql(filter),
+                        filter_expression=filter_expression,
                     )
 
                 await cursor.execute(
@@ -1281,7 +1283,12 @@ class AsyncAzurePGVectorStore(BaseModel, VectorStore):
 
         Kwargs
         ------
-        - filter: Filter | None; Optional filter to apply to the search.
+        - filter: Filter | None; Optional filter to apply to the search. A str
+          ``column`` names a JSONB key (string ``metadata_columns``) or a configured
+          metadata column (list ``metadata_columns``) and is never treated as SQL;
+          ``operator`` and ``cast`` are checked against fixed allowlists. A
+          ``psycopg.sql.Composable`` column is inserted as trusted SQL, so never
+          build one from untrusted input.
         - top_m: int; Number of top results to prefetch when re-ranking (default: 5 * k).
 
         :return: Top-k documents.

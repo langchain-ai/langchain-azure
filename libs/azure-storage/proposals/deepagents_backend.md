@@ -135,29 +135,22 @@ is delegated to the Azure SDK. `from_connection_string` may be used instead of `
 ## Packaging
 
 `deepagents` pulls in a large dependency tree (`langchain`, `langchain-anthropic`,
-`langchain-google-genai`) and requires Python 3.11+, whereas `langchain-azure-storage`
-supports Python 3.10+. To avoid forcing that footprint (or a Python-version bump) on
-document-loader users, the backend's dependencies live behind an optional extra gated by an
-environment marker:
+`langchain-google-genai`). To avoid forcing that footprint on document-loader users, the
+backend's dependencies live behind an optional extra:
 
 ```toml
 [project.optional-dependencies]
 deepagents = [
-    "deepagents>=0.6.12,<1; python_version>='3.11'",
-    "wcmatch>=10.1; python_version>='3.11'",
+    "deepagents>=0.7.1,<0.8",
+    "wcmatch>=11.0",
 ]
 ```
 
 Install with `pip install "langchain-azure-storage[deepagents]"`. The backend lives in the
-`langchain_azure_storage.deepagents` subpackage; importing it without the extra installed (or
-on Python 3.10) raises an `ImportError` directing the user to install it. The top-level
+`langchain_azure_storage.deepagents` subpackage; importing it without the extra installed
+raises an `ImportError` directing the user to install it. The top-level
 `langchain_azure_storage` package stays importable and dependency-free for document-loader
 users.
-
-> The `python_version>='3.11'` marker is required: `deepagents` needs Python >= 3.11, and
-> without the marker `uv` cannot resolve a universal lockfile that also spans the package's
-> 3.10 support. The marker keeps the lock resolvable while the subpackage import surfaces the
-> requirement clearly at first use.
 
 ## Testing
 
@@ -166,7 +159,7 @@ users.
 - **Integration tests** run against either a live storage account
   (`AZURE_STORAGE_ACCOUNT_URL`) or the [Azurite][azurite] emulator
   (`AZURE_STORAGE_CONNECTION_STRING`) via `make integration_tests`, locally for now (as with
-  the document loaders); they are skipped on Python 3.10 via `pytest.importorskip`.
+  the document loaders).
 - **Contract tests** are a fork of `langchain-tests`' `SandboxIntegrationTests` trimmed to
   the `BackendProtocol` surface. Once a shared `BackendProtocol` suite lands
   ([langchain-ai/langchain#37905][backend-tests-issue]), the fork should be deleted in favor
@@ -202,13 +195,6 @@ Consolidated from the [#783][pr-783] review. Items with a tracking issue link to
   Worth revisiting if this shows up as a real cost in practice, e.g. via profiling.
 
 ### Version-triggered maintenance
-
-- **Python 3.11 floor.** Bump `requires-python` to `>=3.11` at Python 3.10 EOL
-  (October 2026) or when `langchain` core drops 3.10, whichever comes first. Removes the
-  `python_version >= "3.11"` environment marker on the `deepagents` extra, so an
-  unsupported install fails at install time instead of import time. The `ImportError`
-  shim stays (it guards a missing extra on any Python version). Tracked in
-  [langchain-azure#815][py310-issue].
 - **deepagents 0.7.0 re-sync.** When a stable 0.7.0 lands (and the floor bumps for other
   reasons), switch read-encoding classification to `_get_backend_read_file_type` (which
   adds e.g. `.mkv` handling) and refresh the vendored `_NON_TEXT_EXTENSIONS` set in
@@ -260,6 +246,5 @@ Consolidated from the [#783][pr-783] review. Items with a tracking issue link to
 [backend-tests-issue]: https://github.com/langchain-ai/langchain/issues/37905
 [pr-783]: https://github.com/langchain-ai/langchain-azure/pull/783
 [azurite-ci-issue]: https://github.com/langchain-ai/langchain-azure/issues/816
-[py310-issue]: https://github.com/langchain-ai/langchain-azure/issues/815
 [upstream-glob-issue]: https://github.com/langchain-ai/deepagents/issues/4978
 [scoped-memory]: https://docs.langchain.com/oss/python/deepagents/memory#scoped-memory

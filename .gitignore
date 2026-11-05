@@ -3,8 +3,22 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .mypy_cache_test
+
+# Unit test / coverage reports. `.coverage.*` covers parallel/xdist runs;
+# `cover/` and `htmlcov/` are where libs/azure-postgresql writes its reports.
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+cover/
+
 .env
 .env.*
+# Templates carry placeholders, not values. Keep this negation narrow: a bare
+# `!.env*` would un-ignore `.env` itself.
+!.env.example
 *.pem
 *.key
 *.crt

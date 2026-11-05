@@ -2530,9 +2530,13 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
         Records the tool output.  If the output is a LangGraph
         ``Command``-like object, GOTO routing metadata is also captured.
+        A ``ToolMessage`` with ``status="error"`` marks the span as failed,
+        using ``error.type="_OTHER"`` because the original exception type
+        is unavailable.
 
         Args:
-            output: The tool result (string, dict, or ``Command``-like).
+            output: The tool result (string, dict, ``ToolMessage``, or
+                ``Command``-like).
             run_id: Unique identifier for this tool run.
             parent_run_id: Run ID of the parent chain/agent.
             **kwargs: Additional LangChain callback keyword arguments.
@@ -2551,7 +2555,12 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
                 Attrs.TOOL_CALL_RESULT,
                 _serialise_tool_result(unwrapped, self._content_recording),
             )
-        record.span.set_status(Status(StatusCode.OK))
+        status = StatusCode.OK
+        if isinstance(output, ToolMessage) and output.status == "error":
+            status = StatusCode.ERROR
+            record.span.set_attribute(Attrs.ERROR_TYPE, "_OTHER")
+            record.attributes[Attrs.ERROR_TYPE] = "_OTHER"
+        record.span.set_status(Status(status))
         self._end_span(run_id)
 
     def on_tool_error(
@@ -2631,7 +2640,10 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             return
         if finish.return_values:
             record.span.set_attribute(
-                Attrs.OUTPUT_MESSAGES, _as_json_attribute(finish.return_values)
+                Attrs.OUTPUT_MESSAGES,
+                _as_json_attribute(
+                    _scrub_value(finish.return_values, self._content_recording)
+                ),
             )
         record.span.set_status(Status(StatusCode.OK))
         self._propagate_agent_usage_totals(record)
@@ -2675,7 +2687,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             Attrs.TOOL_NAME: serialized.get("name", "retriever"),
             Attrs.TOOL_DESCRIPTION: serialized.get("description", "retriever"),
             Attrs.TOOL_TYPE: "retriever",
-            Attrs.RETRIEVER_QUERY: query,
+            Attrs.RETRIEVER_QUERY: query if self._content_recording else "[redacted]",
         }
         parent_provider = None
         if resolved_parent and resolved_parent in self._spans:
@@ -2745,6 +2757,26 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             status=Status(StatusCode.ERROR, str(error)),
             error=error,
         )
+
+    def on_interrupt(self, event: Any) -> Any:
+        """Ignore LangGraph graph interrupt events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_interrupt`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphInterruptEvent``.
+        """
+
+    def on_resume(self, event: Any) -> Any:
+        """Ignore LangGraph graph resume events.
+
+        Auto tracing injects this tracer into LangGraph's graph lifecycle
+        callback manager, which dispatches ``on_resume`` to every handler.
+
+        Args:
+            event: The LangGraph ``GraphResumeEvent``.
+        """
 
     # ------------------------------------------------------------------
     # Internal helpers
