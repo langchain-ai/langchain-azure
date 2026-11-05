@@ -1,13 +1,14 @@
 [project]
 name = "langchain-azure-storage"
-version = "1.0.1"
+version = "1.2.1"
 description = "LangChain integrations for Azure Storage"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
 ]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = "~=3.10"
+requires-python = ">=3.11,<4.0"
 keywords = ["langchain", "azure"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -15,17 +16,26 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 dependencies = [
     "azure-core>=1.38.0",
-    "azure-identity~=1.25",
-    "azure-storage-blob[aio]~=12.26",
+    "azure-identity>=1.25",
+    "azure-storage-blob[aio]>=12.26",
     "langchain-core>=1.2.5,<2.0",
+]
+
+[project.optional-dependencies]
+# Azure Blob Storage filesystem backend for LangChain Deep Agents.
+deepagents = [
+    # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
+    "deepagents>=0.7.1,<0.8",
+    # Kept in lockstep with deepagents' own wcmatch floor.
+    "wcmatch>=11.0",
 ]
 
 [project.urls]
@@ -34,17 +44,27 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 "Release Notes" = "https://github.com/langchain-ai/langchain-azure/releases"
 
 [build-system]
-requires = ["uv_build>=0.8,<0.12"]
+requires = ["uv_build>=0.8,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+
+[tool.codespell]
+# "als" is the Deep Agents BackendProtocol async-ls method name, not a typo.
+ignore-words-list = "als"
 
 [tool.coverage.run]
 omit = ["tests/*"]
 
 [tool.mypy]
 disallow_untyped_defs = true
+
+# deepagents and wcmatch are only installed via the [deepagents] extra, and
+# deepagents ships no type stubs, so treat them as untyped.
+[[tool.mypy.overrides]]
+module = ["deepagents.*", "wcmatch.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = ["--strict-markers", "--strict-config", "--durations=5"]
@@ -70,7 +90,7 @@ default-groups = ["typing"]
 [dependency-groups]
 codespell = ["codespell~=2.2"]
 dev = ["langchain-core"]
-lint = ["ruff>=0.5,<0.16", "pytest>=9.0.3,<10"]
+lint = ["ruff>=0.5,<0.18", "pytest>=9.0.3,<10"]
 test = ["pytest>=9.0.3,<10", "pytest-asyncio>=1.0,<2"]
 test_integration = ["pytest>=9.0.3,<10"]
 typing = ["mypy>=1.10,<3.0"]

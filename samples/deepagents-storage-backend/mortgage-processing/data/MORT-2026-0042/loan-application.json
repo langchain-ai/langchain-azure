@@ -1,0 +1,12 @@
+{
+  "packet_id": "MORT-2026-0042",
+  "borrower": "Jordan Lee",
+  "annual_income_declared": 118000,
+  "monthly_debt_declared": 1450,
+  "requested_loan_amount": 420000,
+  "purchase_price": 560000,
+  "down_payment": 140000,
+  "property": "1842 Cedar Avenue, Seattle, WA 98122",
+  "occupancy": "primary residence",
+  "loan_term_years": 30
+}

@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from langchain_azure_ai.tools._toolbox import (
     _DEFAULT_FEATURES,
@@ -16,11 +17,56 @@ from langchain_azure_ai.tools._toolbox import (
     _normalize_scheme,
     _resource_name_from_uri,
     _run_async,
+    _ToolboxToolErrorWrapper,
 )
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
 )
+
+
+class TestAzureAIProjectToolboxEndpoint:
+    def test_omitted_version_uses_default_endpoint(self) -> None:
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://example.test/api/projects/p", toolbox_name="tb"
+        )
+
+        assert toolbox.toolbox_endpoint == (
+            "https://example.test/api/projects/p/toolboxes/tb/mcp?api-version=v1"
+        )
+
+    @pytest.mark.parametrize(
+        ("toolbox_version", "toolbox_path"),
+        [
+            (None, "tb"),
+            ("1", "tb/versions/1"),
+            ("foo", "tb/versions/foo"),
+            ("1/2?x#y", "tb/versions/1%2F2%3Fx%23y"),
+        ],
+    )
+    def test_toolbox_version_is_separate_from_api_version(
+        self, toolbox_version: str | None, toolbox_path: str
+    ) -> None:
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://example.test/api/projects/p/",
+            toolbox_name="tb",
+            toolbox_version=toolbox_version,
+            api_version="custom-api",
+        )
+
+        assert toolbox.toolbox_endpoint == (
+            f"https://example.test/api/projects/p/toolboxes/{toolbox_path}"
+            "/mcp?api-version=custom-api"
+        )
+
+    @pytest.mark.parametrize("toolbox_version", ["", ".", ".."])
+    def test_invalid_version_is_rejected(self, toolbox_version: str) -> None:
+        with pytest.raises(ValidationError, match="toolbox_version"):
+            AzureAIProjectToolbox(
+                project_endpoint="https://example.test/api/projects/p",
+                toolbox_name="tb",
+                toolbox_version=toolbox_version,
+            )
 
 
 class TestFetchRequireApprovalTools:
@@ -162,6 +208,48 @@ class TestAzureAIProjectToolboxApproval:
 
         with pytest.raises(ValueError, match="project_endpoint is required"):
             await toolbox.get_tools_requiring_approval()
+
+
+class TestAzureAIProjectToolboxTools:
+    def test_tool_wrapper_excludes_wrapped_tool_from_dump_and_repr(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        def echo(text: str) -> str:
+            """Echo text."""
+            return text
+
+        wrapped = _ToolboxToolErrorWrapper(echo)
+
+        assert wrapped.wrapped_tool is echo
+        assert "wrapped_tool" not in wrapped.model_dump()
+        assert "wrapped_tool=" not in repr(wrapped)
+
+    async def test_tool_execution_error_returns_tool_result(self) -> None:
+        from langchain_core.tools import tool
+
+        err_msg = "GitHub MCP returned non-200 status code."
+
+        @tool
+        async def github_search(query: str) -> str:
+            """Search GitHub repositories."""
+            raise RuntimeError(err_msg)
+
+        class FakeClient:
+            async def get_tools(self) -> list[Any]:
+                return [github_search]
+
+        toolbox = AzureAIProjectToolbox(
+            project_endpoint="https://resource.services.ai.azure.com/api/projects/p",
+            toolbox_name="tb",
+            credential="token",
+        )
+
+        tools = await toolbox._fetch_tools(FakeClient())
+
+        result = await tools[0].ainvoke({"query": "langchain-ai/langchain-azure"})
+
+        assert err_msg in str(result)
 
 
 class TestAzureAIProjectToolboxAuthHeaders:

@@ -21,18 +21,17 @@ __all__ = [  # noqa: F822
     "AzureCosmosDBNoSqlSemanticCache",
 ]
 
+from langchain_azure_cosmosdb import (
+    AzureDocumentDBVectorSearch,
+    CosmosDBSimilarityType,
+    CosmosDBVectorSearchCompression,
+    CosmosDBVectorSearchType,
+)
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
 from langchain_core.outputs import Generation
-
-from langchain_azure_ai.vectorstores.azure_cosmos_db_mongo_vcore import (
-    AzureCosmosDBMongoVCoreVectorSearch,
-    CosmosDBSimilarityType,
-    CosmosDBVectorSearchCompression,
-    CosmosDBVectorSearchType,
-)
 
 logger = logging.getLogger(__file__)
 
@@ -140,6 +139,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
 
     DEFAULT_DATABASE_NAME = "CosmosMongoVCoreCacheDB"
     DEFAULT_COLLECTION_NAME = "CosmosMongoVCoreCacheColl"
+    DEFAULT_SCORE_THRESHOLD = 0.5
 
     def __init__(
         self,
@@ -215,7 +215,11 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             l_search: l value for index searching.
                 Default value is 40, range from 10 to 10000.
                 Only vector-diskann search supports this.
-            score_threshold: Maximum score used to filter the vector search documents.
+            score_threshold: Minimum similarity a stored entry's nearest neighbor
+                must reach to be served as a cache hit; weaker matches are
+                treated as a cache miss instead of being returned as a false
+                match. Defaults to `DEFAULT_SCORE_THRESHOLD` (0.5) when not
+                provided -- `None` does not disable filtering.
             application_name: Application name for the client for tracking and logging
             compression: compression type for vector indexes.
             pq_compressed_dims: Number of dimensions after compression for product
@@ -253,7 +257,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         self.l_search = l_search
         self.ef_search = ef_search
         self.score_threshold = score_threshold
-        self._cache_dict: Dict[str, AzureCosmosDBMongoVCoreVectorSearch] = {}
+        self._cache_dict: Dict[str, AzureDocumentDBVectorSearch] = {}
         self.application_name = application_name
         self.compression = compression
         self.pq_compressed_dims = pq_compressed_dims
@@ -264,7 +268,7 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         hashed_index = _hash(llm_string)
         return f"cache:{hashed_index}"
 
-    def _get_llm_cache(self, llm_string: str) -> AzureCosmosDBMongoVCoreVectorSearch:
+    def _get_llm_cache(self, llm_string: str) -> AzureDocumentDBVectorSearch:
         index_name = self._index_name(llm_string)
 
         namespace = self.database_name + "." + self.collection_name
@@ -276,14 +280,14 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
         # create new vectorstore client for the specific llm string
         if self.cosmosdb_client:
             collection = self.cosmosdb_client[self.database_name][self.collection_name]
-            self._cache_dict[index_name] = AzureCosmosDBMongoVCoreVectorSearch(
+            self._cache_dict[index_name] = AzureDocumentDBVectorSearch(
                 collection=collection,
                 embedding=self.embedding,
                 index_name=index_name,
             )
         else:
             self._cache_dict[index_name] = (
-                AzureCosmosDBMongoVCoreVectorSearch.from_connection_string(
+                AzureDocumentDBVectorSearch.from_connection_string(
                     connection_string=self.cosmosdb_connection_string,
                     namespace=namespace,
                     embedding=self.embedding,
@@ -322,8 +326,13 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
             kind=self.kind,
             ef_search=self.ef_search,
             l_search=self.l_search,
-            score_threshold=self.score_threshold or 0.0,
+            score_threshold=(
+                self.DEFAULT_SCORE_THRESHOLD
+                if self.score_threshold is None
+                else self.score_threshold
+            ),
             oversampling=self.oversampling,
+            pre_filter={"metadata.llm_string": llm_string},
         )
         if results:
             for document in results:
@@ -362,9 +371,12 @@ class AzureCosmosDBMongoVCoreSemanticCache(BaseCache):
 
     def clear(self, **kwargs: Any) -> None:
         """Clear semantic cache for a given llm_string."""
-        index_name = self._index_name(kwargs["llm_string"])
+        llm_string = kwargs["llm_string"]
+        index_name = self._index_name(llm_string)
         if index_name in self._cache_dict:
-            self._cache_dict[index_name].get_collection().delete_many({})
+            self._cache_dict[index_name].get_collection().delete_many(
+                {"metadata.llm_string": llm_string}
+            )
 
     @staticmethod
     def _validate_enum_value(value: Any, enum_type: Type[Enum]) -> None:

@@ -37,6 +37,10 @@ from langchain_azure_ai.agents.middleware.content_safety._text import (
     BlocklistEvaluation,
     TextModerationInput,
 )
+from langchain_azure_ai.agents.middleware.content_safety._unified_moderation import (
+    AzureContentSafetyPolicyMiddleware,
+    UnifiedModerationEvaluation,
+)
 
 __all__ = [
     "_AzureContentSafetyBaseMiddleware",
@@ -45,6 +49,7 @@ __all__ = [
     "AzureGroundednessMiddleware",
     "AzurePromptShieldMiddleware",
     "AzureProtectedMaterialMiddleware",
+    "AzureContentSafetyPolicyMiddleware",
     "BlocklistEvaluation",
     "ContentModerationEvaluation",
     "ContentSafetyAnnotationPayload",
@@ -57,6 +62,7 @@ __all__ = [
     "PromptShieldInput",
     "ProtectedMaterialEvaluation",
     "TextModerationInput",
+    "UnifiedModerationEvaluation",
     "print_content_safety_annotations",
     "get_content_safety_annotations",
     "ContentSafetyViolationError",

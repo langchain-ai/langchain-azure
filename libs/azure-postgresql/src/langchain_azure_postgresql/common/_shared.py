@@ -9,13 +9,7 @@ from abc import abstractmethod
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
-from typing import Annotated, Any, Generic, TypeVar
-
-# typing.Self is introduced in Python 3.11
-if sys.version_info >= (3, 11):
-    from typing import Self
-else:
-    from typing_extensions import Self
+from typing import Annotated, Any, Generic, Self, TypeVar
 
 # typing.override is introduced in Python 3.12
 if sys.version_info >= (3, 12):

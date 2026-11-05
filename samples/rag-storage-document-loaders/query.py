@@ -69,7 +69,7 @@ def get_response(
     """Get a response from the LLM based on the retrieved documents."""
     documents = retriever.invoke(query)
     context = "\n\n".join(
-        [f"Document {doc.metadata["source"]}:\n{doc.page_content}" for doc in documents]
+        [f"Document {doc.metadata['source']}:\n{doc.page_content}" for doc in documents]
     )
     prompt = f"""You are an AI assistant. Use the following context to answer the
         question otherwise say you do not know. Include the URL for the document. 

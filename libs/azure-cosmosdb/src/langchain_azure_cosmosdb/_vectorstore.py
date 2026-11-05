@@ -28,6 +28,10 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
 from pydantic import ConfigDict, model_validator
 
+from langchain_azure_cosmosdb._request_charge import (
+    CosmosDBRequestChargeCallback,
+    RequestChargeAccumulator,
+)
 from langchain_azure_cosmosdb._utils import (
     extract_partition_key_paths,
     extract_partition_key_value,
@@ -161,6 +165,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         table_alias: str = "c",
+        request_charge_callback: Optional[CosmosDBRequestChargeCallback] = None,
     ) -> None:
         """Constructor for AzureCosmosDBNoSqlVectorSearch.
 
@@ -181,6 +186,8 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container: Set to true if the container does not exist.
             full_text_search_enabled: Set to true if the full text search is enabled.
             table_alias: Alias for the table to use in the WHERE clause.
+            request_charge_callback: Optional callback invoked with the request charge
+                aggregated across all requests in a logical operation.
         """
         self._cosmos_client = cosmos_client
         self._database_name = database_name
@@ -197,6 +204,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         self._full_text_search_enabled = full_text_search_enabled
         self._search_type = search_type
         self._table_alias = table_alias
+        self._request_charge_callback = request_charge_callback
 
         if self._create_container:
             if (
@@ -415,6 +423,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         create_container: bool = True,
         full_text_search_enabled: bool = False,
         search_type: str = "vector",
+        request_charge_callback: Optional[CosmosDBRequestChargeCallback] = None,
         **kwargs: Any,
     ) -> AzureCosmosDBNoSqlVectorSearch:
         if kwargs:
@@ -441,6 +450,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             create_container=create_container,
             full_text_search_enabled=full_text_search_enabled,
             search_type=search_type,
+            request_charge_callback=request_charge_callback,
         )
 
     @classmethod
@@ -1208,9 +1218,14 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
         threshold: Optional[float] = 0.0,
     ) -> List[Tuple[Document, float]]:
         docs_and_scores = []
+        request_charge = RequestChargeAccumulator()
+        # Eager consumption ensures the response hook observes every query page.
         items = list(
             self._container.query_items(
-                query=query, parameters=parameters, enable_cross_partition_query=True
+                query=query,
+                parameters=parameters,
+                enable_cross_partition_query=True,
+                response_hook=request_charge.response_hook,
             )
         )
         threshold = threshold or 0.0
@@ -1264,6 +1279,7 @@ class AzureCosmosDBNoSqlVectorSearch(VectorStore):
             docs_and_scores.append(
                 (Document(page_content=text, metadata=metadata), score)
             )
+        request_charge.emit(self._request_charge_callback, operation="query")
         return docs_and_scores
 
     def get_container(self) -> ContainerProxy:

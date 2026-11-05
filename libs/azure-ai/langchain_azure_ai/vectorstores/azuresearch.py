@@ -825,7 +825,10 @@ class AzureSearch(VectorStore):
             List of (Document, score) tuples.
 
         """
-        search_type = kwargs.get("search_type", self.search_type)
+        # Pop, as the sync twin does: the async search helpers forward
+        # ``**kwargs`` to ``async_client.search()``, which hands an unknown key
+        # down to aiohttp and raises ``TypeError``.
+        search_type = kwargs.pop("search_type", self.search_type)
         if search_type == "similarity":
             return await self.avector_search_with_score(query, k=k, **kwargs)
         elif search_type == "hybrid":
@@ -1288,7 +1291,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(embedding, dtype=np.float32)),
+                    vector=np.array(embedding, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1327,7 +1330,7 @@ class AzureSearch(VectorStore):
             search_text=text_query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(embedding, dtype=np.float32)),
+                    vector=np.array(embedding, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1478,7 +1481,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(self.embed_query(query), dtype=np.float32)),
+                    vector=np.array(self.embed_query(query), dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )
@@ -1567,7 +1570,7 @@ class AzureSearch(VectorStore):
             search_text=query,
             vector_queries=[
                 VectorizedQuery(
-                    vector=list(np.array(vector, dtype=np.float32)),
+                    vector=np.array(vector, dtype=np.float32).tolist(),
                     k_nearest_neighbors=k,
                     fields=FIELDS_CONTENT_VECTOR,
                 )

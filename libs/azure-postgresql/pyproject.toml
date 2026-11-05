@@ -1,11 +1,12 @@
 # Project-related metadata for the LangChain Azure PostgreSQL library.
 [project]
 name = "langchain-azure-postgresql"
-version = "1.0.1"
+version = "1.1.0"
 description = "LangChain VectorStore integrations for Azure Database for PostgreSQL"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = "~=3.10"
+requires-python = ">=3.11,<4.0"
 
 authors = [
   { name = "Arda Aytekin", email = "8845951+aytekinar@users.noreply.github.com" },
@@ -20,14 +21,13 @@ classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Framework :: AsyncIO",
   "Framework :: Pydantic :: 2",
-  "Framework :: tox",
   "Intended Audience :: Developers",
   "Intended Audience :: End Users/Desktop",
   "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Database",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Text Processing",
@@ -35,17 +35,17 @@ classifiers = [
 
 dependencies = [
   # aiohttp needed for azure.identity.aio; should we make it optional?
-  "aiohttp~=3.0",
+  "aiohttp>=3.0",
   "azure-core>=1.38.0",
-  "azure-identity~=1.0",
-  "langchain-core>=1.2.5,<2.0.0",     # Core LangChain library; includes base classes and utilities
-  "numpy~=2.0",
-  "pgvector~=0.4.0",
-  "psycopg[binary,pool]~=3.0",
-  "pydantic~=2.0",
-  "simsimd~=6.0",              # needed for LangChain's mmr search functionality
-  # Needed for typing.Self in 3.10 and typing.override in 3.11
-  "typing-extensions~=4.0; python_version < '3.12'",
+  "azure-identity>=1.0",
+  "langchain-core>=1.6.9,<2.0.0",     # Core LangChain library; includes base classes and utilities
+  "numpy>=2.0",
+  "pgvector>=0.4",
+  "psycopg[binary,pool]>=3.0",
+  "pydantic>=2.0",
+  "simsimd>=6.0",              # needed for LangChain's mmr search functionality
+  # Needed for typing.override in Python 3.11
+  "typing-extensions>=4.0; python_version < '3.12'",
 ]
 
 [project.urls]
@@ -55,7 +55,7 @@ repository = "https://github.com/langchain-ai/langchain-azure"
 
 # Build system configuration for the project.
 [build-system]
-requires = ["uv_build>=0.8,<0.12"]
+requires = ["uv_build>=0.8,<0.14"]
 build-backend = "uv_build"
 
 # Configuration for Coverage.py, which is used by pytest-cov internally.
@@ -72,8 +72,6 @@ langchain_azure_postgresql = [
 [tool.pytest.ini_options]
 addopts = [
   "--cov=langchain_azure_postgresql",            # Specify the package to measure coverage for
-  "--cov-report=html:htmlcov/pytest",            # Generate HTML coverage report under the htmlcov directory
-  "--cov-report=xml:cover/pytest/cobertura.xml", # Generate XML coverage report under the xmlcov directory
   "--cov-report=term",                           # Report coverage in the terminal
   "--doctest-continue-on-failure",               # Continue running doctests even if some fail
   "--doctest-modules",                           # Enable doctest modules
@@ -117,80 +115,9 @@ extend-select = [
 [tool.ruff.lint.pydocstyle]
 convention = "google" # Use Google style guide for docstrings
 
-# Configuration for Tox, the test automation framework used in the project.
-[tool.tox]
-requires = ["tox~=4.0", "tox-uv~=1.0"]
-env_list = ["3.10", "3.11", "3.12", "3.13", "lint", "package", "type", "vuln"]
-
-# Base environment configuration, which is inherited by all environments.
-[tool.tox.env_run_base]
-description = "Run tests under Python {base_python}"
-dependency_groups = ["test"]
-labels = ["test"]
-commands = [
-  [
-    "pytest",
-    # HTML coverage report for different Python versions
-    "--cov-report=html:htmlcov/{base_python}",
-    # XML coverage report for different Python versions
-    "--cov-report=xml:cover/{base_python}/cobertura.xml",
-  ],
-]
-pass_env = [
-  "AZURE_CLIENT_*",
-  "AZURE_TENANT_*",
-  "PGAPPNAME",
-  "PGDATABASE",
-  "PGHOST",
-  "PGPASSWORD",
-  "PGPORT",
-  "PGUSER",
-]
-
-# Environment configuration for the "lint" environment.
-[tool.tox.env.lint]
-description = "Run lint checks on the code base"
-skip_install = true
-dependency_groups = ["lint"]
-labels = ["lint"]
-commands = [["ruff", "check", "src"], ["ruff", "check", "tests"]]
-
-# Environment configuration for the "package" environment.
-[tool.tox.env.package]
-description = "Run packaging checks on the code base"
-skip_install = true
-dependency_groups = ["package"]
-labels = ["package"]
-commands = [
-  [
-    "python",
-    "-m",
-    "build",
-    "--installer",
-    "uv",
-    "--outdir",
-    "dist",
-  ],
-  [
-    "twine",
-    "check",
-    "dist/*",
-  ],
-]
-
-# Environment configuration for the "type" environment.
-[tool.tox.env.type]
-description = "Run type checks on the code base"
-dependency_groups = ["test", "type"]
-labels = ["type"]
-commands = [["mypy", "src"], ["mypy", "tests"]]
-
-# Environment configuration for the "vuln" environment.
-[tool.tox.env.vuln]
-description = "Run vulnerability scanning on the code base"
-dependency_groups = ["package"]
-labels = ["package", "vuln"]
-commands = [["uv-secure"]]
+[tool.ruff.lint.per-file-ignores]
+# Preserve the established string representation of these public enums.
+"src/langchain_azure_postgresql/common/_shared.py" = ["UP042"]
 
 # Configuration for uv, the project management tool used in the project.
 [tool.uv]
@@ -207,10 +134,10 @@ dev = [
   "langchain-openai>=1.0.0,<2.0.0",
   "langgraph>=1.0.0,<2.0.0",
   "langgraph-checkpoint-postgres>=3.0.0,<4.0.0",
-  "openai>=1,<3",
+  "openai>=1,<4",
 ]
-lint = ["ruff>=0.12,<0.16"]
-package = ["build[uv]~=1.0", "twine~=6.0", "uv-secure>=0.12,<0.18"]
+lint = ["ruff>=0.12,<0.18"]
+package = ["build[uv]~=1.0", "twine>=6,<8", "uv-secure>=0.12,<0.18"]
 test = [
   "numpy~=2.0",
   "pycobertura~=4.0",
@@ -218,8 +145,6 @@ test = [
   "pytest-asyncio~=1.0",
   "pytest-cov>=6,<8",
   "scipy~=1.0",
-  "tox~=4.0",
-  "tox-uv~=1.0",
 ]
 # TODO(arda): Remove this group once we have a stable/improved GitHub CI pipeline.
 test_integration = []

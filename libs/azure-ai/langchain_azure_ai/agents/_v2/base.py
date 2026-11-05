@@ -337,6 +337,12 @@ def _get_input_from_state(state: StateSchema) -> BaseMessage:
         raise ValueError(
             f"Expected input to call_model to have 'messages' key, but got {state}"
         )
+    if len(messages) == 0:
+        raise ValueError(
+            "Expected 'messages' to contain at least one message, but got an empty "
+            "list. Make sure to pass a HumanMessage (e.g. "
+            "{'messages': [HumanMessage(content='...')]}) when invoking the agent."
+        )
     return messages[-1]
 
 
@@ -543,6 +549,9 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
     agent_name: str
     """The agent name (used to tag messages and as the ``agent_reference``)."""
 
+    agent_version: Optional[str] = None
+    """The agent version included in the ``agent_reference``."""
+
     model_name: str
     """The model deployment name (used for tracing / llm_output)."""
 
@@ -605,6 +614,8 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
                 "type": "agent_reference",
             }
         }
+        if self.agent_version:
+            extra_body["agent_reference"]["version"] = self.agent_version
         if self.extra_body_additions:
             extra_body.update(self.extra_body_additions)
 
@@ -1050,6 +1061,9 @@ create_prompt_agent_node`
     _agent_version: Optional[str] = None
     """The agent version."""
 
+    _agent_reference_version: Optional[str] = None
+    """The agent version to pin in requests, or None to use the latest."""
+
     _uses_container_template: bool = False
     """Whether the agent definition uses a ``{{container_id}}`` template.
 
@@ -1116,6 +1130,7 @@ AgentServiceBaseTool`
         self._agent = agent
         self._agent_name = agent.name
         self._agent_version = agent.version
+        self._agent_reference_version = None if version == "latest" else agent.version
 
         logger.info(
             "Agent node initialized with agent: %s (version=%s)",
@@ -1149,6 +1164,7 @@ AgentServiceBaseTool`
             self._agent = None
             self._agent_name = None
             self._agent_version = None
+            self._agent_reference_version = None
         else:
             raise ValueError("The node does not have an associated agent to delete.")
 
@@ -1221,6 +1237,7 @@ AgentServiceBaseTool`
                 proxy = _AzureAIAgentApiProxyModel(
                     openai_client=openai_client,
                     agent_name=self._agent_name,
+                    agent_version=self._agent_reference_version,
                     model_name=self._get_model_name(),
                     input_items=input_items,
                     conversation_id=conversation_id,
@@ -1276,6 +1293,7 @@ AgentServiceBaseTool`
                 proxy = _AzureAIAgentApiProxyModel(
                     openai_client=openai_client,
                     agent_name=self._agent_name,
+                    agent_version=self._agent_reference_version,
                     model_name=self._get_model_name(),
                     input_items=response_input,
                     conversation_id=conversation_id,

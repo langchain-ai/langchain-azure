@@ -1,0 +1,28 @@
+[project]
+name = "langchain-azure-ci-tests"
+version = "0.0.0"
+requires-python = ">=3.11,<4.0"
+
+[dependency-groups]
+test = [
+  "langchain-azure-ai",
+  "pytest>=9.0.3,<10",
+  "pytest-socket>=0.6,<0.9",
+]
+lint = ["ruff>=0.5,<0.18"]
+
+[tool.uv]
+default-groups = ["test"]
+
+[tool.uv.sources]
+langchain-azure-ai = { path = "../../libs/azure-ai", editable = true }
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers", "--disable-socket"]
+testpaths = ["."]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

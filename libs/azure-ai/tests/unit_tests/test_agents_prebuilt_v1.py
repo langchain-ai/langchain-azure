@@ -306,3 +306,47 @@ class TestUploadFileBlocks:
         assert ext.isalnum(), f"Extension contains non-alphanumeric characters: {ext!r}"
         assert "/" not in filename
         assert ".." not in filename
+
+
+# ---------------------------------------------------------------------------
+# _get_thread_input_from_state
+# ---------------------------------------------------------------------------
+
+
+class TestGetThreadInputFromState:
+    """Tests for the _get_thread_input_from_state helper."""
+
+    def test_returns_last_message(self) -> None:
+        """Returns the last message in the messages list."""
+        from langchain_azure_ai.agents._v1.prebuilt.declarative import (
+            _get_thread_input_from_state,
+        )
+
+        msg1 = HumanMessage(content="first")
+        msg2 = HumanMessage(content="second")
+        state = {"messages": [msg1, msg2]}
+        assert _get_thread_input_from_state(state) is msg2  # type: ignore[type-var]
+
+    def test_raises_when_messages_key_missing(self) -> None:
+        """Raises ValueError when the state has no 'messages' key."""
+        from langchain_azure_ai.agents._v1.prebuilt.declarative import (
+            _get_thread_input_from_state,
+        )
+
+        with pytest.raises(ValueError, match="messages"):
+            _get_thread_input_from_state({"other_key": "value"})  # type: ignore[type-var]
+
+    def test_raises_clear_error_when_messages_empty(self) -> None:
+        """Raises ValueError with a descriptive message when messages is empty.
+
+        Regression test for: create_prompt_agent gives "list index out of range" error.
+        Previously this produced an unguarded ``messages[-1]`` IndexError.
+        """
+        import pytest
+
+        from langchain_azure_ai.agents._v1.prebuilt.declarative import (
+            _get_thread_input_from_state,
+        )
+
+        with pytest.raises(ValueError, match="at least one message"):
+            _get_thread_input_from_state({"messages": []})  # type: ignore[type-var]

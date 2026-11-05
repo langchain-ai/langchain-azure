@@ -21,14 +21,14 @@ The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
 provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
 from `azure.ai.projects.AIProjectClient`. The graph is a stock
 `create_agent(model, tools=[], checkpointer=MemorySaver())`, so every
-turn is just one chat-completion call against persisted history.
+turn is just one Responses API call against persisted history.
 
 See [main.py](main.py) for the full implementation.
 
 ### Agent Hosting
 
 The agent is hosted using
-[`langchain_azure_ai.agents.hosting.InvocationsHostServer`](../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
+[`langchain_azure_ai.agents.hosting.InvocationsHostServer`](../../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
 which adapts the compiled LangGraph runnable into a REST endpoint
 compatible with the Azure AI Invocations protocol. It supports both
 streaming (SSE token deltas) and non-streaming (JSON) response modes.

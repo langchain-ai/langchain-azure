@@ -6,9 +6,23 @@ from langchain_azure_cosmosdb._langgraph_cache import CosmosDBCacheSync
 from langchain_azure_cosmosdb._langgraph_checkpoint_store import CosmosDBSaverSync
 from langchain_azure_cosmosdb._langgraph_store import CosmosDBStore
 from langchain_azure_cosmosdb._query_constructor import AzureCosmosDbNoSQLTranslator
+from langchain_azure_cosmosdb._request_charge import (
+    CosmosDBRequestCharge,
+    CosmosDBRequestChargeCallback,
+)
 from langchain_azure_cosmosdb._vectorstore import (
     AzureCosmosDBNoSqlVectorSearch,
     AzureCosmosDBNoSqlVectorStoreRetriever,
+)
+from langchain_azure_cosmosdb._vectorstore_documentdb import (
+    AzureCosmosDBMongoVCoreVectorSearch,
+    AzureDocumentDBSimilarityType,
+    AzureDocumentDBVectorSearch,
+    AzureDocumentDBVectorSearchCompression,
+    AzureDocumentDBVectorSearchType,
+    CosmosDBSimilarityType,
+    CosmosDBVectorSearchCompression,
+    CosmosDBVectorSearchType,
 )
 from langchain_azure_cosmosdb.aio import (
     AsyncAzureCosmosDBNoSqlSemanticCache,
@@ -26,10 +40,20 @@ __all__ = [
     "AsyncAzureCosmosDBNoSqlVectorStoreRetriever",
     "AsyncCosmosDBChatMessageHistory",
     "AsyncCosmosDBStore",
+    "AzureCosmosDBMongoVCoreVectorSearch",
     "AzureCosmosDBNoSqlSemanticCache",
+    "AzureDocumentDBSimilarityType",
+    "AzureDocumentDBVectorSearch",
+    "AzureDocumentDBVectorSearchCompression",
+    "AzureDocumentDBVectorSearchType",
     "AzureCosmosDBNoSqlVectorSearch",
     "AzureCosmosDBNoSqlVectorStoreRetriever",
     "AzureCosmosDbNoSQLTranslator",
+    "CosmosDBSimilarityType",
+    "CosmosDBRequestCharge",
+    "CosmosDBRequestChargeCallback",
+    "CosmosDBVectorSearchCompression",
+    "CosmosDBVectorSearchType",
     "CosmosDBCache",
     "CosmosDBCacheSync",
     "CosmosDBChatMessageHistory",

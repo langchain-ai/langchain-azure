@@ -8,17 +8,22 @@ security and performance when working with large datasets.
 ## Tooling
 
 For this project, we use `uv` for packaging and dependency management. Similarly,
-we use `pytest` and `tox` to handle testing and test automation. The following
+we use `pytest` directly for testing. The following
 commands/tools are useful for the following purposes:
 
 - **Creating the development environment:** `uv sync --all-extras`
-- **Running tests:** `uv run tox -e py`
-- **Running lint checks:** `uv run tox -m lint`
-- **Running type checks:** `uv run tox -m type`
-- **Running packaging checks:** `uv run tox -m package`
+- **Running tests:** `make test`
+- **Running lint checks:** `make lint`
+- **Running type checks:** `make type`
+- **Running packaging checks:** `make package`
+- **Running vulnerability checks:** `make vuln`
 
-If there exists a `.env` file in the root directory, you can replace the
-`uv run` command with `uv run --env-file .env` and keep the rest the same.
+Tests run in the selected uv environment; the shared CI matrix manages Python
+versions. The test targets include both tests and package doctests, including
+when testing an installed wheel outside the source tree.
+
+For direct tool commands, use `uv run --env-file .env` to load a local `.env`
+file when needed.
 
 ## Project Structure
 

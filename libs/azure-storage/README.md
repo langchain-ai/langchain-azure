@@ -2,6 +2,7 @@
 
 This package contains the LangChain integrations for [Azure Storage](https://learn.microsoft.com/en-us/azure/storage/common/storage-introduction). Currently, it includes:
 - [Document loader support for Azure Blob Storage](#azure-blob-storage-document-loader-usage)
+- [Deep Agents filesystem backend backed by Azure Blob Storage](#deep-agents-azure-blob-storage-backend-usage)
 
 > [!NOTE]
 > This package is in Public Preview. For more information, see [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/).
@@ -21,7 +22,7 @@ your current environment. For more information on using credentials with
 `langchain-azure-storage`, see the [override default credentials](#override-default-credentials) section.
 
 ## Azure Blob Storage Document Loader Usage
-[Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/) are used to load data from many sources (e.g., cloud storage, web pages, etc.) and turn them into [LangChain Documents](https://python.langchain.com/api_reference/core/documents/langchain_core.documents.base.Document.html), which can then be used in AI applications (e.g., [RAG](https://docs.langchain.com/oss/python/langchain/rag#build-a-rag-agent-with-langchain)). This package offers the `AzureBlobStorageLoader` which downloads blob content from Azure Blob Storage and parses it as UTF-8 by default. Additionally, [parsing customization](#customizing-blob-content-parsing) is also available to handle content of various file types and customize document chunking.  
+[Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/) are used to load data from many sources (e.g., cloud storage, web pages, etc.) and turn them into [LangChain Documents](https://reference.langchain.com/python/langchain-core/documents/base/Document), which can then be used in AI applications (e.g., [RAG](https://docs.langchain.com/oss/python/langchain/rag#build-a-rag-agent-with-langchain)). This package offers the `AzureBlobStorageLoader` which downloads blob content from Azure Blob Storage and parses it as UTF-8 by default. Additionally, [parsing customization](#customizing-blob-content-parsing) is also available to handle content of various file types and customize document chunking.  
 
 The `AzureBlobStorageLoader` replaces the current `AzureBlobStorageContainerLoader` and `AzureBlobStorageFileLoader` in the [LangChain Community Document Loaders](https://python.langchain.com/docs/integrations/document_loaders/). Refer to the [migration section](#migrating-from-langchain-community-azure-storage-document-loaders) for more details. 
 
@@ -102,7 +103,7 @@ Currently, the default when parsing each blob is to return the content as a sing
 
 This works by downloading the blob content to a temporary file. The `loader_factory` then gets called with the filepath to use the specified document loader to load/parse the file and return the `Document` object(s).
 
-Below shows how to override the default loader used to parse blobs as PDFs using the using the [PyPDFLoader](https://python.langchain.com/api_reference/community/document_loaders/langchain_community.document_loaders.pdf.PyPDFLoader.html#pypdfloader):
+Below shows how to override the default loader used to parse blobs as PDFs using the using the [PyPDFLoader](https://reference.langchain.com/python/langchain-community/document_loaders/pdf/PyPDFLoader):
 
 ```python
 from langchain_azure_storage.document_loaders import AzureBlobStorageLoader
@@ -142,7 +143,7 @@ for doc in loader.lazy_load():
     print(doc.page_content)
 ```
 
-## Migrating from LangChain Community Azure Storage Document Loaders
+### Migrating from LangChain Community Azure Storage Document Loaders
 This section goes over the actions required to migrate from the existing community document loaders to the new Azure Blob Storage document loader:
 
 1. Depend on the `langchain-azure-storage` package instead of `langchain-community`.
@@ -193,4 +194,123 @@ container_loader = AzureBlobStorageLoader(
 )
 ```
 
+## Deep Agents Azure Blob Storage Backend Usage
+
+[Deep Agents](https://github.com/langchain-ai/deepagents) exposes a `BackendProtocol` — a pluggable interface for file operations (`read`, `write`, `edit`, `delete`, `ls`, `glob`, `grep`, plus batch upload/download) that an agent uses as its virtual filesystem. This package provides `AzureBlobBackend`, an Azure Blob Storage implementation of that interface, so a deep agent can persist its workspace in a blob container.
+
+The backend requires the optional `deepagents` extra (which itself requires Python 3.11+):
+
+```bash
+pip install -U "langchain-azure-storage[deepagents]"
+```
+
+`AzureBlobBackend` is imported from the `deepagents` subpackage:
+
+```python
+from langchain_azure_storage.deepagents import AzureBlobBackend
+```
+
+> [!NOTE]
+> Importing it without the `deepagents` extra installed raises an `ImportError` directing you to install the extra. The document loader does not require the extra.
+
+### Quick start
+
+```python
+from deepagents import create_deep_agent
+from langchain_azure_storage.deepagents import AzureBlobBackend
+
+backend = AzureBlobBackend(
+    account_url="https://<my-storage-account-name>.blob.core.windows.net",
+    container_name="agent-workspace",
+    prefix="session-001/",  # Optional: isolate each agent/session under a prefix.
+)
+
+agent = create_deep_agent(backend=backend)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "Write a hello world script to hello.py"}]}
+)
+# The agent's write_file tool call persists the script through the backend. With
+# the configuration above, it lands in the "agent-workspace" container at
+# https://<my-storage-account-name>.blob.core.windows.net/agent-workspace/session-001/hello.py
+```
+
+Runnable examples — including a workspace that persists across agent lifetimes and a
+composite agent with memory and subagents — live in
+[`samples/deepagents-storage-backend/`](https://github.com/langchain-ai/langchain-azure/blob/main/samples/deepagents-storage-backend/README.md).
+
+File content is stored as UTF-8 text in blob bodies (binary uploads are preserved as bytes). Directories are synthesized from blob key prefixes (no directory marker blobs are created). The backend exposes both synchronous methods (`read`, `write`, `edit`, `delete`, `ls`, `glob`, `grep`, `upload_files`, `download_files`) and their `a`-prefixed async counterparts (`aread`, `awrite`, …).
+
+### Writes and deletes are destructive
+
+Two backend operations replace or remove data that is already in your container. Both follow the Deep Agents `BackendProtocol` contract, and both are driven by the agent:
+
+- **`write` replaces an existing file in full.** There is no create-only mode — `write_file` on a path that already exists overwrites it rather than erroring. Use `edit` when existing content must be preserved.
+- **`delete` is recursive.** Deleting a directory removes it and everything nested under it. Deleting `"/"` removes every blob in the configured `prefix` namespace, or — if no `prefix` is set — **every blob in the container**.
+
+Recommended mitigations:
+
+- Set a `prefix` so the agent can only reach its own key namespace, never the whole container.
+- Enable [soft delete](https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-overview) and/or [blob versioning](https://learn.microsoft.com/azure/storage/blobs/versioning-overview) on the container so destructive tool calls are recoverable.
+- Scope the agent's credential to the container it should be able to modify, following the [Azure RBAC best practices](https://learn.microsoft.com/azure/role-based-access-control/best-practices): assign the role at the container scope rather than the subscription or storage account, and pick the least-privileged built-in role for what the agent actually does — `Storage Blob Data Reader` for a read-only agent, `Storage Blob Data Contributor` only when it must write or delete.
+- Drop or gate the tools you don't want. Omit `delete` from the filesystem middleware, or add a Deep Agents permission rule that denies it or routes it through a human-approval interrupt:
+
+  ```python
+  from deepagents import FilesystemMiddleware, create_deep_agent
+
+  agent = create_deep_agent(
+      backend=backend,
+      middleware=[
+          # Register every filesystem tool except `delete`.
+          FilesystemMiddleware(
+              backend=backend,
+              tools=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+          )
+      ],
+  )
+  ```
+
+### Authentication
+
+Like the document loader, `AzureBlobBackend` defaults to [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/credential-chains?tabs=dac#defaultazurecredential-overview) and accepts a `credential` override:
+
+```python
+from azure.identity import ManagedIdentityCredential
+
+backend = AzureBlobBackend(
+    account_url="https://<account>.blob.core.windows.net",
+    container_name="agent-workspace",
+    credential=ManagedIdentityCredential(),  # or any Azure credential object
+)
+```
+
+For local development against the [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) emulator, use `from_connection_string` instead of `account_url` + `credential`:
+
+```python
+backend = AzureBlobBackend.from_connection_string(
+    "<connection-string>",
+    container_name="agent-workspace",
+)
+```
+
+### Resource lifecycle
+
+`AzureBlobBackend` creates its underlying Azure SDK client (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses it across calls.
+
+When you use the **async** methods (`aread`, `awrite`, …), close the backend when you're done so the underlying `aiohttp` session is released; otherwise you'll see `Unclosed client session` warnings. Use it as an async context manager, or call `aclose()`:
+
+```python
+async with AzureBlobBackend(account_url="...", container_name="agent-workspace") as backend:
+    agent = create_deep_agent(backend=backend)
+    ...
+# equivalently: await backend.aclose() when you're done
+```
+
+The **sync** client releases its resources on garbage collection, so closing it is optional; you can still use `with` (or call `close()`) to release it promptly.
+
 ## Changelog
+
+- **1.2.1**:
+
+  - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+  - We simplified installation of the optional Deep Agents filesystem backend by removing its Python-version gating and aligning its dependency requirements with the package's new supported runtime range. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)

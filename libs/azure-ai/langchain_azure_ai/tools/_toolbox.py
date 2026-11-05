@@ -6,14 +6,16 @@ import asyncio
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from inspect import signature
 from types import TracebackType
 from typing import Any, List, Optional, Type, Union
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from azure.core.credentials import TokenCredential
 from langchain_core.documents.base import Blob
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, ToolException
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._user_agent import get_user_agent
@@ -173,7 +175,11 @@ def _run_async(coro: Any) -> Any:
 
 
 def _build_toolbox_mcp_url(
-    project_endpoint: str, toolbox_name: str, api_version: str
+    project_endpoint: str,
+    toolbox_name: str,
+    api_version: str,
+    *,
+    toolbox_version: Optional[str] = None,
 ) -> str:
     """Construct the full MCP URL for a named toolbox.
 
@@ -181,17 +187,24 @@ def _build_toolbox_mcp_url(
 
         {project_endpoint}/toolboxes/{toolbox_name}/mcp?api-version={api_version}
 
+    When ``toolbox_version`` is provided, ``/versions/{toolbox_version}``
+    is inserted before ``/mcp``.
+
     Args:
         project_endpoint: Azure AI Foundry project endpoint, e.g.
             ``https://<resource>.services.ai.azure.com/api/projects/<project>``.
         toolbox_name: Name of the toolbox as configured in Azure AI Foundry.
         api_version: Toolbox API version string, e.g. ``"v1"``.
+        toolbox_version: Specific toolbox version, URL-encoded as a path segment.
+            Defaults to ``None``, which uses the toolbox's default version.
 
     Returns:
         The fully-qualified MCP endpoint URL string.
     """
-    base = project_endpoint.rstrip("/")
-    return f"{base}/toolboxes/{toolbox_name}/mcp?api-version={api_version}"
+    base = f"{project_endpoint.rstrip('/')}/toolboxes/{toolbox_name}"
+    if toolbox_version is not None:
+        base += f"/versions/{quote(toolbox_version, safe='')}"
+    return f"{base}/mcp?api-version={api_version}"
 
 
 async def _fetch_require_approval_tools(
@@ -293,6 +306,79 @@ def _extract_consent_url(exc: BaseException) -> str:
             if url:
                 return url
     return str(exc)
+
+
+def _call_with_supported_kwargs(
+    func: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Call *func* with only the keyword arguments it accepts."""
+    params = signature(func).parameters
+    if any(param.kind == param.VAR_KEYWORD for param in params.values()):
+        return func(*args, **kwargs)
+    supported = {key: val for key, val in kwargs.items() if key in params}
+    return func(*args, **supported)
+
+
+class _ToolboxToolErrorWrapper(BaseTool):
+    """Convert ordinary toolbox tool exceptions into LangChain tool errors."""
+
+    wrapped_tool: BaseTool = Field(exclude=True, repr=False)
+
+    def __init__(self, tool: BaseTool) -> None:
+        super().__init__(
+            name=tool.name,
+            description=tool.description,
+            args_schema=tool.args_schema,
+            return_direct=tool.return_direct,
+            verbose=tool.verbose,
+            callbacks=tool.callbacks,
+            tags=tool.tags,
+            metadata=tool.metadata,
+            handle_tool_error=True,
+            handle_validation_error=tool.handle_validation_error,
+            response_format=tool.response_format,
+            wrapped_tool=tool,
+        )
+
+    def _run(
+        self,
+        *args: Any,
+        config: Optional[RunnableConfig] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the wrapped tool synchronously."""
+        try:
+            return _call_with_supported_kwargs(
+                self.wrapped_tool._run,
+                args,
+                {**kwargs, "config": config, "run_manager": run_manager},
+            )
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+
+    async def _arun(
+        self,
+        *args: Any,
+        config: Optional[RunnableConfig] = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the wrapped tool asynchronously."""
+        try:
+            return await _call_with_supported_kwargs(
+                self.wrapped_tool._arun,
+                args,
+                {**kwargs, "config": config, "run_manager": run_manager},
+            )
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
 
 
 # ── Toolbox ────────────────────────────────────────────────────────────────────
@@ -398,6 +484,10 @@ class AzureAIProjectToolbox(BaseModel):
             ``FOUNDRY_PROJECT_ENDPOINT`` environment variables.
         toolbox_name: Name of the toolbox as configured in Azure AI Foundry.
             This parameter is required.
+        toolbox_version: Specific toolbox version to use. Must be non-empty and
+            cannot be ``"."`` or ``".."``. Defaults to ``None``, which uses the
+            toolbox's default version. Version existence is checked by the service
+            when called.
         api_version: Toolbox API version appended to the MCP URL.
             Defaults to ``"v1"``.
         credential: Azure credential used to obtain Bearer tokens. Accepts a
@@ -415,6 +505,9 @@ class AzureAIProjectToolbox(BaseModel):
     toolbox_name: str
     """Name of the toolbox as configured in Azure AI Foundry."""
 
+    toolbox_version: Optional[str] = Field(default=None, min_length=1)
+    """Specific toolbox version, or None to use the toolbox's default version."""
+
     api_version: str = Field(default="v1")
     """Toolbox API version string appended to the MCP URL."""
 
@@ -427,6 +520,14 @@ class AzureAIProjectToolbox(BaseModel):
     """Additional HTTP headers to include in MCP requests."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_validator("toolbox_version")
+    @classmethod
+    def _validate_toolbox_version(cls, value: Optional[str]) -> Optional[str]:
+        """Prevent URL normalization from changing the selected endpoint."""
+        if value in (".", ".."):
+            raise ValueError("toolbox_version must not be '.' or '..'")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -443,9 +544,12 @@ class AzureAIProjectToolbox(BaseModel):
 
     @property
     def toolbox_endpoint(self) -> str:
-        """Compute the full MCP endpoint URL from project_endpoint + toolbox_name."""
+        """Compute the MCP endpoint for the selected or default toolbox version."""
         return _build_toolbox_mcp_url(
-            self.project_endpoint, self.toolbox_name, self.api_version
+            self.project_endpoint,
+            self.toolbox_name,
+            self.api_version,
+            toolbox_version=self.toolbox_version,
         )
 
     def _build_mcp_client(self) -> Any:
@@ -908,6 +1012,7 @@ class AzureAIProjectToolbox(BaseModel):
         # message has no corresponding tool_message response.
         for t in tools:
             t.handle_tool_error = True
+        tools = [_ToolboxToolErrorWrapper(t) for t in tools]
 
         # Some MCP servers return tool schemas that omit ``properties`` on
         # object-typed inputs; fix them so the framework accepts the schema.

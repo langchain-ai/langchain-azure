@@ -1,5 +1,33 @@
 # langchain-azure-dynamic-sessions
 
+> [!WARNING]
+> **This package is deprecated and will not receive further fixes.** It has
+> been superseded by
+> [`langchain-azure-compute`](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-compute),
+> which carries the dynamic sessions integrations forward under the wider
+> Azure Container Apps umbrella — and additionally covers Azure Container Apps
+> sandboxes, the stateful counterpart to dynamic sessions.
+>
+> ```bash
+> pip install "langchain-azure-compute[dynamic-sessions]"
+> ```
+>
+> Then update imports:
+>
+> ```diff
+> - from langchain_azure_dynamic_sessions import SessionsPythonREPLTool
+> + from langchain_azure_compute.dynamic_sessions import SessionsPythonREPLTool
+> - from langchain_azure_dynamic_sessions import SessionsBashTool
+> + from langchain_azure_compute.dynamic_sessions import SessionsBashTool
+> - from langchain_azure_dynamic_sessions.backends import SessionsBashBackend
+> + from langchain_azure_compute.dynamic_sessions.backends import SessionsBashBackend
+> ```
+>
+> Migrating also fixes `SessionsBashBackend` on **deepagents >= 0.7**, where it
+> is broken here: its file-operation overrides are silently ignored and
+> `read()` returns the wrong type. Neither failure raises, so an affected agent
+> degrades quietly rather than erroring.
+
 This package contains the LangChain integration for Azure Container Apps dynamic sessions. You can use it to add a secure and scalable code interpreter to your agents.
 
 ## Installation
@@ -36,7 +64,16 @@ from langchain_azure_dynamic_sessions.tools import SessionsPythonREPLTool
 tool = SessionsPythonREPLTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 agent = create_agent(model=llm, tools=[tool])
-result = agent.invoke({"messages": [{"role": "user", "content": "What is the current time in Vancouver, Canada?"}]})
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the current time in Vancouver, Canada?",
+            }
+        ]
+    }
+)
 ```
 
 When you're done with a session, call `close()` (or `delete_session()`) to release
@@ -59,7 +96,13 @@ from langchain_azure_dynamic_sessions.tools import SessionsBashTool
 tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 agent = create_agent(model=llm, tools=[tool])
-result = agent.invoke({"messages": [{"role": "user", "content": "List the files in the current directory."}]})
+result = agent.invoke(
+    {
+        "messages": [
+            {"role": "user", "content": "List the files in the current directory."}
+        ]
+    }
+)
 ```
 
 You can also execute bash commands directly:
@@ -81,13 +124,17 @@ The tool supports file operations as well:
 tool = SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT)
 
 # upload a file to the session
-tool.upload_file(local_file_path="./local_script.sh", remote_file_path="/mnt/user/script.sh")
+tool.upload_file(
+    local_file_path="./local_script.sh", remote_file_path="/mnt/user/script.sh"
+)
 
 # list files in the session
 files = tool.list_files()
 
 # download a file from the session
-tool.download_file(remote_file_path="/mnt/user/output.txt", local_file_path="./output.txt")
+tool.download_file(
+    remote_file_path="/mnt/user/output.txt", local_file_path="./output.txt"
+)
 ```
 
 Both tools also support context-manager usage so sessions are deleted
@@ -99,6 +146,11 @@ with SessionsBashTool(pool_management_endpoint=POOL_MANAGEMENT_ENDPOINT) as tool
 ```
 
 ## Changelog
+
+- **1.0.4**:
+
+    - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+    - We refreshed runtime dependency pins with security and compatibility updates. [#754](https://github.com/langchain-ai/langchain-azure/pull/754) [#776](https://github.com/langchain-ai/langchain-azure/pull/776)
 
 - **1.0.3**:
 

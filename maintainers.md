@@ -7,6 +7,7 @@ The following section describes the main DRIs for each f the packages and namesp
 | Package | Namespace | DRI | Secondary DRI |
 |---------|-----------|-----|---------------|
 | `langchain-azure-ai` | `langchain_azure_ai` | @santiagxf | @marlenezw |
+| `langchain-azure-compute` | `langchain_azure_compute` | @darieldatoon | @kyleknap |
 | `langchain-azure-dynamic-sessions` | `langchain_azure_dynamic_sessions` | @ShichaoQiu | @santiagxf |
 | `langchain-azure-postgresql` | `langchain_azure_postgresql` | @aytekinar | @marlenezw |
 | `langchain-azure-storage` | `langchain_azure_storage` | @anjaliratnam-msft | @kyleknap |
@@ -33,6 +34,13 @@ The following section describes the main DRIs for each f the packages and namesp
 | `langchain_azure_ai.query_constructors` | @aayush3011 | @santiagxf |
 | `langchain_azure_ai.utils` | @santiagxf | @marlenezw |
 
+### `langchain-azure-compute`
+
+| Namespace | DRI | Secondary DRI |
+|-----------|-----|---------------|
+| `langchain_azure_compute.dynamic_sessions` | @darieldatoon | @kyleknap |
+| `langchain_azure_compute.sandboxes` | @darieldatoon | @kyleknap |
+
 ### `langchain-azure-dynamic-sessions`
 
 | Namespace | DRI | Secondary DRI |
@@ -46,3 +54,9 @@ The following section describes the main DRIs for each f the packages and namesp
 |-----------|-----|---------------|
 | `langchain_azure_postgresql.common` | @aytekinar | @marlenezw |
 | `langchain_azure_postgresql.langchain` | @aytekinar | |
+
+### `langchain-azure-storage`
+
+| Namespace | DRI | Secondary DRI |
+|-----------|-----|---------------|
+| `langchain_azure_storage.deepagents` | @darieldatoon | @kyleknap |

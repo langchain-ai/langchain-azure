@@ -13,6 +13,7 @@ pip install langchain-azure-cosmosdb
 | Integration | Sync | Async | Description |
 |---|---|---|---|
 | **Vector Store** | `AzureCosmosDBNoSqlVectorSearch` | `AsyncAzureCosmosDBNoSqlVectorSearch` | Vector, full-text, hybrid, and weighted hybrid search |
+| **Vector Store (MongoDB compatibility)** | `AzureDocumentDBVectorSearch` | N/A | Vector search for Azure DocumentDB clusters with MongoDB compatibility |
 | **Semantic Cache** | `AzureCosmosDBNoSqlSemanticCache` | `AsyncAzureCosmosDBNoSqlSemanticCache` | LLM response caching backed by CosmosDB |
 | **Chat History** | `CosmosDBChatMessageHistory` | `AsyncCosmosDBChatMessageHistory` | Persistent chat message history |
 | **LangGraph Checkpointer** | `CosmosDBSaverSync` | `CosmosDBSaver` | LangGraph graph state persistence |
@@ -23,22 +24,27 @@ pip install langchain-azure-cosmosdb
 
 ### Vector Store
 
+Before configuring the policies in this example, review the [Azure Cosmos DB vector search documentation](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/vector-search) and the [workload-specific vector index selection guidance](https://github.com/AzureCosmosDB/cosmosdb-agent-kit/blob/main/skills/cosmosdb-best-practices/rules/vector-index-type.md) to choose policies for your workload.
+
 ```python
 from azure.cosmos import CosmosClient, PartitionKey
 from langchain_azure_cosmosdb import AzureCosmosDBNoSqlVectorSearch
 
 cosmos_client = CosmosClient("<endpoint>", "<key>")
+request_charges = []
 
 vectorstore = AzureCosmosDBNoSqlVectorSearch(
     cosmos_client=cosmos_client,
     embedding=embedding,
     vector_embedding_policy={
-        "vectorEmbeddings": [{
-            "path": "/embedding",
-            "dataType": "float32",
-            "distanceFunction": "cosine",
-            "dimensions": 1536,
-        }]
+        "vectorEmbeddings": [
+            {
+                "path": "/embedding",
+                "dataType": "float32",
+                "distanceFunction": "cosine",
+                "dimensions": 1536,
+            }
+        ]
     },
     indexing_policy={
         "indexingMode": "consistent",
@@ -51,6 +57,7 @@ vectorstore = AzureCosmosDBNoSqlVectorSearch(
     vector_search_fields={"text_field": "text", "embedding_field": "embedding"},
     database_name="my-database",
     container_name="my-container",
+    request_charge_callback=request_charges.append,
 )
 
 # Add documents
@@ -58,6 +65,33 @@ vectorstore.add_texts(["Azure CosmosDB is a multi-model database."])
 
 # Search
 results = vectorstore.similarity_search("What is CosmosDB?", k=3)
+if request_charges:
+    print(request_charges[-1].request_charge)
+```
+
+The optional `request_charge_callback` receives one `CosmosDBRequestCharge`
+after each successful logical query. Its `request_charge` is the sum of all
+Cosmos DB query pages and `request_count` is the number of page requests that
+reported a charge. The same callback contract applies to the async vector
+store. Insert, delete, point-read, and batch charges are not currently reported.
+
+### Vector Store (Azure DocumentDB with MongoDB compatibility)
+
+```python
+from pymongo import MongoClient
+from langchain_azure_cosmosdb import AzureDocumentDBVectorSearch
+
+mongo_client = MongoClient("<connection-string>")
+collection = mongo_client["my-database"]["my-collection"]
+
+vectorstore = AzureDocumentDBVectorSearch(
+    collection=collection,
+    embedding=embedding,
+    index_name="vectorSearchIndex",
+)
+
+vectorstore.add_texts(["Azure DocumentDB supports MongoDB-compatible vector search."])
+results = vectorstore.similarity_search("What does DocumentDB support?", k=3)
 ```
 
 ### Semantic Cache
@@ -221,7 +255,9 @@ async with AsyncCosmosDBStore.from_endpoint(
 ) as store:
     await store.setup()
 
-    await store.aput(("users", "alice", "preferences"), "coffee", {"text": "Dark roast"})
+    await store.aput(
+        ("users", "alice", "preferences"), "coffee", {"text": "Dark roast"}
+    )
     item = await store.aget(("users", "alice", "preferences"), "coffee")
 
     results = await store.asearch(("users",), query="beverage preferences", limit=3)
@@ -234,11 +270,13 @@ All integrations support both **access key** and **Microsoft Entra ID (AAD / Man
 ```python
 # Access key
 from azure.cosmos import CosmosClient
+
 client = CosmosClient("<endpoint>", "<key>")
 
 # AAD / Managed Identity
 from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
+
 client = CosmosClient("<endpoint>", credential=DefaultAzureCredential())
 ```
 
@@ -246,9 +284,42 @@ The LangGraph integrations that manage their own client — `CosmosDBSaverSync` 
 
 ## Samples
 
-See the [samples/cosmosdb-nosql/](../../samples/cosmosdb-nosql/) directory for runnable end-to-end examples of every integration.
+See the [samples/cosmosdb-nosql/](https://github.com/langchain-ai/langchain-azure/tree/main/samples/cosmosdb-nosql) directory for runnable end-to-end examples of every integration.
+
+### Host a persistent LangGraph agent on Azure
+
+Start with the [async checkpointer example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/cosmosdb-nosql/langgraph_checkpointer_async.py)
+for per-thread graph state, or the
+[async store example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/cosmosdb-nosql/langgraph_store_async.py)
+for long-term memory. Hosting with `ResponsesHostServer` or
+`InvocationsHostServer` requires the async `CosmosDBSaver` for Cosmos DB
+checkpoints: both hosts use async graph calls, which are not supported by
+`CosmosDBSaverSync`.
+
+Compile your graph with `checkpointer=checkpointer` (and `store=store` if
+needed), then await `ResponsesHostServer(graph).run_async()` or
+`InvocationsHostServer(graph).run_async()` inside the async context manager
+scope. Keep database clients and async context managers open for the host's
+lifetime. Follow the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+for deployment, and ensure the deployed agent can authenticate to Cosmos DB
+as well as its Foundry project.
+
+Alternatively, Foundry-hosted agents using container protocol `2.0.0` can
+persist graph checkpoints with
+[`FoundryCheckpointSaver` backed by Foundry State Store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/README.md#durable-graph-state),
+without a Cosmos DB checkpointer. This requires the hosted request context;
+use an in-memory or database-backed saver for local development.
 
 ## Changelog
+
+### 1.0.1
+
+We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
+
+- We introduced the `AzureDocumentDBVectorSearch` integration and compatibility aliases for MongoDB-compatible vector search, including a fix for the deprecated import path. **[NEW]** [#870](https://github.com/langchain-ai/langchain-azure/pull/870) [#871](https://github.com/langchain-ai/langchain-azure/pull/871)
+- We added optional request-charge callbacks for synchronous and asynchronous vector queries. **[NEW]** [#876](https://github.com/langchain-ai/langchain-azure/pull/876)
+- We fixed DocumentDB vector search handling for single-pass iterables and ensured caller-provided oversampling is forwarded to vector queries. [#1028](https://github.com/langchain-ai/langchain-azure/pull/1028)
 
 ### 1.0.0
 
