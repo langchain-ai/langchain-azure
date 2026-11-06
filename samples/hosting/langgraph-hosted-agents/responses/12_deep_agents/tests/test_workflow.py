@@ -1,4 +1,4 @@
-"""Exercise handled publication failures through the native graph and host."""
+"""Exercise checkpoint restoration and handled publication failures."""
 
 from __future__ import annotations
 
@@ -8,13 +8,24 @@ import sys
 import unittest
 from collections.abc import Sequence
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from azure.core.exceptions import HttpResponseError, ServiceRequestError
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from deepagents.backends.utils import create_file_data
+from langchain_azure_ai.agents.hosting import (
+    FoundryCheckpointSaver,
+    ResponsesHostServer,
+)
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    RemoveMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from starlette.testclient import TestClient
@@ -71,6 +82,137 @@ def response(client: TestClient, stream: bool, **request: Any) -> dict[str, Any]
         for event in events
         if event.get("type") == "response.completed"
     )
+
+
+class CheckpointRestoreTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_state_survives_saver_reopen_without_delta_history(self) -> None:
+        with (
+            TemporaryDirectory() as state_root,
+            patch.dict(
+                os.environ,
+                {
+                    "AGENTSERVER_STATE_ROOT": state_root,
+                    "OTEL_SDK_DISABLED": "true",
+                    "REPORT_STORAGE_ACCOUNT_URL": "https://reports.blob.core.windows.net",
+                    "REPORT_STORAGE_CONTAINER": "reports",
+                },
+            ),
+            patch.object(
+                FoundryCheckpointSaver,
+                "aget_delta_channel_history",
+                side_effect=AssertionError(
+                    "Checkpoint restore must not load delta history"
+                ),
+            ) as history,
+        ):
+            os.environ.pop("FOUNDRY_HOSTING_ENVIRONMENT", None)
+            config: RunnableConfig = {"configurable": {"thread_id": "full-state"}}
+            original = create_file_data(REPORT)
+            revised = create_file_data(REVISION)
+            model = ScriptedModel(
+                messages=iter(
+                    [
+                        call(
+                            "task",
+                            {
+                                "description": "Save research notes",
+                                "subagent_type": "research-agent",
+                            },
+                            "research",
+                        ),
+                        call(
+                            "write_file",
+                            {"file_path": "/notes.md", "content": "Research notes"},
+                            "notes",
+                        ),
+                        AIMessage(content="Research complete"),
+                        *[AIMessage(content=f"reply-{i}") for i in range(11)],
+                    ]
+                )
+            )
+            export = create_report_export_tool(MagicMock())
+            async with FoundryCheckpointSaver(MagicMock()) as saver:
+                graph = build_agent(model, saver, [], export)
+                for i in range(11):
+                    inputs: dict[str, Any] = {
+                        "messages": [HumanMessage(content=f"user-{i}", id=f"user-{i}")]
+                    }
+                    if i == 0:
+                        inputs["files"] = {
+                            "/report.md": original,
+                            "/discard.md": original,
+                        }
+                    elif i == 4:
+                        inputs["files"] = {"/report.md": revised}
+                    elif i == 7:
+                        inputs["files"] = {"/discard.md": None}
+                    result = await graph.ainvoke(inputs, config)
+                self.assertEqual(
+                    [
+                        message.content
+                        for message in result["messages"]
+                        if isinstance(message, HumanMessage)
+                        or (isinstance(message, AIMessage) and not message.tool_calls)
+                    ],
+                    [text for i in range(11) for text in (f"user-{i}", f"reply-{i}")],
+                )
+                child_checkpoints = [
+                    item.checkpoint["channel_values"]
+                    async for item in saver.alist(config)
+                    if item.config["configurable"]["checkpoint_ns"]
+                ]
+                self.assertTrue(child_checkpoints)
+                self.assertEqual(
+                    child_checkpoints[0]["files"]["/notes.md"]["content"],
+                    "Research notes",
+                )
+                self.assertEqual(
+                    child_checkpoints[0]["messages"][-1].content, "Research complete"
+                )
+                selected = await graph.aupdate_state(
+                    config,
+                    {
+                        "messages": [
+                            HumanMessage(content="updated user-3", id="user-3"),
+                            RemoveMessage(id="user-0"),
+                        ]
+                    },
+                )
+                before = await graph.aget_state(selected)
+                checkpoint = await saver.aget_tuple(selected)
+                self.assertIsNotNone(checkpoint)
+                assert checkpoint is not None
+                for channel in ("messages", "files"):
+                    self.assertEqual(
+                        checkpoint.checkpoint["channel_values"][channel],
+                        before.values[channel],
+                    )
+            async with FoundryCheckpointSaver(MagicMock()) as saver:
+                graph = build_agent(
+                    ScriptedModel(messages=iter([AIMessage(content="reply-11")])),
+                    saver,
+                    [],
+                    export,
+                )
+                restored = await graph.aget_state(selected)
+                self.assertEqual(restored.values["messages"], before.values["messages"])
+                self.assertEqual(restored.values["files"]["/report.md"], revised)
+                self.assertNotIn("/discard.md", restored.values["files"])
+                result = await graph.ainvoke(
+                    {"messages": [HumanMessage(content="user-11", id="user-11")]},
+                    selected,
+                )
+                self.assertEqual(
+                    [
+                        m.content
+                        for m in result["messages"]
+                        if isinstance(m, HumanMessage)
+                    ],
+                    ["updated user-3" if i == 3 else f"user-{i}" for i in range(1, 12)],
+                )
+                self.assertEqual(result["messages"][-1].content, "reply-11")
+                self.assertEqual(result["files"]["/report.md"], revised)
+            history.assert_not_called()
 
 
 class PublicationFailureWorkflowTests(unittest.TestCase):
