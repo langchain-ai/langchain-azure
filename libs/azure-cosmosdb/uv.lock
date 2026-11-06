@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <4.0"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1103,6 +1103,7 @@ test-integration = []
 name = "langchain-azure-cosmosdb"
 version = "1.0.1"
 source = { editable = "." }
+default-groups = ["typing"]
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-cosmos" },
