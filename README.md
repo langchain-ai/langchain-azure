@@ -78,9 +78,13 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
-To use `init_chat_model` with a Foundry project, set
-`AZURE_AI_PROJECT_ENDPOINT` and use the `azure_ai` provider. Sign in with
-`az login` for local development:
+Use the `azure_ai` provider with `init_chat_model`. Choose one of the
+following authentication options.
+
+**Option A: Project endpoint with Microsoft Entra ID**
+
+Set `AZURE_AI_PROJECT_ENDPOINT` and sign in with `az login` for local
+development:
 
 ```python
 import os
@@ -88,6 +92,23 @@ import os
 from langchain.chat_models import init_chat_model
 
 os.environ["AZURE_AI_PROJECT_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com/api/projects/<project>"
+
+model = init_chat_model("azure_ai:gpt-5-mini")
+model.invoke("Hello!").pretty_print()
+```
+
+**Option B: OpenAI-compatible endpoint with an API key**
+
+Set `OPENAI_API_BASE` and `OPENAI_API_KEY`. Leave `AZURE_AI_PROJECT_ENDPOINT`
+unset when using this option:
+
+```python
+import os
+
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_BASE"] = "https://{your-resource-name}.services.ai.azure.com/openai/v1"
+os.environ["OPENAI_API_KEY"] = "{your-key}"
 
 model = init_chat_model("azure_ai:gpt-5-mini")
 model.invoke("Hello!").pretty_print()
