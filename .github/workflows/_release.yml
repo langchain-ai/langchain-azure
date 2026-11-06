@@ -163,35 +163,20 @@ jobs:
           uv pip install --no-deps --reinstall-package "$PKG_NAME" "$RELEASE_WHEEL"
           mkdir -p "$RUNNER_TEMP/release-tests"
           cp -R tests Makefile pyproject.toml uv.lock "$RUNNER_TEMP/release-tests/"
-          if [[ -d docs ]]; then
-            cp -R docs "$RUNNER_TEMP/release-tests/"
-          fi
           echo "UV_PROJECT_ENVIRONMENT=$PWD/.venv" >> "$GITHUB_ENV"
 
       - name: Run unit tests
         shell: bash
         env:
           UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make tests
-          fi
+        run: make tests
         working-directory: ${{ runner.temp }}/release-tests
 
       - name: Run integration tests
         shell: bash
         env:
           UV_NO_SYNC: "1"
-        run: |
-          if [[ "$PKG_NAME" == "langchain-azure-postgresql" ]]; then
-            uv run --no-sync tox run -m test --installpkg "$RELEASE_WHEEL" \
-              -x 'tool.tox.env_run_base.set_env=PYTEST_ADDOPTS=--pyargs tests langchain_azure_postgresql'
-          else
-            make integration_tests
-          fi
+        run: make integration_tests
         working-directory: ${{ runner.temp }}/release-tests
 
       - name: Run tests with minimum direct dependency versions

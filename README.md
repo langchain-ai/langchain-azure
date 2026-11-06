@@ -18,6 +18,12 @@ Build with Azure models using the [LangChain and LangGraph development guide](ht
 The [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) cover local runs and deployment, including [hosting an existing graph without changing its implementation](./samples/hosting/langgraph-hosted-agents/responses/09_run/README.md).
 For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
 
+## Samples
+
+- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
+- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
+- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
+
 # Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.

@@ -80,7 +80,6 @@ async def test_tool_attachments_reach_client(block: dict[str, Any], mode: str) -
                 json={
                     "input": "Make a report",
                     "stream": mode == "sse",
-                    "store": False,
                 },
             )
             assert result.status_code == 200, result.text
@@ -206,7 +205,6 @@ def test_tool_node_mixed_attachments_reach_http_client(streaming: bool) -> None:
             json={
                 "input": "Make a report",
                 "stream": streaming,
-                "store": False,
             },
         )
     assert result.status_code == 200

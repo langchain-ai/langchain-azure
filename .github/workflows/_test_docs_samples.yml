@@ -1,0 +1,54 @@
+name: test-docs-samples
+
+on:
+  workflow_call:
+    inputs:
+      uv-version:
+        required: true
+        type: string
+        description: "uv version to install"
+      python-versions:
+        required: true
+        type: string
+        description: "JSON array of Python versions to run"
+      working-directory:
+        required: true
+        type: string
+        description: "Docs or samples directory to check"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    defaults:
+      run:
+        working-directory: .github/tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ${{ fromJson(inputs.python-versions) }}
+    name: "docs/samples #${{ matrix.python-version }}"
+    env:
+      DOCS_SAMPLES_DIR: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }} + uv ${{ inputs.uv-version }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ inputs.uv-version }}
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: ".github/tests/uv.lock"
+
+      - name: Check lock file is up to date
+        run: uv lock --check
+
+      - name: Lint CI tests and change detection
+        run: |
+          uv run --frozen --group lint ruff check --config pyproject.toml . ../scripts/check_diff.py
+          uv run --frozen --group lint ruff format --check --config pyproject.toml . ../scripts/check_diff.py
+
+      - name: Run offline docs and samples checks
+        run: uv run --frozen pytest --docs-samples-dir "$DOCS_SAMPLES_DIR"

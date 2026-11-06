@@ -281,8 +281,15 @@ class TestParallelInterrupts:
             third_payload = third.json()
             assert third_payload["status"] == "completed", third_payload
             assert not sentinels(third_payload), third_payload
-            text = assistant_text(third_payload)
-            assert "a=A" in text and "b=B" in text, third_payload
+            assert assistant_text(third_payload) == "b=B", third_payload
+            state = host.graph.get_state(
+                {"configurable": {"thread_id": conversation_id}}
+            )
+            assert [message.content for message in state.values["messages"]] == [
+                "go",
+                "a=A",
+                "b=B",
+            ]
 
     @REAL_INTERRUPT_ASYNC_XFAIL
     def test_does_not_reemit_answered_branch_that_returns_empty_update(self) -> None:
@@ -383,10 +390,15 @@ class TestParallelInterrupts:
             fourth_payload = fourth.json()
             assert fourth_payload["status"] == "completed", fourth_payload
             assert not sentinels(fourth_payload), fourth_payload
-            text = assistant_text(fourth_payload)
-            # The first answer stood; the retry never reached the graph.
-            assert "a=A1" in text and "b=B" in text, fourth_payload
-            assert "A2" not in text, fourth_payload
+            assert assistant_text(fourth_payload) == "b=B", fourth_payload
+            state = host.graph.get_state(
+                {"configurable": {"thread_id": conversation_id}}
+            )
+            assert [message.content for message in state.values["messages"]] == [
+                "go",
+                "a=A1",
+                "b=B",
+            ]
 
 
 class TestSequentialInterrupts:

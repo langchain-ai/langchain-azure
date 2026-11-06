@@ -1,0 +1,4 @@
+description: Deep Research web search
+tools:
+  - type: web_search
+    name: web_search

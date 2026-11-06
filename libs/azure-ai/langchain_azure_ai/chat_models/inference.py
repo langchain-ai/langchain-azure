@@ -264,7 +264,7 @@ def _convert_delta_to_message_chunk(
                     name=rtc["function"].get("name"),
                     args=rtc["function"].get("arguments"),
                     id=rtc.get("id"),
-                    index=rtc["index"],
+                    index=rtc.get("index"),
                 )
                 for rtc in raw_tool_calls
             ]
@@ -549,17 +549,17 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
     @property
     def _identifying_params(self) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
-        if self.temperature:
+        if self.temperature is not None:
             params["temperature"] = self.temperature
-        if self.top_p:
+        if self.top_p is not None:
             params["top_p"] = self.top_p
-        if self.presence_penalty:
+        if self.presence_penalty is not None:
             params["presence_penalty"] = self.presence_penalty
-        if self.frequency_penalty:
+        if self.frequency_penalty is not None:
             params["frequency_penalty"] = self.frequency_penalty
-        if self.max_tokens:
+        if self.max_tokens is not None:
             params["max_tokens"] = self.max_tokens
-        if self.seed:
+        if self.seed is not None:
             params["seed"] = self.seed
         if self.model_kwargs:
             params["model_extras"] = self.model_kwargs
@@ -599,8 +599,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
         response = self._client.complete(
             messages=inference_messages,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         return self._create_chat_result(response)  # type: ignore[arg-type]
 
@@ -615,8 +614,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
         response = await self._async_client.complete(
             messages=inference_messages,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         return self._create_chat_result(response)  # type: ignore[arg-type]
 
@@ -634,8 +632,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             messages=inference_messages,
             stream=True,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         assert isinstance(response, Iterator)
 
@@ -666,8 +663,7 @@ class AzureAIChatCompletionsModel(BaseChatModel, ModelInferenceService):
             messages=inference_messages,
             stream=True,
             stop=stop or self.stop,
-            **self._identifying_params,
-            **kwargs,
+            **{**self._identifying_params, **kwargs},
         )
         assert isinstance(response, AsyncIterator)
 

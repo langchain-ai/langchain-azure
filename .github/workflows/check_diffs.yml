@@ -38,6 +38,7 @@ jobs:
       python-versions: '["3.11", "3.14"]'
       dirs-to-lint: ${{ steps.set-matrix.outputs.dirs-to-lint }}
       dirs-to-test: ${{ steps.set-matrix.outputs.dirs-to-test }}
+      dirs-to-test-docs-samples: ${{ steps.set-matrix.outputs.dirs-to-test-docs-samples }}
 
   lint:
     name: cd ${{ matrix.working-directory }}
@@ -81,9 +82,22 @@ jobs:
       working-directory: ${{ matrix.working-directory }}
     secrets: inherit
 
+  docs-samples:
+    name: docs/samples ${{ matrix.working-directory }}
+    needs: [build]
+    if: ${{ needs.build.outputs.dirs-to-test-docs-samples != '[]' }}
+    strategy:
+      matrix:
+        working-directory: ${{ fromJson(needs.build.outputs.dirs-to-test-docs-samples) }}
+    uses: ./.github/workflows/_test_docs_samples.yml
+    with:
+      uv-version: ${{ needs.build.outputs.uv-version }}
+      python-versions: '["3.14"]'
+      working-directory: ${{ matrix.working-directory }}
+
   ci_success:
     name: "CI Success"
-    needs: [build, lint, test, compile-integration-tests]
+    needs: [build, lint, test, compile-integration-tests, docs-samples]
     if: |
       always()
     runs-on: ubuntu-latest

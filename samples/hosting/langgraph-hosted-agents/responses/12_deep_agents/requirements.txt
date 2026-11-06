@@ -1,0 +1,9 @@
+langchain-azure-ai[hosting,opentelemetry]==1.2.12
+deepagents==0.7.28
+langchain==1.4.6
+langgraph==1.2.16
+langchain-openai==1.7.2
+langchain-mcp-adapters==0.3.2
+azure-ai-projects>=2.3.0,<3.0
+azure-storage-blob==12.31.0
+python-dotenv==1.2.4

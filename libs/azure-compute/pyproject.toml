@@ -26,7 +26,7 @@ classifiers = [
 # extras below, so installing one integration does not pull the other's deps.
 dependencies = [
     "azure-core>=1.38.0",
-    "azure-identity~=1.25",
+    "azure-identity>=1.25",
     "langchain-core>=1.2.5,<2.0",
 ]
 
@@ -36,7 +36,7 @@ dependencies = [
 # extra to install.
 [project.optional-dependencies]
 dynamic-sessions = [
-    "requests~=2.31",
+    "requests>=2.31",
     # 0.7.1, not 0.7.0: it fixes degenerate read windows (deepagents#5180).
     "deepagents>=0.7.1,<0.8",
 ]
