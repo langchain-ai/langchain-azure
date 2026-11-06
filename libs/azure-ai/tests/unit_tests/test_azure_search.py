@@ -691,3 +691,95 @@ async def test_asimilarity_search_with_score_consumes_search_type(
 
     assert len(captured_kwargs) == 1
     assert "search_type" not in captured_kwargs[0]
+
+
+_RETRIEVER_SEARCH_TYPES = [
+    "similarity",
+    "similarity_score_threshold",
+    "hybrid",
+    "hybrid_score_threshold",
+    "semantic_hybrid",
+    "semantic_hybrid_score_threshold",
+]
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("search_type", _RETRIEVER_SEARCH_TYPES)
+@pytest.mark.parametrize("filter_param", ["filter", "filters"])
+def test_retriever_applies_filter(search_type: str, filter_param: str) -> None:
+    """The documented `filter` search kwarg must reach the search request.
+
+    The store methods only know `filters`, so `filter` was silently dropped by
+    the similarity searches, which returned unfiltered results, and raised
+    `TypeError` on the others.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    captured_kwargs: List[Dict[str, Any]] = []
+
+    def mock_search(
+        self: SearchClient, *args: Any, **kwargs: Any
+    ) -> EmptySearchResults:
+        captured_kwargs.append(kwargs)
+        return EmptySearchResults()
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        retriever = create_vector_store().as_retriever(
+            search_type=search_type,
+            search_kwargs={filter_param: "tenant eq 'a'"},
+        )
+        retriever.invoke("hello world")
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["filter"] == "tenant eq 'a'"
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("search_type", _RETRIEVER_SEARCH_TYPES)
+@pytest.mark.parametrize("filter_param", ["filter", "filters"])
+async def test_retriever_applies_filter_async(
+    search_type: str, filter_param: str
+) -> None:
+    """The async twin of `test_retriever_applies_filter`."""
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    captured_kwargs: List[Dict[str, Any]] = []
+
+    async def mock_search(
+        self: AsyncSearchClient, *args: Any, **kwargs: Any
+    ) -> EmptyAsyncSearchResults:
+        captured_kwargs.append(kwargs)
+        return EmptyAsyncSearchResults()
+
+    with (
+        patch.object(AsyncSearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        retriever = create_vector_store().as_retriever(
+            search_type=search_type,
+            search_kwargs={filter_param: "tenant eq 'a'"},
+        )
+        await retriever.ainvoke("hello world")
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["filter"] == "tenant eq 'a'"
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_retriever_rejects_filter_and_filters_together() -> None:
+    """Conflicting filters must fail rather than search with only one of them."""
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with patch.object(SearchIndexClient, "get_index", mock_default_index):
+        retriever = create_vector_store().as_retriever(
+            search_type="similarity",
+            search_kwargs={"filter": "tenant eq 'a'", "filters": "tenant eq 'b'"},
+        )
+
+        with pytest.raises(ValueError, match="`filter` or `filters`"):
+            retriever.invoke("hello world")

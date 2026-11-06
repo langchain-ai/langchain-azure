@@ -1883,8 +1883,8 @@ class AzureSearch(VectorStore):
                     - lambda_mult: Diversity of results returned by MMR;
 
                         1 for minimum diversity and 0 for maximum. (Default: `0.5`)
-
-                    filter: Filter by document metadata
+                    - filter: OData filter expression. `filters` is accepted
+                        too, but passing both raises `ValueError`.
 
         Returns:
             AzureSearchVectorStoreRetriever: Retriever class for VectorStore.
@@ -1915,7 +1915,8 @@ class AzureSearchVectorStoreRetriever(BaseRetriever):
         fetch_k: Amount of documents to pass to MMR algorithm (Default: 20)
         lambda_mult: Diversity of results returned by MMR;
             1 for minimum diversity and 0 for maximum. (Default: 0.5)
-        filter: Filter by document metadata
+        filter: OData filter expression. `filters` is accepted too, but passing
+            both raises `ValueError`.
     """
 
     allowed_search_types: ClassVar[Collection[str]] = (
@@ -1944,13 +1945,22 @@ class AzureSearchVectorStoreRetriever(BaseRetriever):
                 )
         return values
 
+    def _get_search_params(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        params = {**self.search_kwargs, **kwargs}
+        filter_expression = params.pop("filter", None)
+        if filter_expression is not None:
+            if params.get("filters") is not None:
+                raise ValueError("Pass either `filter` or `filters`, not both.")
+            params["filters"] = filter_expression
+        return params
+
     def _get_relevant_documents(
         self,
         query: str,
         run_manager: CallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> List[Document]:
-        params = {**self.search_kwargs, **kwargs}
+        params = self._get_search_params(kwargs)
 
         if self.search_type == "similarity":
             docs = self.vectorstore.vector_search(query, k=self.k, **params)
@@ -1990,7 +2000,7 @@ class AzureSearchVectorStoreRetriever(BaseRetriever):
         run_manager: AsyncCallbackManagerForRetrieverRun,
         **kwargs: Any,
     ) -> List[Document]:
-        params = {**self.search_kwargs, **kwargs}
+        params = self._get_search_params(kwargs)
 
         if self.search_type == "similarity":
             docs = await self.vectorstore.avector_search(query, k=self.k, **params)
