@@ -11,6 +11,7 @@ from azure.identity import DefaultAzureCredential
 from langchain.agents.middleware import AgentMiddleware, AgentState, Runtime
 from langchain.tools import BaseTool
 from langchain_core.messages import BaseMessage
+from langchain_core.runnables.config import run_in_executor
 from openai.types.responses import EasyInputMessageParam
 
 from langchain_azure_ai._api.base import experimental
@@ -232,5 +233,10 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
     async def aafter_agent(
         self, state: AgentState[Any], runtime: Runtime[Any]
     ) -> dict[str, Any] | None:
-        """Async hook equivalent of :meth:`after_agent`."""
-        return self.after_agent(state, runtime)
+        """Async hook equivalent of :meth:`after_agent`.
+
+        Runs in a worker thread: flushing calls ``begin_update_memories`` on the
+        synchronous Azure client, which would otherwise block the event loop for
+        the length of that request.
+        """
+        return await run_in_executor(None, self.after_agent, state, runtime)
