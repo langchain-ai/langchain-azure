@@ -92,9 +92,17 @@ The repository provides the following implementations for different state roles:
 
 | Role | Implementation | Package / backend |
 | --- | --- | --- |
-| Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; durable state store. |
-| Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; durable state store. Requires hosted request context. |
+| Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; local files or Foundry State Store. |
+| Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; local files or Foundry State Store. |
 | Graph checkpoints | [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
+
+The State Store-backed implementations use local files under
+`~/.agentserver/state_stores` during local development. Set
+`AGENTSERVER_STATE_ROOT` to choose another state root, and reuse it across
+restarts with the same conversation/thread ID. When hosted in Foundry, they
+use Foundry State Store with container protocol `2.0.0` and its request context.
+Use a database-backed saver when graph checkpoints must be shared across
+local processes or machines.
 
 Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
 one. Both hosts require the async `CosmosDBSaver` rather than
