@@ -308,8 +308,9 @@ as well as its Foundry project.
 Alternatively, Foundry-hosted agents using container protocol `2.0.0` can
 persist graph checkpoints with
 [`FoundryCheckpointSaver` backed by Foundry State Store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/README.md#durable-graph-state),
-without a Cosmos DB checkpointer. This requires the hosted request context;
-use an in-memory or database-backed saver for local development.
+without a Cosmos DB checkpointer. The same saver uses local files during
+local development; see its linked guide for the state directory and restart
+requirements.
 
 ## Changelog
 
