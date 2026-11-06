@@ -35,7 +35,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e "libs/azure-compute[durabletask]"
+pip install -e "libs/azure-compute[durabletask]" -r samples/langgraph-durabletask/05_multi_turn_conversation/requirements.txt
 ```
 
 Or from this sample folder:

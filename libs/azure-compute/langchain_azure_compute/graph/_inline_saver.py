@@ -33,7 +33,7 @@ from __future__ import annotations
 import base64
 import threading
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import ormsgpack
 from langchain_core.runnables import RunnableConfig
@@ -51,10 +51,28 @@ MAX_INLINE_THREAD_BUNDLES = 256
 MAX_BUNDLE_BYTES = 900_000
 _INLINE_SAVER_LOCK = threading.RLock()
 
-# Bounded in-process LRU/FIFO cache of the most recent exported bundle per thread_id so
-# a new turn
-# started on the same thread with an empty InMemorySaver can hydrate prior state.
-_INLINE_THREAD_BUNDLES: dict[str, CheckpointBundle] = {}
+# Retain saver identity in the bounded cache: thread IDs are not globally unique,
+# and retaining the saver prevents object-id reuse from leaking a previous graph.
+_INLINE_THREAD_BUNDLES: dict[tuple[Checkpointer, str], CheckpointBundle] = {}
+
+
+def _cache_inline_bundle(
+    saver: Checkpointer, thread: str, bundle: CheckpointBundle
+) -> None:
+    key = (saver, str(thread))
+    _INLINE_THREAD_BUNDLES.pop(key, None)
+    while len(_INLINE_THREAD_BUNDLES) >= MAX_INLINE_THREAD_BUNDLES:
+        _INLINE_THREAD_BUNDLES.pop(next(iter(_INLINE_THREAD_BUNDLES)), None)
+    _INLINE_THREAD_BUNDLES[key] = bundle
+
+
+def _get_cached_inline_bundle(
+    graph: CompiledGraph, thread: str
+) -> CheckpointBundle | None:
+    """Return the cached bundle belonging to this graph's checkpointer and thread."""
+    saver = _ensure_checkpointer(graph)
+    with _INLINE_SAVER_LOCK:
+        return _INLINE_THREAD_BUNDLES.get((saver, str(thread)))
 
 
 def _encode_typed(pair: tuple[str, bytes]) -> list[str]:
@@ -194,11 +212,7 @@ def _export_checkpoint_bundle(
                 f"{MAX_BUNDLE_BYTES}-byte DTS payload limit; configure a persistent "
                 "checkpointer (SqliteSaver, PostgresSaver, CosmosDBSaver)"
             )
-        if thread in _INLINE_THREAD_BUNDLES:
-            _INLINE_THREAD_BUNDLES.pop(thread, None)
-        while len(_INLINE_THREAD_BUNDLES) >= MAX_INLINE_THREAD_BUNDLES:
-            _INLINE_THREAD_BUNDLES.pop(next(iter(_INLINE_THREAD_BUNDLES)), None)
-        _INLINE_THREAD_BUNDLES[thread] = bundle
+        _cache_inline_bundle(saver, thread, bundle)
         return bundle
 
 
@@ -208,6 +222,7 @@ def _hydrate_checkpoint_bundle(
     bundle: CheckpointBundle | Mapping[str, Any] | None,
     *,
     only_if_missing_cfg: RunnableConfig | None = None,
+    preserve_newer: bool = False,
 ) -> None:
     """Restore an exported `checkpoint_bundle` into `graph.checkpointer`.
 
@@ -224,6 +239,16 @@ def _hydrate_checkpoint_bundle(
             and saver.get_tuple(only_if_missing_cfg) is not None
         ):
             return
+        if preserve_newer:
+            incoming = bundle.get("storage") or {}
+            # Bundles contain only the latest slice, not every older checkpoint.
+            # Compare IDs rather than treating all omitted historical IDs as newer.
+            for ns, existing_ckpts in saver.storage.get(thread, {}).items():
+                incoming_ckpts = incoming.get(ns, {})
+                if existing_ckpts and (
+                    not incoming_ckpts or max(existing_ckpts) > max(incoming_ckpts)
+                ):
+                    return
         saver.delete_thread(thread)
         for ns, ckpts in (bundle.get("storage") or {}).items():
             ns_dict = saver.storage[thread][ns]
@@ -244,3 +269,4 @@ def _hydrate_checkpoint_bundle(
                 )
         for ns, ch, ver, blob_enc in bundle.get("blobs") or ():
             saver.blobs[(thread, ns, ch, ver)] = _decode_typed(blob_enc)
+        _cache_inline_bundle(saver, thread, cast(CheckpointBundle, dict(bundle)))

@@ -59,6 +59,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from langchain_azure_compute.graph._inline_saver import _get_cached_inline_bundle
 from langchain_azure_compute.graph.azure_functions import (
     FunctionAppHttpServer,
     LangGraphFunctionApp,
@@ -68,7 +69,6 @@ from langchain_azure_compute.graph.azure_functions import (
     stop_function_app,
 )
 from langchain_azure_compute.graph.runner import (
-    _INLINE_THREAD_BUNDLES,
     CUSTOM_STATUS_INLINE_LIMIT,
     DURABLE_TOOL_ERROR_KEY,
     MAX_GRAPH_NAME_LENGTH,
@@ -864,6 +864,8 @@ class Registration:
         sdk_or_options: Any = None,
         *,
         start_worker: bool = False,
+        identity_provider: Callable[[Any], str | None] | None = None,
+        require_instance_owner: bool | None = None,
     ) -> Any:
         """Register Azure Functions v2 HTTP routes for this graph.
 
@@ -871,12 +873,19 @@ class Registration:
             app: Function app receiving start, status, respond, and health routes.
             sdk_or_options: Existing DTS client or SDK connection options.
             start_worker: Whether to start an embedded worker.
+            identity_provider: Callback validating tokens and returning principal IDs.
+            require_instance_owner: Enforce per-user ownership; see create_function_app.
 
         Returns:
             The supplied function app with graph routes registered.
         """
         return register_function_routes(
-            app, self, sdk_or_options, start_worker=start_worker
+            app,
+            self,
+            sdk_or_options,
+            start_worker=start_worker,
+            identity_provider=identity_provider,
+            require_instance_owner=require_instance_owner,
         )
 
 
@@ -1137,18 +1146,15 @@ class RunClient:
         expect = _checkpoint_id(
             _get_state(target_graph, _config(thread, run_config=norm_cfg))
         )
-        if (
-            reg.inline_checkpoints
-            and expect is None
-            and input is None
-            and thread in _INLINE_THREAD_BUNDLES
-        ):  # pragma: no cover
-            _hydrate_checkpoint_bundle(  # pragma: no cover
-                target_graph, thread, _INLINE_THREAD_BUNDLES[thread]
-            )
-            expect = _checkpoint_id(  # pragma: no cover
-                _get_state(target_graph, _config(thread, run_config=norm_cfg))
-            )
+        if reg.inline_checkpoints and expect is None and input is None:
+            cached = _get_cached_inline_bundle(target_graph, thread)
+            if cached is not None:
+                _hydrate_checkpoint_bundle(target_graph, thread, cached)
+                expect = _checkpoint_id(
+                    _get_state(target_graph, _config(thread, run_config=norm_cfg))
+                )
+        if input is None and expect is None:
+            raise ValueError("cannot start an empty thread without checkpoint state")
         request: dict[str, Any] = {
             "thread": thread,
             "kind": StepKind.START,
@@ -1710,8 +1716,15 @@ class Run:
         self.version = output.get("version")
         target_g = _resolve_graph(self._reg.graph, self.version)
         if "checkpoint_bundle" in output:
+            last_cid = output.get("last_checkpoint_id") or output.get("ckpt")
             _hydrate_checkpoint_bundle(
-                target_g, self.thread_id, output["checkpoint_bundle"]
+                target_g,
+                self.thread_id,
+                output["checkpoint_bundle"],
+                only_if_missing_cfg=_config(self.thread_id, last_cid)
+                if last_cid
+                else None,
+                preserve_newer=True,
             )
         if "output" in output:
             return unpack(output["output"])
@@ -1798,6 +1811,15 @@ class AsyncRunClient:
         expect = _checkpoint_id(
             _get_state(target_graph, _config(thread, run_config=norm_cfg))
         )
+        if reg.inline_checkpoints and expect is None and input is None:
+            cached = _get_cached_inline_bundle(target_graph, thread)
+            if cached is not None:
+                _hydrate_checkpoint_bundle(target_graph, thread, cached)
+                expect = _checkpoint_id(
+                    _get_state(target_graph, _config(thread, run_config=norm_cfg))
+                )
+        if input is None and expect is None:
+            raise ValueError("cannot start an empty thread without checkpoint state")
         request: dict[str, Any] = {
             "thread": thread,
             "kind": StepKind.START,
@@ -2020,9 +2042,16 @@ class AsyncRun:
         self.generations, self.steps = output["gen"] + 1, output["steps"]
         self.version = output.get("version")
         target_g = _resolve_graph(self._reg.graph, self.version)
-        if "checkpoint_bundle" in output:  # pragma: no cover
-            _hydrate_checkpoint_bundle(  # pragma: no cover
-                target_g, self.thread_id, output["checkpoint_bundle"]
+        if "checkpoint_bundle" in output:
+            last_cid = output.get("last_checkpoint_id") or output.get("ckpt")
+            _hydrate_checkpoint_bundle(
+                target_g,
+                self.thread_id,
+                output["checkpoint_bundle"],
+                only_if_missing_cfg=_config(self.thread_id, last_cid)
+                if last_cid
+                else None,
+                preserve_newer=True,
             )
         if "output" in output:  # pragma: no cover
             return unpack(output["output"])

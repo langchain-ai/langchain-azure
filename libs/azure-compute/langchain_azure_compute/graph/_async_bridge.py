@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Coroutine, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from typing import Any, TypeVar
 
 from langchain_core.runnables import RunnableConfig
@@ -183,7 +183,7 @@ def _ensure_async_saver(saver: Checkpointer | None) -> None:
     if needs_shim:
 
         async def aget_tuple(config: RunnableConfig) -> CheckpointTuple | None:
-            return saver.get_tuple(config)
+            return await asyncio.to_thread(saver.get_tuple, config)
 
         async def aput(
             config: RunnableConfig,
@@ -191,7 +191,9 @@ def _ensure_async_saver(saver: Checkpointer | None) -> None:
             metadata: CheckpointMetadata,
             new_versions: ChannelVersions,
         ) -> RunnableConfig:
-            return saver.put(config, checkpoint, metadata, new_versions)
+            return await asyncio.to_thread(
+                saver.put, config, checkpoint, metadata, new_versions
+            )
 
         async def aput_writes(
             config: RunnableConfig,
@@ -199,9 +201,28 @@ def _ensure_async_saver(saver: Checkpointer | None) -> None:
             task_id: str,
             task_path: str = "",
         ) -> None:
-            saver.put_writes(config, writes, task_id, task_path)
+            await asyncio.to_thread(
+                saver.put_writes, config, writes, task_id, task_path
+            )
+
+        async def alist(
+            config: RunnableConfig | None,
+            *,
+            filter: dict[str, Any] | None = None,
+            before: RunnableConfig | None = None,
+            limit: int | None = None,
+        ) -> AsyncIterator[CheckpointTuple]:
+            # Materialize on the worker thread: generators perform I/O on iteration.
+            entries = await asyncio.to_thread(
+                lambda: list(
+                    saver.list(config, filter=filter, before=before, limit=limit)
+                )
+            )
+            for entry in entries:
+                yield entry
 
         setattr(saver, "aget_tuple", aget_tuple)
         setattr(saver, "aput", aput)
         setattr(saver, "aput_writes", aput_writes)
+        setattr(saver, "alist", alist)
         setattr(saver, "_durable_async_patched", True)

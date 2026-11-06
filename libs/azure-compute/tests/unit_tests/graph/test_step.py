@@ -2913,7 +2913,7 @@ def test_inline_bundle_cap_and_single_arg_run_resume():
         g.checkpointer.storage[tid] = g.checkpointer.storage["t-0"]
         _export_checkpoint_bundle(g, tid)
     assert len(_INLINE_THREAD_BUNDLES) == MAX_INLINE_THREAD_BUNDLES
-    assert "t-0" not in _INLINE_THREAD_BUNDLES
+    assert (reg.graph.checkpointer, "t-0") not in _INLINE_THREAD_BUNDLES
 
     events_raised = []
 
@@ -3262,7 +3262,7 @@ def test_strict_run_resume_and_wait_pending_terminal_detection():
         run_h.wait_pending(timeout=0.5)
 
 
-def test_azure_functions_http_routes_and_server_with_real_http_requests():
+def test_azure_functions_http_routes_and_server_with_real_http_requests(monkeypatch):
     """Unit test Azure Functions v2 HTTP routes (`POST /start`, `GET /status/{id}`,
     `POST /respond/{id}/{interrupt_id}`, `POST /respond/{id}`, `GET /health`) with real
     `azure.functions.HttpRequest` objects and `FunctionAppHttpServer`."""
@@ -3341,6 +3341,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
             return orch_states.get(instance_id)
 
     fake_sdk = FakeDtsSdk()
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
     app = create_function_app(
         reg, fake_sdk, start_worker=False, auth_level=func.AuthLevel.ANONYMOUS
     )
@@ -3485,7 +3486,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
         route_params={},
         body=json.dumps({"expense_id": "EXP-777", "approved": False}).encode("utf-8"),
     )
-    assert dispatch_function_request(app, owned_start).status_code == 202
+    assert dispatch_function_request(default_app, owned_start).status_code == 202
     wrong_caller_status = func.HttpRequest(
         method="GET",
         url="http://localhost:7071/api/graphs/expense_approval/status/inst-owned",
@@ -3494,7 +3495,9 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
         route_params={},
         body=b"",
     )
-    assert dispatch_function_request(app, wrong_caller_status).status_code == 403
+    assert (
+        dispatch_function_request(default_app, wrong_caller_status).status_code == 403
+    )
     owner_status = func.HttpRequest(
         method="GET",
         url="http://localhost:7071/api/graphs/expense_approval/status/inst-owned",
@@ -3503,7 +3506,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests():
         route_params={},
         body=b"",
     )
-    assert dispatch_function_request(app, owner_status).status_code == 200
+    assert dispatch_function_request(default_app, owner_status).status_code == 200
 
     app2 = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
     reg.register_function_routes(app2, fake_sdk)

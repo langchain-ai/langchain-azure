@@ -1143,6 +1143,12 @@ def make_orchestrator(
         inp: OrchestratorInput | dict[str, Any],
     ) -> Generator[task.Task[Any], Any, dict[str, Any] | None]:
         state = OrchestratorState.from_payload(inp)
+
+        def set_custom_status(status: dict[str, Any] | None) -> None:
+            if state.owner is not None:
+                status = {**(status or {}), "owner": state.owner}
+            ctx.set_custom_status(status)
+
         eff_limits = state.effective_limits(limits)
         retry = task.RetryPolicy(
             first_retry_interval=timedelta(seconds=1),
@@ -1274,7 +1280,7 @@ def make_orchestrator(
                                     tc, pending = interrupted_pairs[0]
                                     r_cnt = len(resumes_by_idx[tc["index"]])
                                     cur_t_ckpt = f"{report['ckpt']}:t:{r_cnt}"
-                                    ctx.set_custom_status(
+                                    set_custom_status(
                                         {
                                             "pending": pending,
                                             "interrupts": [pending],
@@ -1285,7 +1291,7 @@ def make_orchestrator(
                                     event, used = yield from _wait_for_resume_event(
                                         ctx, pending["id"], cur_t_ckpt, used
                                     )
-                                    ctx.set_custom_status(None)
+                                    set_custom_status(None)
                                     last_t_event = event
                                     resumes_by_idx[tc["index"]].append(event["value"])
                                 else:
@@ -1303,7 +1309,7 @@ def make_orchestrator(
                                             resumes_by_idx[tc["index"]]
                                         )  # pragma: no cover
                                         cur_t_ckpt = f"{report['ckpt']}:t:{r_cnt}"  # pragma: no cover  # noqa: E501
-                                        ctx.set_custom_status(  # pragma: no cover
+                                        set_custom_status(  # pragma: no cover
                                             {
                                                 "pending": intr,
                                                 "interrupts": remaining,
@@ -1324,7 +1330,7 @@ def make_orchestrator(
                                         ].append(  # pragma: no cover
                                             event["value"]
                                         )
-                                    ctx.set_custom_status(None)  # pragma: no cover
+                                    set_custom_status(None)  # pragma: no cover
                                 new_ver, upg_as_node, upg_vals = _extract_event_upgrade(
                                     last_t_event
                                 )
@@ -1513,7 +1519,7 @@ def make_orchestrator(
                                     nt, pending = interrupted_nodes[0]
                                     r_cnt = len(n_resumes_by_idx[nt["index"]])
                                     cur_n_ckpt = f"{report['ckpt']}:n:{r_cnt}"
-                                    ctx.set_custom_status(
+                                    set_custom_status(
                                         {
                                             "pending": pending,
                                             "interrupts": [pending],
@@ -1524,7 +1530,7 @@ def make_orchestrator(
                                     event, used = yield from _wait_for_resume_event(
                                         ctx, pending["id"], cur_n_ckpt, used
                                     )
-                                    ctx.set_custom_status(None)
+                                    set_custom_status(None)
                                     last_n_event = event
                                     n_resumes_by_idx[nt["index"]].append(event["value"])
                                 else:
@@ -1542,7 +1548,7 @@ def make_orchestrator(
                                             n_resumes_by_idx[nt["index"]]
                                         )  # pragma: no cover
                                         cur_n_ckpt = f"{report['ckpt']}:n:{r_cnt}"  # pragma: no cover  # noqa: E501
-                                        ctx.set_custom_status(  # pragma: no cover
+                                        set_custom_status(  # pragma: no cover
                                             {
                                                 "pending": intr,
                                                 "interrupts": remaining,
@@ -1563,7 +1569,7 @@ def make_orchestrator(
                                         ].append(  # pragma: no cover
                                             event["value"]
                                         )
-                                    ctx.set_custom_status(None)  # pragma: no cover
+                                    set_custom_status(None)  # pragma: no cover
                                 new_ver, upg_as_node, upg_vals = _extract_event_upgrade(
                                     last_n_event
                                 )
@@ -1677,6 +1683,8 @@ def make_orchestrator(
                 }
                 if state.version is not None:
                     out["version"] = state.version
+                if state.owner is not None:
+                    out["owner"] = state.owner
                 if "result" in report:  # pragma: no cover
                     out["result"] = report["result"]  # pragma: no cover
                 if "output" in report:
@@ -1690,7 +1698,7 @@ def make_orchestrator(
                 cur_ckpt = report.get("ckpt")
                 if len(interrupts) == 1:
                     pending = interrupts[0]
-                    ctx.set_custom_status(
+                    set_custom_status(
                         {
                             "pending": pending,
                             "interrupts": interrupts,
@@ -1701,14 +1709,14 @@ def make_orchestrator(
                     event, used = yield from _wait_for_resume_event(
                         ctx, pending["id"], cur_ckpt, used
                     )
-                    ctx.set_custom_status(None)
+                    set_custom_status(None)
                     last_event = event
                     resume_val = event["value"]
                 else:
                     resume_map: dict[str, Any] = {}
                     for intr in interrupts:
                         remaining = [i for i in interrupts if i["id"] not in resume_map]
-                        ctx.set_custom_status(
+                        set_custom_status(
                             {
                                 "pending": intr,
                                 "interrupts": remaining,
@@ -1721,7 +1729,7 @@ def make_orchestrator(
                         )
                         last_event = event
                         resume_map[intr["id"]] = event["value"]
-                    ctx.set_custom_status(None)
+                    set_custom_status(None)
                     resume_val = {"__resume_map__": resume_map}
                 state.request = {
                     "thread": state.thread,

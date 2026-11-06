@@ -4,8 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import importlib.util
 import json
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
@@ -38,6 +43,665 @@ from langchain_azure_compute.graph.runner import (
 )
 
 
+def _review_chat_registration():
+    class State(TypedDict):
+        messages: Annotated[list[AnyMessage], add_messages]
+
+    b = StateGraph(State)
+    b.add_node("reply", lambda s: {"messages": [AIMessage(content="reply")]})
+    b.add_edge(START, "reply")
+    b.add_edge("reply", END)
+    return attach_durability(b.compile(), name="review_chat")
+
+
+def _review_completed_turn(reg, thread, text, expect=None):
+    report = run_step(
+        reg.graph,
+        Limits(),
+        {
+            "thread": thread,
+            "kind": "start",
+            "expect": expect,
+            "input": pack({"messages": [HumanMessage(content=text)]}),
+        },
+    )
+    assert report["status"] == "done"
+    return {
+        "gen": 0,
+        "steps": 1,
+        "ckpt": report["ckpt"],
+        "checkpoint_bundle": report["checkpoint_bundle"],
+        "output": report["output"],
+    }
+
+
+def test_review_inline_cache_is_scoped_to_saver():
+    a, b = _review_chat_registration(), _review_chat_registration()
+    _review_completed_turn(a, "user-42", "private")
+    a.graph.checkpointer.delete_thread("user-42")
+
+    class Sdk:
+        def schedule_new_orchestration(self, name, input, instance_id):
+            self.payload = input
+
+        def get_orchestration_state(self, *a, **k):
+            return None
+
+    sdk = Sdk()
+    with pytest.raises(ValueError, match="empty|checkpoint|state"):
+        b.client(sdk).start(None, thread_id="user-42")
+    a.client(sdk).start(None, thread_id="user-42")
+    assert sdk.payload["req"]["expect"] is not None
+    assert a.graph.get_state({"configurable": {"thread_id": "user-42"}}).values
+
+
+async def test_review_async_inline_cache_is_scoped_to_saver():
+    a, b = _review_chat_registration(), _review_chat_registration()
+    _review_completed_turn(a, "user-42", "private")
+    a.graph.checkpointer.delete_thread("user-42")
+
+    class Sdk:
+        async def schedule_new_orchestration(self, name, input, instance_id):
+            self.payload = input
+
+        async def get_orchestration_state(self, *a, **k):
+            return None
+
+    sdk = Sdk()
+    with pytest.raises(ValueError, match="empty|checkpoint|state"):
+        await b.async_client(sdk).start(None, thread_id="user-42")
+    await a.async_client(sdk).start(None, thread_id="user-42")
+    assert sdk.payload["req"]["expect"] is not None
+
+
+@pytest.mark.parametrize("async_handle", [False, True])
+async def test_review_result_hydrates_fresh_client_and_advances_older_state(
+    async_handle,
+):
+    from langchain_azure_compute.graph._api import AsyncRun, Run
+    from langchain_azure_compute.graph._inline_saver import _get_cached_inline_bundle
+
+    worker, client = _review_chat_registration(), _review_chat_registration()
+    outputs = [_review_completed_turn(worker, "remote", "one")]
+    outputs.append(_review_completed_turn(worker, "remote", "two", outputs[0]["ckpt"]))
+    # An empty namespace is not evidence of a newer checkpoint.
+    client.graph.checkpointer.storage["remote"][""] = {}
+
+    class Sdk:
+        def wait_for_orchestration_completion(self, iid, **kwargs):
+            return SimpleNamespace(
+                runtime_status=SimpleNamespace(name="COMPLETED"),
+                serialized_output=json.dumps(outputs[int(iid)]),
+            )
+
+    class AsyncSdk(Sdk):
+        async def wait_for_orchestration_completion(self, iid, **kwargs):
+            return super().wait_for_orchestration_completion(iid, **kwargs)
+
+    for index in range(2):
+        if async_handle:
+            await AsyncRun(client, AsyncSdk(), str(index), "remote").wait_result()
+        else:
+            Run(client, Sdk(), str(index), "remote").wait_result()
+        assert (
+            _get_cached_inline_bundle(
+                client.graph,
+                "remote",
+            )
+            == outputs[index]["checkpoint_bundle"]
+        )
+    assert [
+        m.content
+        for m in client.graph.get_state(
+            {"configurable": {"thread_id": "remote"}},
+        ).values["messages"]
+    ] == ["one", "reply", "two", "reply"]
+
+
+def test_review_result_preserves_namespace_missing_from_older_bundle():
+    from langchain_azure_compute.graph._inline_saver import _hydrate_checkpoint_bundle
+
+    reg = _review_chat_registration()
+    report = _review_completed_turn(reg, "t", "one")
+    current = reg.graph.get_state({"configurable": {"thread_id": "t"}})
+    _hydrate_checkpoint_bundle(
+        reg.graph,
+        "t",
+        {"storage": {}, "v": 1},
+        preserve_newer=True,
+    )
+    assert (
+        reg.graph.get_state({"configurable": {"thread_id": "t"}}).config
+        == current.config
+    )
+    assert report["checkpoint_bundle"]["storage"]
+
+
+@pytest.mark.parametrize("provider_result", [None, "", 7, "raises"])
+def test_review_invalid_identity_provider_denied(provider_result):
+    def identity(req):
+        if provider_result == "raises":
+            raise ValueError("invalid token")
+        return provider_result
+
+    app = create_function_app(
+        _review_chat_registration(),
+        SimpleNamespace(),
+        identity_provider=identity,
+    )
+    assert (
+        dispatch_function_request(
+            app,
+            _review_http_request("start"),
+        ).status_code
+        == 401
+    )
+
+
+def test_review_easyauth_requires_injected_headers(monkeypatch):
+    from langchain_azure_compute.graph.azure_functions import _extract_caller_principal
+
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
+    assert _extract_caller_principal(SimpleNamespace()) is None
+    assert (
+        _extract_caller_principal(SimpleNamespace(headers=["not", "mapping"])) is None
+    )
+
+
+def test_review_missing_protected_instance_fails_closed(monkeypatch):
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
+
+    class Sdk:
+        def get_orchestration_state(self, *a, **k):
+            return None
+
+        def schedule_new_orchestration(self, *a, **k):
+            pytest.fail("must not schedule")
+
+    app = create_function_app(_review_chat_registration(), Sdk())
+    assert (
+        dispatch_function_request(
+            app,
+            _review_http_request("status/owned", {"x-ms-client-principal-id": "alice"}),
+        ).status_code
+        == 403
+    )
+
+
+def test_review_owner_is_reported_while_interrupted_and_after_resume():
+    inp = {
+        "thread": "t",
+        "req": {"thread": "t", "kind": "start", "expect": None},
+        "step_name": "langgraph.review.step",
+        "owner": "alice",
+    }
+
+    class Ctx:
+        def __init__(self):
+            self.statuses = []
+
+        def call_activity(self, name, **kwargs):
+            return kwargs
+
+        def wait_for_external_event(self, name):
+            return name
+
+        def set_custom_status(self, status):
+            self.statuses.append(status)
+
+    ctx = Ctx()
+    gen = make_orchestrator(Limits())(ctx, inp)
+    next(gen)
+    assert (
+        gen.send(
+            {
+                "status": "interrupted",
+                "ckpt": "c",
+                "interrupt": {"id": "i", "value": pack("q")},
+            },
+        )
+        == "resume:i"
+    )
+    assert ctx.statuses[-1]["owner"] == "alice"
+    gen.send({"value": pack(True), "ckpt": "c"})
+    assert ctx.statuses[-1] == {"owner": "alice"}
+    gen.close()
+
+
+@pytest.mark.parametrize("async_handle", [False, True])
+@pytest.mark.parametrize("prune_old", [False, True])
+@pytest.mark.parametrize("checkpoint_key", ["ckpt", "last_checkpoint_id", None])
+async def test_review_old_result_preserves_newer_turn(
+    async_handle,
+    prune_old,
+    checkpoint_key,
+):
+    from langchain_azure_compute.graph._api import AsyncRun, Run
+
+    reg = _review_chat_registration()
+    first = _review_completed_turn(reg, "history", "one")
+    second = _review_completed_turn(reg, "history", "two", first["ckpt"])
+    latest = reg.graph.get_state({"configurable": {"thread_id": "history"}})
+    if prune_old:
+        reg.graph.checkpointer.storage["history"][""].pop(first["ckpt"], None)
+    old = dict(first)
+    cid = old.pop("ckpt")
+    if checkpoint_key is not None:
+        old[checkpoint_key] = cid
+    meta = SimpleNamespace(
+        runtime_status=SimpleNamespace(name="COMPLETED"),
+        serialized_output=json.dumps(old),
+    )
+
+    class Sdk:
+        def wait_for_orchestration_completion(self, *a, **k):
+            return meta
+
+    class AsyncSdk:
+        async def wait_for_orchestration_completion(self, *a, **k):
+            return meta
+
+    if async_handle:
+        await AsyncRun(reg, AsyncSdk(), "run-one", "history").wait_result()
+    else:
+        Run(reg, Sdk(), "run-one", "history").wait_result()
+    current = reg.graph.get_state({"configurable": {"thread_id": "history"}})
+    assert current.config == latest.config
+    assert [m.content for m in current.values["messages"]] == [
+        "one",
+        "reply",
+        "two",
+        "reply",
+    ]
+    from langchain_azure_compute.graph._inline_saver import _get_cached_inline_bundle
+
+    assert (
+        _get_cached_inline_bundle(reg.graph, "history") == second["checkpoint_bundle"]
+    )
+    third = _review_completed_turn(reg, "history", "three", second["ckpt"])
+    assert [m.content for m in unpack(third["output"])["messages"]] == [
+        "one",
+        "reply",
+        "two",
+        "reply",
+        "three",
+        "reply",
+    ]
+
+
+async def test_review_sync_saver_io_is_offloaded(monkeypatch):
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    from langchain_azure_compute.graph._async_bridge import _ensure_async_saver
+
+    main_tid = threading.get_ident()
+    calls = []
+
+    class Saver(BaseCheckpointSaver):
+        def get_tuple(self, config):
+            calls.append(("get", threading.get_ident()))
+            return None
+
+        def put(self, config, checkpoint, metadata, new_versions):
+            calls.append(("put", threading.get_ident()))
+            return config
+
+        def put_writes(self, config, writes, task_id, task_path=""):
+            calls.append(("writes", threading.get_ident()))
+
+        def list(self, config, *, filter=None, before=None, limit=None):
+            calls.append(("list", threading.get_ident()))
+            yield "checkpoint"
+
+    saver = Saver()
+    _ensure_async_saver(saver)
+    cfg = {"configurable": {"thread_id": "t"}}
+    assert await saver.aget_tuple(cfg) is None
+    assert await saver.aput(cfg, {}, {}, {}) == cfg
+    await saver.aput_writes(cfg, [], "task")
+    assert [item async for item in saver.alist(cfg)] == ["checkpoint"]
+    assert {name for name, _ in calls} == {"get", "put", "writes", "list"}
+    assert all(tid != main_tid for _, tid in calls)
+
+
+def _review_http_request(route, headers=None):
+    return func.HttpRequest(
+        method="POST" if route == "start" or route.startswith("respond") else "GET",
+        url=f"http://localhost/api/graphs/review_chat/{route}",
+        headers=headers or {},
+        params={},
+        route_params={},
+        body=json.dumps({"input": {"messages": []}, "instance_id": "owned"}).encode(),
+    )
+
+
+def test_review_untrusted_easyauth_headers_rejected(monkeypatch):
+    monkeypatch.delenv("WEBSITE_AUTH_ENABLED", raising=False)
+    app = create_function_app(_review_chat_registration(), SimpleNamespace())
+    req = _review_http_request("start", {"x-ms-client-principal-id": "alice"})
+    assert dispatch_function_request(app, req).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "serialized_input",
+        "serialized_custom_status",
+        "serialized_output",
+    ],
+)
+@pytest.mark.parametrize("route", ["status/owned", "respond/owned/intr", "start"])
+def test_review_owner_fallback_denies_other_principal(source, route, monkeypatch):
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
+    meta = SimpleNamespace(
+        serialized_input="invalid",
+        serialized_custom_status="[]",
+        serialized_output=None,
+    )
+    setattr(meta, source, json.dumps({"owner": "alice"}))
+
+    class Sdk:
+        def schedule_new_orchestration(self, *a, **k):
+            pytest.fail("must not schedule")
+
+        def get_orchestration_state(self, *a, **k):
+            return meta
+
+    app = create_function_app(_review_chat_registration(), Sdk())
+    req = _review_http_request(route, {"x-ms-client-principal-id": "mallory"})
+    assert dispatch_function_request(app, req).status_code == 403
+
+
+@pytest.mark.parametrize("payload", [None, "", "invalid", "[]", '{"owner": 42}'])
+@pytest.mark.parametrize("route", ["status/owned", "respond/owned/intr", "start"])
+def test_review_unresolvable_owner_fails_closed(payload, route, monkeypatch):
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "1")
+
+    class Sdk:
+        def schedule_new_orchestration(self, *a, **k):
+            pytest.fail("must not schedule")
+
+        def get_orchestration_state(self, *a, **k):
+            return SimpleNamespace(serialized_input=payload)
+
+    app = create_function_app(_review_chat_registration(), Sdk())
+    req = _review_http_request(route, {"x-ms-client-principal-id": "alice"})
+    assert dispatch_function_request(app, req).status_code == 403
+
+
+@pytest.mark.parametrize("route", ["status/owned", "respond/owned/intr", "start"])
+def test_review_owner_lookup_failure_fails_closed(route, monkeypatch):
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "yes")
+
+    class Sdk:
+        def schedule_new_orchestration(self, *a, **k):
+            pytest.fail("must not schedule")
+
+        def get_orchestration_state(self, *a, **k):
+            raise OSError("backend unavailable")
+
+    app = create_function_app(_review_chat_registration(), Sdk())
+    req = _review_http_request(route, {"x-ms-client-principal-id": "alice"})
+    assert dispatch_function_request(app, req).status_code == 403
+
+
+def test_review_identity_provider_and_key_only_contract(monkeypatch):
+    monkeypatch.delenv("WEBSITE_AUTH_ENABLED", raising=False)
+    reg = _review_chat_registration()
+
+    class Sdk:
+        def schedule_new_orchestration(self, name, input, instance_id):
+            self.payload = input
+
+        def get_orchestration_state(self, *a, **k):
+            return None
+
+    sdk = Sdk()
+    app = create_function_app(reg, sdk, identity_provider=lambda req: "verified")
+    assert (
+        dispatch_function_request(app, _review_http_request("start")).status_code == 202
+    )
+    assert sdk.payload["owner"] == "verified"
+    key_only = create_function_app(reg, sdk, require_instance_owner=False)
+    assert (
+        dispatch_function_request(
+            key_only,
+            _review_http_request("start"),
+        ).status_code
+        == 202
+    )
+    assert "owner" not in sdk.payload
+
+
+@pytest.mark.parametrize("owner", ["alice", None, "", 42])
+def test_review_owner_survives_continue_as_new_and_output(owner):
+    from langchain_azure_compute.graph.runner import OrchestratorState
+
+    inp = {
+        "thread": "t",
+        "req": {"thread": "t", "kind": "start", "expect": None},
+        "step_name": "langgraph.review.step",
+        "owner": owner,
+    }
+    state = OrchestratorState.from_payload(inp)
+    expected = owner if isinstance(owner, str) and owner else None
+    assert state.owner == expected
+    assert state.to_can_payload().get("owner") == expected
+
+    class Ctx:
+        def call_activity(self, name, **kwargs):
+            return kwargs
+
+    gen = make_orchestrator(Limits())(Ctx(), inp)
+    next(gen)
+    with pytest.raises(StopIteration) as completed:
+        gen.send({"status": "done", "ckpt": "c"})
+    assert completed.value.value.get("owner") == expected
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_review_readme_refund_gate(approved):
+    from langchain_core.messages import ToolMessage
+    from langchain_core.tools import tool
+    from langgraph.prebuilt import ToolNode
+    from langgraph.types import Command
+
+    from langchain_azure_compute.graph import durable_tool
+
+    text = (Path(__file__).resolve().parents[3] / "README.md").read_text(
+        encoding="utf-8"
+    )
+    snippet = text.split("class SupportState(TypedDict):", 1)[1].split(
+        "\nreg = attach_durability",
+        1,
+    )[0]
+    ns = dict(
+        TypedDict=TypedDict,
+        Annotated=Annotated,
+        AnyMessage=AnyMessage,
+        add_messages=add_messages,
+        durable_tool=durable_tool,
+        tool=tool,
+        interrupt=interrupt,
+        AIMessage=AIMessage,
+        StateGraph=StateGraph,
+        ToolNode=ToolNode,
+        START=START,
+        END=END,
+    )
+    exec(
+        compile(
+            "class SupportState(TypedDict):" + snippet,
+            "<readme>",
+            "exec",
+            dont_inherit=True,
+        ),
+        ns,
+    )
+    graph = ns["graph"]
+    graph.checkpointer = InMemorySaver()
+    cfg = {"configurable": {"thread_id": f"gate-{approved}"}}
+    graph.invoke({"messages": [], "approved": False}, cfg)
+    result = graph.invoke(Command(resume={"approved": approved}), cfg)
+    assert any(isinstance(m, ToolMessage) for m in result["messages"]) is approved
+
+
+@pytest.mark.parametrize(
+    "sample",
+    ["05_multi_turn_conversation", "07_multi_graph_app", "10_azure_functions_hitl"],
+)
+def test_review_sample_root_install_includes_requirements(sample):
+    root = Path(__file__).resolve().parents[5]
+    text = (
+        root / "samples" / "langgraph-durabletask" / sample / "README.md"
+    ).read_text(
+        encoding="utf-8",
+    )
+    assert (
+        f'pip install -e "libs/azure-compute[durabletask]" '
+        f"-r samples/langgraph-durabletask/{sample}/requirements.txt"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    "sample", ["09_two_process_crash_recovery", "10_azure_functions_hitl"]
+)
+@pytest.mark.parametrize("child_output", ["", "partial line"])
+def test_review_worker_readiness_timeout_reaps_silent_child(
+    sample,
+    child_output,
+    monkeypatch,
+):
+    root = Path(__file__).resolve().parents[5]
+    path = root / "samples" / "langgraph-durabletask" / sample / "sample.py"
+    spec = importlib.util.spec_from_file_location(f"readiness_{sample}", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    original_popen = subprocess.Popen
+    children = []
+
+    def spawn(*args, **kwargs):
+        proc = original_popen(
+            [
+                sys._base_executable,
+                "-c",
+                f"import sys,time; sys.stdout.write({child_output!r}); "
+                "sys.stdout.flush(); time.sleep(10)",
+            ],
+            **kwargs,
+        )
+        children.append(proc)
+        return proc
+
+    monkeypatch.setattr(mod.subprocess, "Popen", spawn)
+    try:
+        with pytest.raises(TimeoutError):
+            mod._spawn_worker_subprocess(
+                "silent",
+                "review",
+                endpoint="127.0.0.1:8080",
+                readiness_timeout=0.1,
+            )
+        assert len(children) == 1
+        assert children[0].poll() is not None
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            child.stdout.close()
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "09_two_process_crash_recovery",
+        "10_azure_functions_hitl",
+    ],
+)
+@pytest.mark.parametrize("outcome", ["ready", "exit", "invalid_pid"])
+def test_review_worker_readiness_success_and_failure_cleanup(
+    sample, outcome, monkeypatch
+):
+    root = Path(__file__).resolve().parents[5]
+    path = root / "samples" / "langgraph-durabletask" / sample / "sample.py"
+    spec = importlib.util.spec_from_file_location(f"readiness_{sample}", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    script = {
+        "ready": (
+            "import os,sys; print('WORKER_READY pid='+str(os.getpid()),flush=True); "
+            "sys.stdout.write('x'*100000); sys.stdout.flush()"
+        ),
+        "exit": "print('startup failed',flush=True)",
+        "invalid_pid": (
+            "import time; print('WORKER_READY pid=bad',flush=True); time.sleep(10)"
+        ),
+    }[outcome]
+    original_popen = subprocess.Popen
+    children = []
+
+    def spawn(*args, **kwargs):
+        proc = original_popen([sys._base_executable, "-c", script], **kwargs)
+        children.append(proc)
+        return proc
+
+    monkeypatch.setattr(mod.subprocess, "Popen", spawn)
+    try:
+        if outcome == "ready":
+            proc, pid = mod._spawn_worker_subprocess(
+                "worker",
+                "review",
+                endpoint="127.0.0.1:8080",
+                readiness_timeout=2,
+            )
+            assert pid == proc.pid
+            proc.wait(timeout=5)
+        else:
+            with pytest.raises(
+                ValueError if outcome == "invalid_pid" else RuntimeError
+            ):
+                mod._spawn_worker_subprocess(
+                    "worker",
+                    "review",
+                    endpoint="127.0.0.1:8080",
+                    readiness_timeout=2,
+                )
+            assert children[0].poll() is not None
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            child.stdout.close()
+
+
+def test_review_sample_local_identity_requires_explicit_opt_in(monkeypatch):
+    root = Path(__file__).resolve().parents[5]
+    path = (
+        root
+        / "samples"
+        / "langgraph-durabletask"
+        / "10_azure_functions_hitl"
+        / "sample.py"
+    )
+    spec = importlib.util.spec_from_file_location("review_local_identity", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.delenv("LOCAL_DEMO_IDENTITY", raising=False)
+    app_mod = mod._load_function_app_module()
+    assert app_mod._identity_options() == {}
+    monkeypatch.setenv("LOCAL_DEMO_IDENTITY", "1")
+    provider = app_mod._identity_options()["identity_provider"]
+    assert (
+        provider(SimpleNamespace(headers={"x-demo-user": "demo-user"})) == "demo-user"
+    )
+    assert (
+        provider(SimpleNamespace(headers={"x-ms-client-principal-id": "demo-user"}))
+        is None
+    )
+
+
 def test_p0_1_uv_lock_has_no_internal_feed_urls() -> None:
     """P0-1: uv.lock must not contain internal pkgs.visualstudio.com or
     packagefeedproxy URLs."""
@@ -47,9 +711,11 @@ def test_p0_1_uv_lock_has_no_internal_feed_urls() -> None:
     assert "packagefeedproxy.microsoft.io" not in text
 
 
-def test_p0_2_azure_functions_cross_host_auth_and_hardening() -> None:
+def test_p0_2_azure_functions_cross_host_auth_and_hardening(monkeypatch) -> None:
     """P0-2: Cross-host ownership in durable storage, fail-closed principal check,
     no thread_id/config override, and start_worker=False default."""
+
+    monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
 
     class ExpenseState(TypedDict):
         expense_id: str
@@ -1138,7 +1804,6 @@ def test_p2_4_async_bridge_timeout_and_double_submit_guard() -> None:
     blocking forever. (b) Starting a second orchestration on the same thread while one
     is already RUNNING must raise RunError unless an explicit distinct
     instance_id is used."""
-    import asyncio
 
     from langchain_azure_compute.graph._async_bridge import _run_async
 
@@ -1195,7 +1860,6 @@ def test_p2_5_sdk_options_precedence_user_agent_and_async_client(
     precedence over DTS_EMULATOR.
     (b) sdk_options includes user-agent metadata.
     (c) AsyncRunClient and AsyncRun provide non-blocking async methods."""
-    import asyncio
 
     from langchain_azure_compute.graph import sdk_options
 

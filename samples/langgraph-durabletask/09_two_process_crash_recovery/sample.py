@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import operator
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -197,6 +198,7 @@ def _spawn_worker_subprocess(
     graph_name: str = GRAPH_NAME,
     *,
     endpoint: str | None = None,
+    readiness_timeout: float = 30.0,
 ) -> tuple[subprocess.Popen[str], int]:
     """Spawn a separate OS process running a DTS worker and wait for its `WORKER_READY` banner."""
     child_env = os.environ.copy()
@@ -222,37 +224,58 @@ def _spawn_worker_subprocess(
         env=child_env,
     )
     assert proc.stdout is not None
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + readiness_timeout
     captured: list[str] = []
     worker_pid: int | None = None
 
-    while time.monotonic() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            time.sleep(0.05)
-            continue
-        stripped = line.strip()
-        captured.append(stripped)
-        if stripped.startswith("WORKER_READY "):
-            for token in stripped.split():
-                if token.startswith("pid="):
-                    worker_pid = int(token.split("=", 1)[1])
-            break
+    lines: queue.Queue[str] = queue.Queue()
+    ready = threading.Event()
 
-    if worker_pid is None:
-        proc.kill()
-        proc.wait()
-        raise RuntimeError(f"Worker subprocess {pod_name!r} failed to start. Output:\n" + "\n".join(captured))
-
-    # Drain remaining child stdout in a daemon thread so pipe buffers never block
-    def _drain() -> None:
+    def _read_stdout() -> None:
         assert proc.stdout is not None
-        for _ in proc.stdout:
-            pass
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                if not ready.is_set():
+                    lines.put(line)
+        except (OSError, ValueError):
+            pass  # The caller may close stdout during child cleanup.
+        finally:
+            lines.put("")
 
-    threading.Thread(target=_drain, daemon=True).start()
+    reader = threading.Thread(target=_read_stdout, daemon=True)
+    reader.start()
+    eof = False
+    try:
+        while time.monotonic() < deadline:
+            try:
+                line = lines.get(timeout=max(0.05, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if not line:
+                eof = True
+                break
+            stripped = line.strip()
+            captured.append(stripped)
+            if stripped.startswith("WORKER_READY "):
+                for token in stripped.split():
+                    if token.startswith("pid="):
+                        worker_pid = int(token.split("=", 1)[1])
+                if worker_pid is not None:
+                    break
+        if worker_pid is None:
+            detail = f"Worker subprocess {pod_name!r} failed to start. Output:\n" + "\n".join(captured)
+            if eof:
+                raise RuntimeError(detail)
+            raise TimeoutError(detail)
+    except BaseException:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        reader.join(timeout=5)
+        proc.stdout.close()
+        raise
+    finally:
+        ready.set()
     return proc, worker_pid
 
 

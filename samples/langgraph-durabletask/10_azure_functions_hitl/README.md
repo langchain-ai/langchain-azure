@@ -53,7 +53,7 @@ Requires **Python 3.11+**.
 From the repository root:
 
 ```bash
-pip install -e ".[azure-functions,test]"
+pip install -e "libs/azure-compute[durabletask]" -r samples/langgraph-durabletask/10_azure_functions_hitl/requirements.txt
 ```
 
 Or from this sample folder:
@@ -97,6 +97,38 @@ $env:DURABLE_TASK_SCHEDULER_CONNECTION_STRING = "Endpoint=https://<scheduler>.<r
 ```
 
 ## Running the Sample
+
+### Identity and Ownership Contract
+
+Function keys authorize access to the Function host, not individual users.
+By default these routes require verified per-instance identity: deploy behind
+Azure App Service Authentication (EasyAuth, `WEBSITE_AUTH_ENABLED=true`), with
+unauthenticated requests rejected and no direct path bypassing the platform,
+or pass an `identity_provider` callback that validates bearer tokens (signature,
+issuer, audience, expiry) and returns a stable principal ID. Never set the
+EasyAuth environment flag to trust raw headers on a directly exposed/local server.
+Production callers send their bearer token (and a Function key when FUNCTION
+authorization is retained), not self-asserted `x-ms-client-principal-id` headers.
+Ownership is preserved across continue-as-new generations; unknown ownership or
+a failed lookup is denied.
+
+For the **loopback-only local demo**, explicitly opt in to the sample's insecure
+identity stub before launching `sample.py`, `func start`, or `function_app.py`:
+
+```bash
+export LOCAL_DEMO_IDENTITY=1
+```
+
+```powershell
+$env:LOCAL_DEMO_IDENTITY = "1"
+```
+
+The stub accepts `x-demo-user: demo-user` only. This is not authentication and
+must never be enabled in a deployed app or exposed beyond loopback. The automated
+demo sends this header; the manual commands below do too. To deliberately use
+shared Function-key-only access instead of user isolation, set
+`require_instance_owner=False`; Azure must validate the key, and all key holders
+can access every instance. The standalone Python server does not validate keys.
 
 ### Mode 1: Automated Two-Worker Verification (`sample.py`)
 
@@ -163,29 +195,34 @@ You can also run the HTTP Function host and two separate worker processes intera
    ```bash
    # Start workflow
    curl -s -X POST http://localhost:7071/api/graphs/expense_approval/start \
+     -H "x-demo-user: demo-user" \
      -H "Content-Type: application/json" \
      -d '{"expense_id": "EXP-501", "employee": "Alice", "amount": 1850.0, "category": "conference"}'
 
    # Check status & pendingInterrupts
-   curl -s http://localhost:7071/api/graphs/expense_approval/status/<instanceId> | python -m json.tool
+   curl -s -H "x-demo-user: demo-user" http://localhost:7071/api/graphs/expense_approval/status/<instanceId> | python -m json.tool
 
    # Submit human approval
    curl -s -X POST http://localhost:7071/api/graphs/expense_approval/respond/<instanceId>/<interruptId> \
+     -H "x-demo-user: demo-user" \
      -H "Content-Type: application/json" \
      -d '{"approved": true, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}'
    ```
 
    **PowerShell (`Invoke-RestMethod`):**
    ```powershell
+   $identity = @{"x-demo-user" = "demo-user"}
    $start = Invoke-RestMethod -Method Post -Uri "http://localhost:7071/api/graphs/expense_approval/start" `
+     -Headers $identity `
      -ContentType "application/json" `
      -Body '{"expense_id": "EXP-501", "employee": "Alice", "amount": 1850.0, "category": "conference"}'
 
-   $status = Invoke-RestMethod -Method Get -Uri $start.statusQueryGetUri
+   $status = Invoke-RestMethod -Method Get -Uri $start.statusQueryGetUri -Headers $identity
    $interruptId = $status.pendingInterrupts[0].interruptId
 
    Invoke-RestMethod -Method Post `
      -Uri "http://localhost:7071/api/graphs/expense_approval/respond/$($start.instanceId)/$interruptId" `
+     -Headers $identity `
      -ContentType "application/json" `
      -Body '{"approved": true, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}'
    ```

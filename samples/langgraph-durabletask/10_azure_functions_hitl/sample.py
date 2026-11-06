@@ -32,6 +32,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -67,7 +68,7 @@ def _resolve_endpoint() -> str | None:
 
 def _http_json(method: str, url: str, body: Any = None) -> tuple[int, dict[str, Any]]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"x-ms-client-principal-id": "demo-user"}
+    headers = {"x-demo-user": "demo-user"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -85,6 +86,7 @@ def _spawn_worker_subprocess(
     graph_name: str,
     *,
     endpoint: str,
+    readiness_timeout: float = 30.0,
 ) -> tuple[subprocess.Popen[str], int]:
     """Spawn a separate OS process running `function_app.py --worker <worker_id>`."""
     child_env = os.environ.copy()
@@ -114,36 +116,58 @@ def _spawn_worker_subprocess(
         env=child_env,
     )
     assert proc.stdout is not None
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + readiness_timeout
     captured: list[str] = []
     worker_pid: int | None = None
 
-    while time.monotonic() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            time.sleep(0.05)
-            continue
-        stripped = line.strip()
-        captured.append(stripped)
-        if stripped.startswith("WORKER_READY "):
-            for token in stripped.split():
-                if token.startswith("pid="):
-                    worker_pid = int(token.split("=", 1)[1])
-            break
+    lines: queue.Queue[str] = queue.Queue()
+    ready = threading.Event()
 
-    if worker_pid is None:
-        proc.kill()
-        proc.wait()
-        raise RuntimeError(f"Worker subprocess {worker_id!r} failed to start. Output:\n" + "\n".join(captured))
-
-    def _drain() -> None:
+    def _read_stdout() -> None:
         assert proc.stdout is not None
-        for _ in proc.stdout:
-            pass
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                if not ready.is_set():
+                    lines.put(line)
+        except (OSError, ValueError):
+            pass  # The caller may close stdout during child cleanup.
+        finally:
+            lines.put("")
 
-    threading.Thread(target=_drain, daemon=True).start()
+    reader = threading.Thread(target=_read_stdout, daemon=True)
+    reader.start()
+    eof = False
+    try:
+        while time.monotonic() < deadline:
+            try:
+                line = lines.get(timeout=max(0.05, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if not line:
+                eof = True
+                break
+            stripped = line.strip()
+            captured.append(stripped)
+            if stripped.startswith("WORKER_READY "):
+                for token in stripped.split():
+                    if token.startswith("pid="):
+                        worker_pid = int(token.split("=", 1)[1])
+                if worker_pid is not None:
+                    break
+        if worker_pid is None:
+            detail = f"Worker subprocess {worker_id!r} failed to start. Output:\n" + "\n".join(captured)
+            if eof:
+                raise RuntimeError(detail)
+            raise TimeoutError(detail)
+    except BaseException:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        reader.join(timeout=5)
+        proc.stdout.close()
+        raise
+    finally:
+        ready.set()
     return proc, worker_pid
 
 

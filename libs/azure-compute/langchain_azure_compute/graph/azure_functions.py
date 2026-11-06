@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import threading
 import urllib.parse
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
@@ -142,7 +143,9 @@ def _is_client_sdk(obj: Any) -> bool:
 
 
 def _extract_caller_principal(req: Any) -> str | None:
-    """Extract the authenticated caller identity from EasyAuth headers."""
+    """Extract platform-injected identity only behind configured Azure EasyAuth."""
+    if os.environ.get("WEBSITE_AUTH_ENABLED", "").lower() not in ("true", "1", "yes"):
+        return None
     headers = getattr(req, "headers", None)
     if not headers or not hasattr(headers, "items"):
         return None
@@ -161,23 +164,25 @@ def _resolve_durable_owner(
     cached = state.owner_by_instance.get(instance_id)
     if cached is not None:
         return cached
-    if hasattr(sdk, "get_orchestration_state"):  # pragma: no cover
+    try:
+        existing = sdk.get_orchestration_state(instance_id, fetch_payloads=True)
+    except Exception as exc:
+        raise PermissionError("Cannot verify instance ownership") from exc
+    if existing is None:
+        return None
+    for field in ("serialized_input", "serialized_custom_status", "serialized_output"):
+        raw = getattr(existing, field, None)
+        if not raw:
+            continue
         try:
-            existing = sdk.get_orchestration_state(instance_id, fetch_payloads=True)
-            raw_inp = (
-                getattr(existing, "serialized_input", None)
-                if existing is not None
-                else None
-            )
-            if raw_inp:
-                parsed = json.loads(raw_inp)
-                if isinstance(parsed, Mapping) and parsed.get("owner"):
-                    owner = str(parsed["owner"])
-                    state.owner_by_instance[instance_id] = owner
-                    return owner
-        except Exception:  # pragma: no cover
-            pass  # pragma: no cover
-    return None
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        owner = parsed.get("owner") if isinstance(parsed, Mapping) else None
+        if isinstance(owner, str) and owner:
+            state.owner_by_instance[instance_id] = owner
+            return owner
+    raise PermissionError("Existing instance has no verifiable owner")
 
 
 class _FunctionAppState:
@@ -301,6 +306,8 @@ def register_function_routes(
     sdk_or_options: Any = None,
     *,
     start_worker: bool = False,
+    identity_provider: Callable[[Any], str | None] | None = None,
+    require_instance_owner: bool | None = None,
 ) -> Any:
     """Register Durable LangGraph HTTP trigger routes onto an Azure Functions v2.
 
@@ -315,6 +322,12 @@ def register_function_routes(
         registrations: Graph registrations, individually or as a collection.
         sdk_or_options: Existing DTS client or SDK connection options.
         start_worker: Whether to start an embedded worker for these graphs.
+        identity_provider: Callback validating a token and returning its principal ID.
+            Otherwise identity is read only behind Azure EasyAuth
+            (`WEBSITE_AUTH_ENABLED=true`); raw client principal headers are untrusted.
+        require_instance_owner: Enforce verified per-instance ownership. Defaults to
+            True for non-anonymous apps. False explicitly selects shared Function-key
+            access, with no per-user isolation; the Azure host must validate keys.
 
     Returns:
         The supplied function app with routes registered.
@@ -336,19 +349,41 @@ def register_function_routes(
     setattr(app, "start_worker", state.ensure_worker)
     setattr(app, "stop_worker", state.stop)
 
-    def _check_auth(req: Any, instance_id: str | None = None) -> tuple[str | None, Any]:
+    def _check_auth(
+        req: Any, instance_id: str | None = None, *, allow_new: bool = False
+    ) -> tuple[str | None, Any]:
         func_mod = _require_azure_functions()
         app_auth = getattr(app, "_auth_level", None)
-        require_auth = app_auth is not None and app_auth != func_mod.AuthLevel.ANONYMOUS
-        caller = _extract_caller_principal(req)
-        if require_auth and caller is None:
+        enforce_owner = (
+            app_auth is not None and app_auth != func_mod.AuthLevel.ANONYMOUS
+            if require_instance_owner is None
+            else require_instance_owner
+        )
+        caller = None
+        if enforce_owner:
+            try:
+                caller = (
+                    identity_provider(req)
+                    if identity_provider is not None
+                    else _extract_caller_principal(req)
+                )
+            except Exception:
+                caller = None
+        if enforce_owner and (not isinstance(caller, str) or not caller):
             return None, _json_response(
                 {"error": "Authentication required"}, status_code=401
             )
-        if instance_id is not None:  # pragma: no cover
+        if enforce_owner and instance_id is not None:
             sdk = state.get_sdk()
-            expected_owner = _resolve_durable_owner(state, sdk, str(instance_id))
-            if expected_owner is not None and expected_owner != caller:
+            try:
+                expected_owner = _resolve_durable_owner(state, sdk, str(instance_id))
+            except PermissionError:
+                return None, _json_response(
+                    {"error": "Cannot verify instance ownership"}, status_code=403
+                )
+            if (expected_owner is None and not allow_new) or (
+                expected_owner is not None and expected_owner != caller
+            ):
                 return None, _json_response(
                     {"error": "Caller is not authorized for this instance"},
                     status_code=403,
@@ -396,7 +431,7 @@ def register_function_routes(
             node_max_concurrency = None
 
         caller, err_resp = _check_auth(
-            req, str(instance_id) if instance_id is not None else None
+            req, str(instance_id) if instance_id is not None else None, allow_new=True
         )
         if err_resp is not None:
             return err_resp
@@ -664,6 +699,8 @@ def create_function_app(
     name: str | None = None,
     auth_level: Any = None,
     start_worker: bool = False,
+    identity_provider: Callable[[Any], str | None] | None = None,
+    require_instance_owner: bool | None = None,
 ) -> Any:
     """Create an Azure Functions v2 `func.FunctionApp` wired with durable LangGraph.
 
@@ -686,6 +723,12 @@ def create_function_app(
         name: Name for a single raw graph.
         auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
         start_worker: Whether to start an embedded DTS worker.
+        identity_provider: Verified-token callback returning a principal ID.
+            Without it, ownership requires Azure EasyAuth; Function keys alone do not
+            identify users. Never enable EasyAuth trust on a directly exposed host.
+        require_instance_owner: Enforce per-user isolation (default for FUNCTION auth).
+            Set False only for intentionally shared, platform-key-authorized access.
+            The local Python server does not validate Function keys.
 
     Returns:
         A function app with graph routes and a local serve method.
@@ -707,7 +750,14 @@ def create_function_app(
             "create_function_app / LangGraphFunctionApp"
         )
     norm = _normalize_registrations(target, default_name=name)
-    register_function_routes(app, norm, dts_options, start_worker=start_worker)
+    register_function_routes(
+        app,
+        norm,
+        dts_options,
+        start_worker=start_worker,
+        identity_provider=identity_provider,
+        require_instance_owner=require_instance_owner,
+    )
 
     def _serve(*, host: str = "127.0.0.1", port: int = 7071) -> None:
         state: _FunctionAppState | None = getattr(
@@ -744,6 +794,8 @@ def LangGraphFunctionApp(
     name: str | None = None,
     auth_level: Any = None,
     start_worker: bool = False,
+    identity_provider: Callable[[Any], str | None] | None = None,
+    require_instance_owner: bool | None = None,
 ) -> Any:
     """One-line Azure Functions host for durable LangGraph workflows (counterpart to.
 
@@ -757,6 +809,8 @@ def LangGraphFunctionApp(
         name: Name for a single raw graph.
         auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
         start_worker: Whether to start an embedded DTS worker.
+        identity_provider: Callback validating caller tokens; see create_function_app.
+        require_instance_owner: Whether to enforce per-user ownership.
 
     Returns:
         The function app created by create_function_app.
@@ -777,6 +831,8 @@ def LangGraphFunctionApp(
         name=name,
         auth_level=auth_level,
         start_worker=start_worker,
+        identity_provider=identity_provider,
+        require_instance_owner=require_instance_owner,
     )
 
 

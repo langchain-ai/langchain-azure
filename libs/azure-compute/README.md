@@ -227,7 +227,10 @@ builder = StateGraph(SupportState)
 builder.add_node("approve", manager_gate)
 builder.add_node("tools", ToolNode([refund_order]))
 builder.add_edge(START, "approve")
-builder.add_edge("approve", "tools")
+builder.add_conditional_edges(
+    "approve", lambda s: "tools" if s.get("approved") else END,
+    {"tools": "tools", END: END},
+)
 builder.add_edge("tools", END)
 graph = builder.compile()
 
@@ -268,6 +271,13 @@ Key capabilities include:
 - **Azure Functions hosting (`LangGraphFunctionApp`):** Exposes `/api/graphs/<name>/start`,
   `/status/{instanceId}`, and `/respond/{instanceId}/{interruptId}` routes on Azure
   Functions Python v2.
+
+  Non-anonymous Function apps require verified per-instance identity through Azure
+  EasyAuth or an `identity_provider` token-validation callback. A Function key alone
+  does not identify a user. `require_instance_owner=False` explicitly selects shared,
+  platform-key-authorized access without user isolation. See the
+  [Functions sample identity contract](../../samples/langgraph-durabletask/10_azure_functions_hitl/README.md#identity-and-ownership-contract)
+  for deployment requirements and the opt-in loopback demo.
 
 ### Connecting to Hosted Azure DTS (Entra ID / Managed Identity) vs. Local Emulator
 

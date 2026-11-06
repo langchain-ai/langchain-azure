@@ -39,6 +39,17 @@ from langchain_azure_compute.graph.azure_functions import (
 GRAPH_NAME = "expense_approval"
 
 
+def _local_demo_identity(req: Any) -> str | None:
+    """Opt-in, insecure identity stub for loopback demos only; never deploy enabled."""
+    return "demo-user" if req.headers.get("x-demo-user") == "demo-user" else None
+
+
+def _identity_options() -> dict[str, Any]:
+    if os.environ.get("LOCAL_DEMO_IDENTITY") == "1":
+        return {"identity_provider": _local_demo_identity}
+    return {}
+
+
 class ExpenseInput(TypedDict):
     expense_id: str
     employee: str
@@ -214,6 +225,7 @@ def build_expense_function_app(
         name=graph_name,
         dts_options=dts_options,
         start_worker=start_worker,
+        **_identity_options(),
     )
 
 
@@ -224,6 +236,7 @@ app = LangGraphFunctionApp(
     graph=build_expense_graph(_default_worker_id),
     name=GRAPH_NAME,
     start_worker=_start_embedded,
+    **_identity_options(),
 )
 
 

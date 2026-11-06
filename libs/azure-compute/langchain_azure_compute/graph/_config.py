@@ -404,6 +404,7 @@ class OrchestratorInput(TypedDict, total=False):
     context: PackedBlob
     checkpoint_bundle: CheckpointBundle | Mapping[str, Any]
     limits: dict[str, Any]
+    owner: str
 
 
 class OrchestratorOutput(TypedDict, total=False):
@@ -418,6 +419,7 @@ class OrchestratorOutput(TypedDict, total=False):
     result: PackedBlob
     output: PackedBlob
     checkpoint_bundle: CheckpointBundle | Mapping[str, Any]
+    owner: str
 
 
 @runtime_checkable
@@ -566,6 +568,7 @@ class OrchestratorState:
     context_blob: PackedBlob | None = None
     checkpoint_bundle: CheckpointBundle | None = None
     limits: dict[str, Any] | None = None
+    owner: str | None = None
 
     def effective_limits(self, fallback: Limits) -> Limits:
         """Return `Limits` overriding `fallback` with any values persisted in `self.limits`."""  # noqa: E501
@@ -635,6 +638,7 @@ class OrchestratorState:
         )
         raw_limits = inp.get("limits")
         limits_dict = dict(raw_limits) if isinstance(raw_limits, Mapping) else None
+        raw_owner = inp.get("owner")
         state = cls(
             thread=str(inp["thread"]),
             gen=int(inp.get("gen", 0)),
@@ -656,6 +660,7 @@ class OrchestratorState:
             context_blob=context_blob,
             checkpoint_bundle=checkpoint_bundle,
             limits=limits_dict,
+            owner=raw_owner if isinstance(raw_owner, str) and raw_owner else None,
         )
         state.apply_step_options_to(state.request, preserve_existing=True)
         return state
@@ -732,6 +737,8 @@ class OrchestratorState:
             can_payload["checkpoint_bundle"] = self.checkpoint_bundle
         if self.limits is not None:
             can_payload["limits"] = dict(self.limits)
+        if self.owner is not None:
+            can_payload["owner"] = self.owner
         return can_payload
 
 
