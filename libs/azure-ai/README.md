@@ -212,7 +212,14 @@ or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/bl
 
 For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
 
-You can also host an existing compiled graph directly from Python:
+You can also host the graph directly from Python, as shown below.
+For a Responses API host, install the hosting extra. It includes
+the Agent Server version that uses a local file-backed ``FoundryStateStore``
+outside Foundry hosting:
+
+```bash
+pip install -U langchain-azure-ai[hosting]
+```
 
 ```python
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -223,44 +230,117 @@ if __name__ == "__main__":
     ResponsesHostServer(graph).run()
 ```
 
-`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint.
-`InvocationsHostServer` serves `/invocations` for text requests, sessions, and
-human approval.
+`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
-Choose the protocol that matches your client:
+For current feature support and configuration combinations, see
+[Responses hosting overview](docs/hosting/responses.md) and
+[Invocations hosting overview](docs/hosting/invocations.md).
 
-| Protocol | Request input | Response output | Usage guide |
-| --- | --- | --- | --- |
-| Responses | `input` text, messages, or supported attachments | Messages, tool calls/results, and model metadata | [Responses hosting](docs/hosting/responses.md) |
-| Invocations | `message` text or approval replies | Assistant text and pending approvals | [Invocations hosting](docs/hosting/invocations.md) |
+Both hosts accept `ResponsesServerOptions`. For the Invocations host,
+`resilient_background=True` enables durable background turns and
+`steerable_conversations=True` lets a new turn supersede an active turn in the
+same `agent_session_id`:
 
-For Responses endpoints, streaming, background execution, cancellation, and
-recovery options, see the
-[Agent Server Responses README](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#key-concepts).
-The LangGraph guides above describe graph input/output mapping, checkpointers,
-interrupts, and response branching.
+```python
+from langchain_azure_ai.agents.hosting import (
+  InvocationsHostServer,
+  ResponsesServerOptions,
+)
 
-For checkpointed Responses conversations, omit `store` or set `store=true`.
-`store=false` returns HTTP 400 before streaming or graph execution.
+graph = build_my_checkpointed_graph()
+server = InvocationsHostServer(
+  graph,
+  options=ResponsesServerOptions(
+    resilient_background=True,
+    steerable_conversations=True,
+  ),
+)
+```
 
-**[Experimental] Response branching:** Enable
-`ResponsesHostServer(graph, enable_response_branching=True)` to continue from
-a completed response's exact checkpoint. This requires a history-preserving
-async checkpointer, steering disabled, and a host-created app. See the
-[branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md)
-for runnable requests and the [branching requirements](docs/hosting/responses.md#branching)
-for supported combinations.
+Set `"background": true` in the request body to receive a `202` invocation
+envelope. Poll `GET /invocations/{invocation_id}` for the final `response`, or
+cancel it with `POST /invocations/{invocation_id}/cancel`. Background streaming
+is not supported. Active invocation status does not expire; terminal invocation
+results remain retrievable for 30 days. Resilient background execution requires
+a LangGraph checkpointer; use a durable checkpointer for hosted production deployments.
+Callers can also send `previous_invocation_id` to enforce linear extension of a
+session chain.
 
-For restart recovery, follow the
-[Responses resilient sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/10_resilient/README.md)
-or [Invocations resilient sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/04_resilient/README.md).
+When a checkpointed graph calls `interrupt()`, the Invocations host adds an
+`output` array containing the same paired `function_call` and
+`mcp_approval_request` items as `ResponsesHostServer`. Resume the graph by
+sending a matching `function_call_output` or `mcp_approval_response` item as
+the next request's `message` list. Streaming requests emit these as
+`output_item` SSE events. Existing string `message` requests and responses
+without pending interrupts keep their original shape. A valid
+`function_call_output` takes precedence over `mcp_approval_response` items for
+the same interrupt. Without one, conflicting `approve: true` and
+`approve: false` responses for the same interrupt fail the whole request and
+leave all pending interrupts unchanged. For a recognized LangChain
+`HumanInTheLoopMiddleware` request, every action must also allow the selected
+decision; otherwise the whole request fails and all interrupts remain pending.
+
+The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
+
+| Graph configuration | Conversation source | Graph input on later turns |
+|---|---|---|
+| Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
+| Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
+
+Checkpointed multi-turn conversations use an explicit `conversation.id`
+or run with `steerable_conversations=True`. Both modes are linear and preserve
+the latest LangGraph checkpoint for subsequent turns.
+
+**[Experimental] Response branching:** To branch from a completed response, enable
+`ResponsesHostServer(graph, enable_response_branching=True)` with a
+history-preserving checkpointer, steering disabled, and no externally supplied
+`app`. Send
+`{"input": "Alternative follow-up", "previous_response_id": "<parent-response-id>"}`.
+The host restores that response's exact saved checkpoint, so two requests
+referencing the same parent create independent siblings. Each child saves its
+own checkpoint reference without advancing the shared conversation head.
+The parent response and its checkpoint must still be retained, and the graph
+must have finished; paused-parent branching is not supported.
+See the [response branching design](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md)
+for the target contract and current implementation gaps.
+
+For checkpointed graphs, each request resolves its saved input checkpoint reference
+once, including the saved task reference on recovery. Interrupt inspection and
+graph startup reuse exact reads of that checkpoint and its pending writes.
+Latest-checkpoint queries still reach storage so LangGraph can protect historical
+branches and recover superseded checkpoints. These checks do not change the
+request's input reference. Checkpoints and pending writes
+are persisted at the graph's normal durability boundaries, including intermediate
+steps and any checkpoint saved at completion. After graph execution and its
+required writes finish, the host updates the conversation's checkpoint reference
+for the next turn.
+The host applies this behavior through a saver decorator, including for
+`FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
+Requests without a saved input reference use the saver's normal latest selection.
+`ResponsesHostServer` serves a shallow copy of the supplied graph when decorating
+its checkpointer; mutable configuration may remain shared with the original
+graph.
+`InvocationsHostServer` retains its existing execution path.
+
+Responses handlers check or create factory-managed Foundry checkpoint and
+conversation-chain stores on first use, then reuse their clients without
+additional store-existence checks. Thread deletion through the saver resets
+that handler's client binding and blocks acquisitions for the same store until
+deletion ends. Whole-store deletion invalidates all consumer and user bindings
+for that endpoint and store; isolated deletion retains other users' bindings.
+Already-borrowed clients can continue item operations. An item operation that
+raises `FoundryStorageNotFoundError` invalidates its cached binding and propagates
+the error; the next borrow resolves the store again. Missing item reads returned
+as `None` do not invalidate the binding.
+
+The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. The version in the lockfile defaults to `FileResponseStore` locally. Tests can pass an in-memory provider explicitly. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 ### Durable graph state
 
 Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including
 checkpoints and pending writes, in **Foundry State Store** so a hosted graph
 can resume across turns and container restarts. It is an async-only
-checkpointer, separate from the Responses transcript store described above.
+checkpointer, separate from the Responses transcript store.
 Compile the graph with the saver and keep its async context open for the
 host's lifetime:
 
