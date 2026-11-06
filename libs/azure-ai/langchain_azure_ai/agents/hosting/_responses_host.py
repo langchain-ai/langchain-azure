@@ -457,6 +457,8 @@ class ResponsesHostServer:
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
         if self._steerable_conversations:
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
+        if enable_response_branching:
+            self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 
         if app is not None:
