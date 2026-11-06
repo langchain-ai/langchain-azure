@@ -83,10 +83,10 @@ keep graph checkpoints in Foundry State Store.
 - The parent response must be completed and have a readable saved
   checkpoint. Its graph must also have finished: branching from a paused
   graph or a pending human approval is not supported.
-- A response must be created with `store=true` (the default) to be reused
-  through `previous_response_id`. The client sets this explicitly; the curl
-  examples rely on the default. A response created with `store=false` cannot
-  be used as a later branch point.
+- Every request to a graph with a checkpointer must use `store=true` (the
+  default). `store=false` returns HTTP 400 before streaming or graph execution,
+  including for a final child that will not be reused. The client sets this
+  explicitly; the curl examples rely on the default.
 - The checkpointer must preserve history and implement asynchronous
   `aget_tuple`, `aput`, and `aput_writes`. Both savers used here support them.
 - Leave `steerable_conversations` disabled and let `ResponsesHostServer`
