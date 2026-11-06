@@ -214,6 +214,10 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
 
+For current feature support and configuration combinations, see
+[Responses hosting overview](docs/hosting/responses.md) and
+[Invocations hosting overview](docs/hosting/invocations.md).
+
 Both hosts accept `ResponsesServerOptions`. For the Invocations host,
 `resilient_background=True` enables durable background turns and
 `steerable_conversations=True` lets a new turn supersede an active turn in the
@@ -311,7 +315,7 @@ raises `FoundryStorageNotFoundError` invalidates its cached binding and propagat
 the error; the next borrow resolves the store again. Missing item reads returned
 as `None` do not invalidate the binding.
 
-The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. Local runs and tests use an in-memory provider by default. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
+The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. The version in the lockfile defaults to `FileResponseStore` locally. Tests can pass an in-memory provider explicitly. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
 
 ### Durable graph state
 
