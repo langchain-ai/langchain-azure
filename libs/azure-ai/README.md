@@ -17,6 +17,8 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 
 ## Installation
 
+Requires Python 3.11 or later.
+
 ```bash
 pip install -U langchain-azure-ai
 ```
@@ -110,6 +112,18 @@ model = AzureAIOpenAIApiChatModel(
 ```
 
 ### Unified moderation guardrails
+
+> [!NOTE]
+> Unified moderation is available in `langchain-azure-ai` 1.2.11 and later.
+> Upgrade the integration package before running this example:
+>
+> ```bash
+> python -m pip install --upgrade "langchain-azure-ai>=1.2.11"
+> ```
+>
+> This installs the required Content Safety preview dependency. Upgrading
+> only `azure-ai-contentsafety` does not add the middleware to an older
+> `langchain-azure-ai` installation.
 
 Use a Content Safety guardrail policy with any LangChain `create_agent` agent:
 
