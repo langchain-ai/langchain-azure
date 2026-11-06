@@ -234,6 +234,12 @@ Choose the protocol that matches your client:
 | Responses | `input` text, messages, or supported attachments | Messages, tool calls/results, and model metadata | [Responses hosting](docs/hosting/responses.md) |
 | Invocations | `message` text or approval replies | Assistant text and pending approvals | [Invocations hosting](docs/hosting/invocations.md) |
 
+For Responses endpoints, streaming, background execution, cancellation, and
+recovery options, see the
+[Agent Server Responses README](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#key-concepts).
+The LangGraph guides above describe graph input/output mapping, checkpointers,
+interrupts, and response branching.
+
 For checkpointed Responses conversations, omit `store` or set `store=true`.
 `store=false` returns HTTP 400 before streaming or graph execution.
 
