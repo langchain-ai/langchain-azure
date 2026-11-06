@@ -78,31 +78,41 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
-To use `init_chat_model` you must set the `AZURE_AI_PROJECT_ENDPOINT`, and (optional) `OPENAI_API_KEY` environment variables. Use the provider `azure_ai`:
+To use `init_chat_model` with a Foundry project, set
+`AZURE_AI_PROJECT_ENDPOINT` and use the `azure_ai` provider. Sign in with
+`az login` for local development:
 
-```python 
+```python
+import os
+
 from langchain.chat_models import init_chat_model
-from dotenv import load_dotenv 
-load_dotenv()
 
-# Option A) Using project endpoint
 os.environ["AZURE_AI_PROJECT_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com/api/projects/<project>"
 
-# Option B) Using OpenAI endpoint
-os.environ["OPENAI_API_BASE"] = "https://{your-resource-name}.services.ai.azure/openai/v1"
-os.environ["OPENAI_API_KEY"] = "{your-key}"
-
 model = init_chat_model("azure_ai:gpt-5-mini")
+model.invoke("Hello!").pretty_print()
 ```
 
 ### Microsoft Foundry Agent Service
 
-You can build multi agent graphs in LangGraph by using the integration with Microsoft Foundry Agent Service. The class `AgentServiceFactory` allows you to create agents and nodes that can be used to compose graphs.
+Use `AgentServiceFactory` to create a managed Foundry agent and add it as a
+node in a LangGraph graph.
+
+For local development, install the required extra and sign in:
+
+```bash
+pip install -U "langchain-azure-ai[opentelemetry]"
+az login
+```
+
+Set your project endpoint and model deployment name. This creates a version
+of `my-echo-agent` in your project:
 
 ```python
 from azure.identity import DefaultAzureCredential
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_azure_ai.agents import AgentServiceFactory
+from langchain_core.messages import HumanMessage
+from langgraph.graph import END, START, StateGraph
+from langchain_azure_ai.agents import AgentServiceAgentState, AgentServiceFactory
 from langchain_azure_ai.utils.agents import pretty_print
 
 factory = AgentServiceFactory(
@@ -110,13 +120,20 @@ factory = AgentServiceFactory(
     credential=DefaultAzureCredential()
 )
 
-echo_node = factory.get_agent_node(name="my-echo-agent", version="latest")
+echo_node = factory.create_prompt_agent_node(
+    name="my-echo-agent",
+    model="gpt-4.1",  # your model deployment name
+    instructions="Always reply with the opposite of what the user says.",
+)
 ```
 
 Agent Service nodes run in Microsoft Foundry but can be added to any graph:
 
 ```python
+graph = StateGraph(AgentServiceAgentState)
 graph.add_node("expert_node", echo_node)
+graph.add_edge(START, "expert_node")
+graph.add_edge("expert_node", END)
 ```
 
 Use the graph as usual:
