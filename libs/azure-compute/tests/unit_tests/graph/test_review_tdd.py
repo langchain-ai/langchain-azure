@@ -2370,7 +2370,7 @@ def test_p1_9_registration_register_worker_logging_and_async_client_edges(
 
 def test_p1_7_and_p1_8_pyproject_bounds_curated_beta_surface_and_no_leftovers() -> None:
     """P1-7 & P1-8:
-    - pyproject.toml sets langgraph>=1.0.2,<1.2 and <1.10 ceilings on
+    - pyproject.toml sets langgraph>=1.0.2,<1.3 and <1.14 ceilings on
     durabletask packages,  # noqa: E501
       and does not skip langgraph.* in mypy overrides.
     - langchain_azure_compute.graph.__all__ exports a small curated @beta
@@ -2381,7 +2381,7 @@ def test_p1_7_and_p1_8_pyproject_bounds_curated_beta_surface_and_no_leftovers() 
 
     pkg_root = Path(__file__).resolve().parents[3]
     pyproject_text = (pkg_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"langgraph>=1.0.2,<1.2"' in pyproject_text
+    assert '"langgraph>=1.0.2,<1.3"' in pyproject_text
     assert '"durabletask>=1.13.0,<1.14"' in pyproject_text
     assert '"durabletask-azuremanaged>=1.13.0,<1.14"' in pyproject_text
     assert '"langgraph.*"' not in pyproject_text

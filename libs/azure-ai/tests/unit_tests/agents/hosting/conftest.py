@@ -62,6 +62,9 @@ def foundry_state_stores(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str,
             return self
 
         async def __aexit__(self, *_: Any) -> None:
+            await self.aclose()
+
+        async def aclose(self) -> None:
             return None
 
         async def get(self) -> SimpleNamespace:

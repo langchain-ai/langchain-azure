@@ -9,14 +9,16 @@ import asyncio
 import errno
 import json
 import logging
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from anyio import create_task_group
 
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
@@ -32,6 +34,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, Interrupt
 from starlette.testclient import TestClient
+from starlette.types import Message
 
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
@@ -42,6 +45,7 @@ from langchain_azure_ai.agents.hosting._responses import (
     CONVERSATION_CHAIN_STORE_PREFIX,
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_CHECKPOINT_ID,
+    METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
     METADATA_LANGGRAPH_THREAD_ID,
     CheckpointRef,
     FoundryConversationChainStore,
@@ -49,6 +53,8 @@ from langchain_azure_ai.agents.hosting._responses import (
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
     METADATA_STEERABLE_CONVERSATION,
+    _scope_thread_id,
+    _thread_namespace,
 )
 
 from .conftest import (  # noqa: E402
@@ -63,6 +69,888 @@ from .conftest import (  # noqa: E402
 
 def _client(server: ResponsesHostServer) -> TestClient:
     return TestClient(server.app)
+
+
+@pytest.mark.parametrize("ending", ["success", "failure", "cancel", "close"])
+async def test_handler_owns_clients_through_generator_exit(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    settled = []
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        try:
+            async with get_state_store(server, FoundryStateStore, "chain"):
+                pass
+            yield "admitted"
+            async with get_state_store(server, FoundryStateStore, "chain"):
+                store.aclose.assert_not_awaited()
+                if ending == "failure":
+                    raise RuntimeError("failed")
+                if ending == "cancel":
+                    raise asyncio.CancelledError()
+        finally:
+            settled.append(True)
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    events = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+    assert await anext(events) == "admitted"
+    store.aclose.assert_not_awaited()
+    if ending == "close":
+        await cast(AsyncGenerator[Any, None], events).aclose()
+    else:
+        expected = {
+            "success": StopAsyncIteration,
+            "failure": RuntimeError,
+            "cancel": asyncio.CancelledError,
+        }[ending]
+        with pytest.raises(expected):
+            await anext(events)
+    assert settled == [True]
+    assert acquire.await_count == 1
+    store.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("boundary", ["graph", "handler"])
+@pytest.mark.parametrize("primary_kind", ["error", "recovery", "generator_exit"])
+@pytest.mark.parametrize("cancelled_close", [False, True])
+async def test_iterator_cleanup_preserves_primary_error(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    primary_kind: str,
+    cancelled_close: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.responses import ResponseExitForRecovery
+
+    from langchain_azure_ai.agents.hosting._responses_host import _closing_stream
+
+    primary = {
+        "error": ValueError("execution failed"),
+        "recovery": ResponseExitForRecovery(),
+        "generator_exit": GeneratorExit(),
+    }[primary_kind]
+
+    async def close() -> None:
+        if cancelled_close:
+            worker = asyncio.create_task(asyncio.sleep(0))
+            worker.cancel("close worker cancelled")
+            await worker
+        raise RuntimeError("close failed")
+
+    class Iterator:
+        aclose = AsyncMock(side_effect=close)
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise primary
+
+    iterator = Iterator()
+    with pytest.raises(type(primary)) as caught:
+        if boundary == "graph":
+            async with _closing_stream(iterator):
+                raise primary
+        else:
+            server = ResponsesHostServer(make_echo_graph())
+            monkeypatch.setattr(server, "handle_create", lambda *args: iterator)
+            await anext(
+                server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+            )
+    assert caught.value is primary
+    task = asyncio.current_task()
+    assert task is not None and task.cancelling() == 0
+    assert "Hosting cleanup failed during handler exit" in caplog.text
+    iterator.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("custom_handler", [False, True])
+@pytest.mark.parametrize("file_provider", [False, True])
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_background_recovery_survives_client_close_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    custom_handler: bool,
+    file_provider: bool,
+    close_fails: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from azure.ai.agentserver.responses import (
+        FileResponseStore,
+        InMemoryResponseProvider,
+        PlatformContext,
+        ResponseContext,
+        ResponseExitForRecovery,
+    )
+    from azure.ai.agentserver.responses.hosting._orchestrator import (
+        ResponseExecution,
+        ResponseModeFlags,
+        _run_background_non_stream,
+    )
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    provider = (
+        FileResponseStore(storage_dir=str(tmp_path))
+        if file_provider
+        else InMemoryResponseProvider()
+    )
+    request = _request(background=True, store=True, stream=False)
+    modes = ResponseModeFlags(stream=False, store=True, background=True)
+    context = ResponseContext(
+        response_id="resp-recovery",
+        mode_flags=modes,
+        request=request,
+        provider=provider,
+        input_items=[],
+        platform_context=PlatformContext(),
+    )
+    context._task_context = cast(Any, SimpleNamespace())
+    recovery = AsyncMock(wraps=context.exit_for_recovery)
+    monkeypatch.setattr(context, "exit_for_recovery", recovery)
+    options = ResponsesServerOptions(resilient_background=True)
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        store=provider,
+        options=ResponsesServerOptions(resilient_background=file_provider),
+    )
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    if close_fails:
+        store.aclose.side_effect = RuntimeError("client close failed")
+    monkeypatch.setattr(
+        FoundryStateStore, "get_or_create", AsyncMock(return_value=store)
+    )
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "checkpoint"):
+            pass
+        yield "messages", (AIMessage(content="partial"), {})
+        context.shutdown.set()
+        yield "updates", {}
+
+    async def handler(*args: Any) -> AsyncGenerator[Any, None]:
+        stream = server._new_stream(request, context)
+        yield stream.emit_created()
+        yield stream.emit_in_progress()
+        async with get_state_store(server, FoundryStateStore, "checkpoint"):
+            pass
+        yield stream.checkpoint()
+        context.shutdown.set()
+        await context.exit_for_recovery()
+
+    if custom_handler:
+        monkeypatch.setattr(server, "handle_create", handler)
+    else:
+        monkeypatch.setattr(server, "build_runnable_config", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            server, "build_input", AsyncMock(return_value={"messages": []})
+        )
+        monkeypatch.setattr(server.graph, "astream", graph_stream)
+    signal = asyncio.Event()
+    record = ResponseExecution(
+        response_id=context.response_id,
+        mode_flags=modes,
+        response_context=context,
+        cancel_signal=signal,
+    )
+    with pytest.raises(ResponseExitForRecovery):
+        await _run_background_non_stream(
+            create_fn=server._handle_create_async_gen,
+            parsed=request,
+            context=context,
+            cancellation_signal=signal,
+            record=record,
+            response_id=context.response_id,
+            agent_reference={"type": "agent_reference", "name": "test"},
+            model="test",
+            provider=provider,
+            runtime_options=options,
+        )
+    recovery.assert_awaited_once_with()
+    store.aclose.assert_awaited_once()
+    assert record.status == "in_progress"
+    if file_provider:
+        provider = FileResponseStore(storage_dir=str(tmp_path))
+    assert (await provider.get_response(context.response_id))["status"] == "in_progress"
+    if close_fails:
+        assert "client close failed" in caplog.text
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_anyio_cancelled_handler_waits_for_cleanup_without_spinning(
+    monkeypatch: pytest.MonkeyPatch,
+    close_fails: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    started = asyncio.Event()
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    cancellations = []
+    wait_calls = 0
+    wait = asyncio.wait
+
+    def counted_wait(*args: Any, **kwargs: Any) -> Any:
+        nonlocal wait_calls
+        wait_calls += 1
+        return wait(*args, **kwargs)
+
+    async def close() -> None:
+        await asyncio.sleep(0.02)
+        if close_fails:
+            raise RuntimeError("close failed")
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            pass
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            cancellations.append(exc)
+            raise
+        yield None
+
+    async def consume() -> None:
+        try:
+            async for _ in server._handle_create_async_gen(
+                _request(), _context(), asyncio.Event()
+            ):
+                pytest.fail("Cancelled handler must not yield output")
+        except asyncio.CancelledError as exc:
+            assert exc is cancellations[0]
+            raise
+
+    store.aclose.side_effect = close
+    monkeypatch.setattr(server, "handle_create", handle)
+    monkeypatch.setattr(asyncio, "wait", counted_wait)
+    async with create_task_group() as group:
+        group.start_soon(consume)
+        await started.wait()
+        group.cancel_scope.cancel()
+    assert len(cancellations) == 1
+    assert wait_calls < 10, "Cleanup must wait instead of retrying level cancellation"
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
+    if close_fails:
+        assert "close failed" in caplog.text
+
+
+@pytest.mark.parametrize("ending", ["complete", "close", "cancel"])
+async def test_handler_context_is_bound_per_iteration_across_tasks(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents import hosting
+    from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+        _checkpoint_reads,
+    )
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+    from langchain_azure_ai.agents.hosting._storage.state_store_factory import (
+        _current_factory,
+    )
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
+    monkeypatch.setattr(hosting, "_process_hosting_features", HostingFeature.NONE)
+    factories = []
+    checkpoint_contexts = []
+    expected_features = HostingFeature.RESPONSES | HostingFeature.HITL
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        factory = _current_factory.get()
+        assert factory is not None
+        factories.append(factory)
+        checkpoints = _checkpoint_reads.get()
+        assert checkpoints is not None
+        checkpoint_contexts.append(checkpoints)
+        try:
+            async with get_state_store(server, FoundryStateStore, "store"):
+                pass
+            hosting._add_request_hosting_features(HostingFeature.HITL)
+            yield "first"
+            assert _current_factory.get() is factory
+            assert _checkpoint_reads.get() is checkpoints
+            assert hosting.get_hosting_features() == expected_features
+            if ending == "cancel":
+                raise asyncio.CancelledError("stop")
+            yield "second"
+        finally:
+            assert _current_factory.get() is factory
+            assert _checkpoint_reads.get() is checkpoints
+            assert checkpoints.active
+            assert hosting.get_hosting_features() == expected_features
+            async with get_state_store(server, FoundryStateStore, "store"):
+                store.aclose.assert_not_awaited()
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    iterator = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+
+    async def advance() -> Any:
+        return await anext(iterator)
+
+    try:
+        assert await asyncio.create_task(advance()) == "first"
+        assert _current_factory.get() is None
+        assert _checkpoint_reads.get() is None
+        if ending == "close":
+            await cast(AsyncGenerator[Any, None], iterator).aclose()
+        elif ending == "cancel":
+            with pytest.raises(asyncio.CancelledError, match="stop"):
+                await asyncio.create_task(advance())
+        else:
+            assert await asyncio.create_task(advance()) == "second"
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.create_task(advance())
+        assert _current_factory.get() is None
+        assert hosting._request_hosting_features.get() == HostingFeature.NONE
+        acquire.assert_awaited_once()
+        store.aclose.assert_awaited_once()
+        assert factories[0].session is not None and factories[0].session.closed
+        assert not checkpoint_contexts[0].active
+        assert checkpoint_contexts[0].cache is None
+    finally:
+        await factories[0].stack.aclose()
+
+
+@pytest.mark.parametrize("other_borrower", [False, True])
+async def test_cross_task_close_does_not_cancel_handler_tasks(
+    monkeypatch: pytest.MonkeyPatch, other_borrower: bool
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import (
+        get_state_store,
+        state_store_factory,
+    )
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
+    held = []
+    factories = []
+    children: list[asyncio.Task[None]] = []
+    started, advanced, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def values() -> AsyncGenerator[str, None]:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            yield "item"
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        factory = state_store_factory._current_factory.get()
+        assert factory is not None
+        factories.append(factory)
+        for _ in range(2):
+            iterator = values()
+            held.append(iterator)
+            yield await anext(iterator)
+
+    async def child() -> None:
+        async with get_state_store(server, FoundryStateStore, "store"):
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(server, "handle_create", handle)
+
+    async def handler() -> None:
+        events = cast(
+            AsyncGenerator[Any, None],
+            server._handle_create_async_gen(_request(), _context(), asyncio.Event()),
+        )
+
+        async def advance() -> None:
+            assert await anext(events) == "item"
+            advanced.set()
+            await release.wait()
+
+        advancer = None
+        try:
+            assert await anext(events) == "item"
+            advancer = asyncio.create_task(advance())
+            await advanced.wait()
+            if other_borrower:
+                with factories[0].bind():
+                    children.append(asyncio.create_task(child()))
+                await started.wait()
+            await asyncio.create_task(events.aclose())
+            assert advancer.cancelling() == 0
+            store.aclose.assert_awaited_once()
+            session = factories[0].session
+            assert session is not None and session.closed
+        finally:
+            release.set()
+            for iterator in held:
+                await iterator.aclose()
+            await asyncio.gather(
+                *children, *([advancer] if advancer else []), return_exceptions=True
+            )
+            await events.aclose()
+
+    task = asyncio.create_task(handler())
+    await asyncio.wait_for(task, 1)
+    assert task.cancelling() == 0
+    assert all(child.cancelled() for child in children)
+
+
+@pytest.mark.parametrize("ignore_cancellation", [False, True])
+async def test_iterator_shutdown_timeout_still_closes_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    ignore_cancellation: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import (
+        get_state_store,
+        state_store_factory,
+    )
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    monkeypatch.setenv("FOUNDRY_HOSTING_ENVIRONMENT", "test")
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://project.test")
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "graph"):
+            pass
+        try:
+            yield "messages", (AIMessage(content="ready"), {})
+        finally:
+            closing.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                if not ignore_cancellation:
+                    raise
+                await release.wait()
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+
+    async def handler() -> None:
+        iterator = server._handle_create_async_gen(
+            _request(), _context(), asyncio.Event()
+        )
+        async for event in iterator:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+        await cast(AsyncGenerator[Any, None], iterator).aclose()
+
+    task = asyncio.create_task(handler())
+    try:
+        await asyncio.wait_for(closing.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, "Iterator shutdown must not block factory cleanup"
+        await task
+        store.aclose.assert_awaited_once()
+        assert acquire.call_args.kwargs["transport"].session.closed
+        resources = {
+            record.args[0]
+            for record in caplog.records
+            if "timed out" in record.getMessage() and isinstance(record.args, tuple)
+        }
+        assert "handler_iterator" in resources
+        assert resources <= {"handler_iterator", "graph_iterator"}
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_graph_close_timeout_preserves_generator_exit(
+    monkeypatch: pytest.MonkeyPatch, shutdown: bool
+) -> None:
+    from contextlib import suppress
+
+    from azure.ai.agentserver.responses import ResponseExitForRecovery
+
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    context.exit_for_recovery.side_effect = ResponseExitForRecovery
+    release, closed = asyncio.Event(), asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        try:
+            yield "messages", (AIMessage(content="partial"), {})
+        finally:
+            try:
+                await release.wait()
+            finally:
+                closed.set()
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    iterator = server.handle_create(_request(), context, asyncio.Event())
+    try:
+        async for event in iterator:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+        if shutdown:
+            context.shutdown.set()
+        await asyncio.wait_for(cast(AsyncGenerator[Any, None], iterator).aclose(), 1)
+        context.exit_for_recovery.assert_not_awaited()
+    finally:
+        release.set()
+        with suppress(BaseException):
+            await cast(AsyncGenerator[Any, None], iterator).aclose()
+        await asyncio.wait_for(closed.wait(), 1)
+
+
+async def test_agentserver_cancel_winddown_preserves_handler_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from azure.ai.agentserver.responses.hosting._orchestrator import _iter_with_winddown
+
+    from langchain_azure_ai.agents.hosting import get_hosting_features
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    cancellation_signal = asyncio.Event()
+    settled = []
+
+    async def handle(*args: Any) -> AsyncGenerator[Any, None]:
+        try:
+            async with get_state_store(server, FoundryStateStore, "store") as first:
+                pass
+            yield "ready"
+        finally:
+            assert get_hosting_features() & HostingFeature.RESPONSES
+            async with get_state_store(server, FoundryStateStore, "store") as reused:
+                assert reused is first
+                store.aclose.assert_not_awaited()
+            settled.append(True)
+
+    monkeypatch.setattr(server, "handle_create", handle)
+    events = _iter_with_winddown(
+        server._handle_create_async_gen(_request(), _context(), cancellation_signal),
+        cancellation_signal,
+    )
+    assert await anext(events) == "ready"
+    cancellation_signal.set()
+    with pytest.raises(StopAsyncIteration):
+        await anext(events)
+    assert settled == [True]
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
+
+
+async def test_early_handler_close_settles_graph_before_closing_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    monkeypatch.setattr(
+        FoundryStateStore, "get_or_create", AsyncMock(return_value=store)
+    )
+    server = ResponsesHostServer(make_echo_graph())
+    settled = []
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "graph"):
+            try:
+                yield "messages", (AIMessage(content="ready"), {})
+                await asyncio.Event().wait()
+            finally:
+                store.aclose.assert_not_awaited()
+                settled.append(True)
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = server._handle_create_async_gen(_request(), _context(), asyncio.Event())
+    async with asyncio.timeout(5):
+        async for event in events:
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                break
+    await cast(AsyncGenerator[Any, None], events).aclose()
+    assert settled == [True]
+    store.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_requests_reuse_two_clients_and_restore_checkpoint_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, streaming: bool
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+    from langchain_azure_ai.agents.hosting._responses import conversation_chain_store
+
+    monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        conversation_chain_store, "FoundryStateStore", FoundryStateStore
+    )
+    created: list[FoundryStateStore] = []
+    closed: list[FoundryStateStore] = []
+    get_or_create = FoundryStateStore.get_or_create
+    aclose = FoundryStateStore.aclose
+    get_item = FoundryStateStore.get_item
+    list_keys = FoundryStateStore.list_keys
+    checkpoint_reads: list[str] = []
+    checkpoint_lists: list[dict[str, Any]] = []
+    reference_reads: list[str] = []
+
+    async def read(store: FoundryStateStore, key: str, **kwargs: Any) -> Any:
+        if key == CONVERSATION_CHECKPOINT_KEY:
+            reference_reads.append(key)
+        if "FoundryCheckpointSaver/" in store.name and "/writes/" not in key:
+            checkpoint_reads.append(key)
+        return await get_item(store, key, **kwargs)
+
+    async def keys(store: FoundryStateStore, **kwargs: Any) -> Any:
+        if (kwargs.get("tags") or {}).get("kind") == "checkpoint":
+            checkpoint_lists.append(kwargs)
+        return await list_keys(store, **kwargs)
+
+    async def acquire(*args: Any, **kwargs: Any) -> FoundryStateStore:
+        store = await get_or_create(*args, **kwargs)
+        created.append(store)
+        return store
+
+    async def close(store: FoundryStateStore) -> None:
+        await aclose(store)
+        closed.append(store)
+
+    async def reply(state: MessagesState) -> dict[str, Any]:
+        assert all(store not in closed for store in created[-2:])
+        return {"messages": [AIMessage(content=f"messages={len(state['messages'])}")]}
+
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    monkeypatch.setattr(FoundryStateStore, "aclose", close)
+    monkeypatch.setattr(FoundryStateStore, "get_item", read)
+    monkeypatch.setattr(FoundryStateStore, "list_keys", keys)
+    builder = StateGraph(MessagesState)
+    builder.add_node("reply", reply)
+    builder.add_edge(START, "reply")
+    builder.add_edge("reply", END)
+    graph = builder.compile(checkpointer=FoundryCheckpointSaver(credential=AsyncMock()))
+    server = ResponsesHostServer(graph)
+    with _client(server) as client:
+        for turn in (1, 2):
+            checkpoint_reads.clear()
+            checkpoint_lists.clear()
+            reference_reads.clear()
+            response = client.post(
+                "/responses",
+                json={"input": "hello", "conversation": "reuse", "stream": streaming},
+            )
+            assert response.status_code == 200, response.text
+            if streaming:
+                payload = next(
+                    event["response"]
+                    for name, event in _parse_sse(response.text)
+                    if name == "response.completed"
+                )
+            else:
+                payload = response.json()
+            assert payload["status"] == "completed", payload
+            assert f"messages={2 * turn - 1}" in str(payload["output"])
+            assert len(created) == len(closed) == 2 * turn
+            assert len({id(store) for store in created}) == 2 * turn
+            assert len({store.name for store in created}) == 2
+            assert len(reference_reads) == 1
+            if turn == 2:
+                assert len(checkpoint_reads) == 2, checkpoint_reads
+                assert len(checkpoint_lists) == 1
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+async def test_request_pins_reference_after_recovery_selection(
+    monkeypatch: pytest.MonkeyPatch, recovering: bool
+) -> None:
+    from langchain_azure_ai.agents.hosting import FoundryCheckpointSaver
+    from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
+        _checkpoint_reads,
+    )
+
+    graph = make_checkpointed_echo_graph()
+    graph.checkpointer = FoundryCheckpointSaver(credential=AsyncMock())
+    server = ResponsesHostServer(graph)
+    reference = CheckpointRef("input-thread", "input-checkpoint")
+    chain_get = AsyncMock(return_value=reference.to_dict())
+    monkeypatch.setattr(server._conversation_chain_store, "get", chain_get)
+    context = _context()
+    context.is_recovery = recovering
+    if recovering:
+        context.persisted_response = _response_object(
+            context.response_id,
+            internal_metadata={
+                METADATA_LANGGRAPH_THREAD_ID: "recovery-thread",
+                METADATA_LANGGRAPH_CHECKPOINT_ID: "recovery-checkpoint",
+            },
+        )
+        reference = CheckpointRef("recovery-thread", "recovery-checkpoint")
+
+    async def run(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        reads = _checkpoint_reads.get()
+        assert reads is not None and reads.key is not None
+        assert reads.key[2:] == (reference.thread_id, "")
+        assert reads.input_checkpoint_id == reference.checkpoint_id
+        yield "messages", (AIMessage(content="done"), {})
+
+    monkeypatch.setattr(server.graph, "astream", run)
+    events = [
+        event
+        async for event in server._handle_create_async_gen(
+            _request(), context, asyncio.Event()
+        )
+    ]
+    assert events[-1]["type"] == "response.completed"
+    chain_get.assert_awaited_once()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_background_handler_keeps_clients_after_http_request_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+) -> None:
+    from azure.ai.agentserver.core.storage import FoundryStateStore
+
+    from langchain_azure_ai.agents.hosting._storage import get_state_store
+
+    started, closed = threading.Event(), threading.Event()
+    release = asyncio.Event()
+    store = SimpleNamespace(get=AsyncMock(), aclose=AsyncMock())
+    acquire = AsyncMock(return_value=store)
+    monkeypatch.setattr(FoundryStateStore, "get_or_create", acquire)
+    server = ResponsesHostServer(make_echo_graph())
+    resumed = []
+
+    async def close() -> None:
+        closed.set()
+
+    store.aclose.side_effect = close
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        async with get_state_store(server, FoundryStateStore, "background") as first:
+            started.set()
+        # No active borrower while the HTTP request finishes. The handler owns it.
+        await release.wait()
+        async with get_state_store(server, FoundryStateStore, "background") as reused:
+            assert reused is first
+            store.aclose.assert_not_awaited()
+            resumed.append(True)
+        yield "messages", (AIMessage(content="completed"), {})
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    with _client(server) as client:
+        try:
+            if streaming:
+
+                async def disconnect_stream() -> None:
+                    received = False
+                    sent: list[Message] = []
+
+                    async def receive() -> Message:
+                        nonlocal received
+                        if not received:
+                            received = True
+                            return {
+                                "type": "http.request",
+                                "body": json.dumps(
+                                    {
+                                        "input": "hello",
+                                        "background": True,
+                                        "stream": True,
+                                    }
+                                ).encode(),
+                                "more_body": False,
+                            }
+                        assert await asyncio.to_thread(started.wait, 5)
+                        return {"type": "http.disconnect"}
+
+                    async def send(message: Message) -> None:
+                        sent.append(message)
+
+                    await asyncio.wait_for(
+                        server.app(
+                            {
+                                "type": "http",
+                                "asgi": {"version": "3.0", "spec_version": "2.0"},
+                                "http_version": "1.1",
+                                "method": "POST",
+                                "scheme": "http",
+                                "path": "/responses",
+                                "raw_path": b"/responses",
+                                "query_string": b"",
+                                "root_path": "",
+                                "headers": [(b"content-type", b"application/json")],
+                                "client": ("127.0.0.1", 1234),
+                                "server": ("testserver", 80),
+                                "state": {},
+                            },
+                            receive,
+                            send,
+                        ),
+                        5,
+                    )
+                    assert sent[0]["status"] == 200
+
+                assert client.portal is not None
+                client.portal.call(disconnect_stream)
+            else:
+                response = client.post(
+                    "/responses",
+                    json={"input": "hello", "background": True, "stream": False},
+                )
+                assert response.status_code == 200, response.text
+                assert response.json()["status"] == "in_progress"
+            assert started.wait(5)
+            acquire.assert_awaited_once()
+            store.aclose.assert_not_awaited()
+            assert not resumed
+        finally:
+            assert client.portal is not None
+            client.portal.call(release.set)
+        assert closed.wait(5)
+    assert resumed == [True]
+    acquire.assert_awaited_once()
+    store.aclose.assert_awaited_once()
 
 
 def test_constructor_registers_responses_features() -> None:
@@ -144,7 +1032,7 @@ def _response_object(
     *,
     previous_response_id: str | None = None,
     conversation_id: str | None = None,
-    internal_metadata: dict[str, object] | None = None,
+    internal_metadata: dict[str, object] | str | None = None,
 ) -> ResponseObject:
     response: dict[str, object] = {"id": response_id, "output": []}
     if previous_response_id is not None:
@@ -236,10 +1124,144 @@ def _context(
     return context
 
 
-def test_non_streaming_request_returns_completed_response() -> None:
-    server = ResponsesHostServer(make_echo_graph())
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_is_rejected_before_execution(
+    monkeypatch: pytest.MonkeyPatch, streaming: bool, prefix: str
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph(), prefix=prefix)
+    graph_stream = MagicMock(wraps=server.graph.astream)
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
     with _client(server) as client:
-        resp = client.post("/responses", json={"input": "hello", "model": "test"})
+        resp = client.post(
+            f"{prefix}/responses",
+            json={"input": "hello", "stream": streaming, "store": False},
+            headers={"x-request-id": "store-validation-request"},
+        )
+    assert resp.status_code == 400, resp.text
+    assert resp.headers["content-type"] == "application/json"
+    error = resp.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "store"
+    assert error["message"] == (
+        "store=False is not supported when a LangGraph checkpointer is configured."
+    )
+    assert error["additionalInfo"]["request_id"] == resp.headers["x-request-id"]
+    graph_stream.assert_not_called()
+
+
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("checkpointer", [None, False], ids=["default", "disabled"])
+def test_store_false_without_checkpointer_does_not_persist(
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    prefix: str,
+    background: bool,
+    checkpointer: bool | None,
+) -> None:
+    graph = make_echo_graph().builder.compile(checkpointer=checkpointer)
+    server = ResponsesHostServer(graph, prefix=prefix)
+    graph_stream = MagicMock(wraps=server.graph.astream)
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    provider = server.app._endpoint._provider
+    storage_calls: list[AsyncMock] = []
+    for owner, method in (
+        (provider, "create_response"),
+        (provider, "update_response"),
+        (server.app._orchestrator, "_start_resilient_background"),
+        (streams, "get_or_create"),
+        (server._conversation_chain_store, "set"),
+    ):
+        storage_call = AsyncMock(side_effect=AssertionError("Unexpected storage write"))
+        monkeypatch.setattr(owner, method, storage_call)
+        storage_calls.append(storage_call)
+    with _client(server) as client:
+        resp = client.post(
+            f"{prefix}/responses",
+            json={
+                "input": "hello",
+                "stream": streaming,
+                "background": background,
+                "store": False,
+            },
+        )
+        if background:
+            assert resp.status_code == 400, resp.text
+            assert resp.json()["error"]["param"] == "background"
+            graph_stream.assert_not_called()
+        else:
+            assert resp.status_code == 200, resp.text
+            if streaming:
+                completed = [
+                    payload
+                    for kind, payload in _parse_sse(resp.text)
+                    if kind == "response.completed"
+                ]
+                assert len(completed) == 1, resp.text
+                response = completed[0]["response"]
+            else:
+                response = resp.json()
+            assert response["status"] == "completed"
+            assert response["output"]
+            graph_stream.assert_called_once()
+            assert client.get(f"{prefix}/responses/{response['id']}").status_code == 404
+    for storage_call in storage_calls:
+        storage_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_store_false_continuation_without_checkpointer_preserves_parent(
+    streaming: bool, prefix: str
+) -> None:
+    server = ResponsesHostServer(make_echo_graph(), prefix=prefix)
+    with _client(server) as client:
+        parent_response = client.post(
+            f"{prefix}/responses", json={"input": "parent", "store": True}
+        )
+        assert parent_response.status_code == 200, parent_response.text
+        parent = parent_response.json()
+        assert parent["status"] == "completed"
+        child_response = client.post(
+            f"{prefix}/responses",
+            json={
+                "input": "child",
+                "previous_response_id": parent["id"],
+                "store": False,
+                "stream": streaming,
+            },
+        )
+        assert child_response.status_code == 200, child_response.text
+        if streaming:
+            completed = [
+                payload
+                for kind, payload in _parse_sse(child_response.text)
+                if kind == "response.completed"
+            ]
+            assert len(completed) == 1, child_response.text
+            child = completed[0]["response"]
+        else:
+            child = child_response.json()
+        assert child["status"] == "completed"
+        assert child["previous_response_id"] == parent["id"]
+        assert child["output"]
+        assert client.get(f"{prefix}/responses/{child['id']}").status_code == 404
+        retained_parent = client.get(f"{prefix}/responses/{parent['id']}")
+        assert retained_parent.status_code == 200, retained_parent.text
+        assert retained_parent.json()["status"] == "completed"
+        assert retained_parent.json()["output"] == parent["output"]
+
+
+@pytest.mark.parametrize("store", [None, True])
+def test_non_streaming_request_returns_completed_response(store: bool | None) -> None:
+    server = ResponsesHostServer(make_echo_graph())
+    request: dict[str, Any] = {"input": "hello", "model": "test"}
+    if store is not None:
+        request["store"] = store
+    with _client(server) as client:
+        resp = client.post("/responses", json=request)
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["status"] == "completed"
@@ -254,13 +1276,14 @@ def test_non_streaming_request_returns_completed_response() -> None:
     assert "Echo: hello" in text
 
 
-def test_streaming_request_emits_sse_lifecycle_events() -> None:
+@pytest.mark.parametrize("store", [None, True])
+def test_streaming_request_emits_sse_lifecycle_events(store: bool | None) -> None:
     server = ResponsesHostServer(make_streaming_graph())
+    request: dict[str, Any] = {"input": "ignored", "stream": True, "model": "test"}
+    if store is not None:
+        request["store"] = store
     with _client(server) as client:
-        resp = client.post(
-            "/responses",
-            json={"input": "ignored", "stream": True, "model": "test"},
-        )
+        resp = client.post("/responses", json=request)
     assert resp.status_code == 200, resp.text
     events = _parse_sse(resp.text)
     types = [t for t, _ in events]
@@ -431,6 +1454,175 @@ async def test_shutdown_after_stream_event_defers_for_recovery() -> None:
     context.exit_for_recovery.assert_awaited_once_with()
 
 
+@pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
+@pytest.mark.parametrize("slow_close", [False, True])
+async def test_graph_close_budget_preserves_signal_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
+    slow_close: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses import TaskStorageManager
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    class ExitForRecovery(BaseException):
+        pass
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.02)
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    context.exit_for_recovery.side_effect = ExitForRecovery
+    cancellation_signal = asyncio.Event()
+    chain_set = AsyncMock()
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
+    checkpoint_ref = CheckpointRef("thread-test", "checkpoint-test")
+    new_stream = server._new_stream
+
+    def stream_with_checkpoint(*args: Any) -> Any:
+        stream = new_stream(*args)
+        TaskStorageManager.from_stream(stream).store_checkpoint_ref(checkpoint_ref)
+        return stream
+
+    monkeypatch.setattr(server, "_new_stream", stream_with_checkpoint)
+    release_write = asyncio.Event()
+    if not slow_close:
+        release_write.set()
+    pending_write = asyncio.create_task(release_write.wait())
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        try:
+            yield "messages", (AIMessage(content="partial"), {})
+        finally:
+            await asyncio.shield(pending_write)
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = []
+
+    async def consume() -> None:
+        async for event in server._handle_create_async_gen(
+            _request(), context, cancellation_signal
+        ):
+            events.append(event)
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.output_text.delta"
+            ):
+                if signal == "shutdown":
+                    context.shutdown.set()
+                else:
+                    context.client_cancelled = signal == "client_cancel"
+                    cancellation_signal.set()
+
+    try:
+        if signal == "shutdown":
+            with pytest.raises(ExitForRecovery):
+                await asyncio.wait_for(consume(), 1)
+            context.exit_for_recovery.assert_awaited_once_with()
+            assert not any(
+                event.get("type") in {"response.failed", "response.completed"}
+                for event in events
+                if isinstance(event, dict)
+            )
+        else:
+            await asyncio.wait_for(consume(), 1)
+            terminal = events[-1]
+            if signal == "client_cancel":
+                assert terminal["response"]["error"]["code"] == "cancelled"
+            elif slow_close:
+                from openai.types.responses import ResponseError
+
+                error = ResponseError.model_validate(terminal["response"]["error"])
+                assert error.code == "server_error"
+                assert error.message == "An internal error occurred."
+                assert "graph_iterator" not in json.dumps(terminal)
+                assert "cleanup timed out: resource=graph_iterator" in caplog.text
+            else:
+                assert terminal["type"] == "response.completed"
+            context.exit_for_recovery.assert_not_awaited()
+        if slow_close:
+            assert not pending_write.done()
+            chain_set.assert_not_awaited()
+        else:
+            chain_set.assert_awaited_once_with(
+                context.conversation_chain_id,
+                CONVERSATION_CHECKPOINT_KEY,
+                checkpoint_ref.to_dict(),
+            )
+    finally:
+        release_write.set()
+        await pending_write
+
+
+@pytest.mark.parametrize("signal", ["shutdown", "steering", "client_cancel"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("graph execution timed out"),
+        RuntimeError("private credential detail"),
+    ],
+)
+async def test_graph_execution_errors_are_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
+    error: Exception,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server = ResponsesHostServer(make_echo_graph())
+    context = _context()
+    cancellation_signal = asyncio.Event()
+
+    async def graph_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
+        if signal == "shutdown":
+            context.shutdown.set()
+        else:
+            context.client_cancelled = signal == "client_cancel"
+            cancellation_signal.set()
+        raise error
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(server.graph, "astream", graph_stream)
+    events = [
+        event
+        async for event in server._handle_create_async_gen(
+            _request(), context, cancellation_signal
+        )
+    ]
+    assert events[-1]["response"]["error"] == {
+        "code": "server_error",
+        "message": "An internal error occurred.",
+    }
+    assert all(
+        str(error) not in json.dumps(event)
+        for event in events
+        if isinstance(event, dict)
+    )
+    assert str(error) in caplog.text
+    context.exit_for_recovery.assert_not_awaited()
+
+
+async def test_graph_close_timeout_preserves_execution_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_azure_ai.agents.hosting._responses_host import _closing_stream
+    from langchain_azure_ai.agents.hosting._storage import state_store_factory
+
+    monkeypatch.setattr(state_store_factory, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+
+    async def graph_stream() -> AsyncGenerator[Any, None]:
+        try:
+            yield "ready"
+        finally:
+            await asyncio.Event().wait()
+
+    stream = graph_stream()
+    assert await anext(stream) == "ready"
+    original = TimeoutError("graph execution timed out")
+    with pytest.raises(TimeoutError) as caught:
+        async with _closing_stream(stream):
+            raise original
+    assert caught.value is original
+
+
 @pytest.mark.asyncio
 async def test_recovered_response_reclaims_stale_replay_stream_lock(
     monkeypatch: pytest.MonkeyPatch,
@@ -597,6 +1789,65 @@ async def test_handle_create_persists_conversation_checkpoint(
         checkpoint["checkpoint_id"],
         str,
     )
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+async def test_handle_create_persists_root_response_id(checkpointed: bool) -> None:
+    responses: dict[str, ResponseObject] = {}
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=lambda response_id, **_: responses[response_id]
+        )
+    )
+    graph = make_checkpointed_echo_graph() if checkpointed else make_echo_graph()
+    server = ResponsesHostServer(graph)
+    for response_id, previous_id in [
+        ("resp-root", None),
+        ("resp-child", "resp-root"),
+        ("resp-grandchild", "resp-child"),
+    ]:
+        context = _context(
+            response_id=response_id,
+            conversation_id=None,
+            provider=provider,
+            user_id_key="user-a",
+        )
+        request = _request(previous_response_id=previous_id)
+        stream = server._new_stream(request, context)
+        with patch.object(server, "_new_stream", return_value=stream):
+            events = [
+                event
+                async for event in server.handle_create(
+                    request, context, asyncio.Event()
+                )
+            ]
+        assert events[-1]["type"] == "response.completed"
+        assert (
+            stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == "resp-root"
+        )
+        responses[response_id] = cast(ResponseObject, dict(stream.response))
+    assert provider.get_response.await_count == 2
+
+
+@pytest.mark.parametrize("failure", ["provider", "cycle"])
+async def test_unresolved_response_chain_does_not_cache_root(failure: str) -> None:
+    parent = _response_object("resp-parent", previous_response_id="resp-parent")
+    if failure == "provider":
+        parent = _response_object("resp-parent", previous_response_id="resp-missing")
+    provider = SimpleNamespace(
+        get_response=AsyncMock(side_effect=[parent, RuntimeError("unavailable")])
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+    request = _request(previous_response_id="resp-parent")
+    stream = server._new_stream(request, context)
+    with patch.object(server, "_new_stream", return_value=stream):
+        events = [
+            event
+            async for event in server.handle_create(request, context, asyncio.Event())
+        ]
+    assert events[-1]["type"] == "response.completed"
+    assert METADATA_LANGGRAPH_ROOT_RESPONSE_ID not in stream.internal_metadata
 
 
 async def test_custom_conversation_chain_store() -> None:
@@ -798,6 +2049,7 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
     }
 
 
+@pytest.mark.parametrize("enable_response_branching", [False, True])
 @pytest.mark.parametrize(
     "input_items",
     [
@@ -821,8 +2073,15 @@ async def test_detect_rejection_override_remains_the_extension_point() -> None:
 async def test_recovery_resumes_from_current_response_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     input_items: list[object],
+    enable_response_branching: bool,
 ) -> None:
-    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    server = ResponsesHostServer(
+        make_checkpointed_echo_graph(),
+        options=ResponsesServerOptions(resilient_background=True),
+        enable_response_branching=enable_response_branching,
+    )
+    chain_set = AsyncMock()
+    monkeypatch.setattr(server._conversation_chain_store, "set", chain_set)
     context = _context(conversation_id=None, current_text="do not replay")
     context.is_recovery = True
     context.persisted_response = _response_object(
@@ -833,7 +2092,7 @@ async def test_recovery_resumes_from_current_response_checkpoint(
         },
     )
     context.get_input_items.return_value = input_items
-    request = _request()
+    request = _request(previous_response_id="resp-parent")
     graph_input, config = await _capture_graph_call(
         server,
         request,
@@ -845,6 +2104,14 @@ async def test_recovery_resumes_from_current_response_checkpoint(
     assert config["configurable"]["thread_id"] == "resp-root"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-current"
     context.get_input_items.assert_not_awaited()
+    if enable_response_branching:
+        chain_set.assert_not_awaited()
+    else:
+        chain_set.assert_awaited_once_with(
+            context.conversation_chain_id,
+            CONVERSATION_CHECKPOINT_KEY,
+            {"thread_id": "resp-root", "checkpoint_id": "checkpoint-current"},
+        )
 
 
 def test_readiness_endpoint_is_available() -> None:
@@ -977,6 +2244,40 @@ async def test_explicit_conversation_id_is_thread_id() -> None:
     assert config["configurable"]["response_context"] is context
 
 
+@pytest.mark.parametrize("user_id_key", [None, "", "user-a", "user-b"])
+@pytest.mark.parametrize(
+    "thread_id", ["", "thread-1", "thread:child", "user-session-1:thread"]
+)
+def test_scoped_thread_namespace_round_trips(
+    user_id_key: str | None, thread_id: str
+) -> None:
+    context = _context(user_id_key=user_id_key)
+    namespace = _scope_thread_id("", context)
+    assert bool(namespace) == bool(user_id_key)
+    assert _thread_namespace(_scope_thread_id(thread_id, context)) == namespace
+
+
+def test_scoped_thread_namespace_preserves_stored_format() -> None:
+    namespace = "user-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:"
+    thread_id = namespace + "thread-1"
+    assert _scope_thread_id("thread-1", _context(user_id_key="abc")) == thread_id
+    assert _thread_namespace(thread_id) == namespace
+
+
+@pytest.mark.parametrize(
+    "thread_id",
+    [
+        "user-" + "0" * 63 + ":thread",
+        "user-" + "0" * 65 + ":thread",
+        "user-" + "A" * 64 + ":thread",
+        "user-" + "g" * 64 + ":thread",
+        "user-" + "0" * 64,
+    ],
+)
+def test_malformed_user_prefix_is_not_a_namespace(thread_id: str) -> None:
+    assert _thread_namespace(thread_id) == ""
+
+
 async def test_checkpointed_conversation_is_isolated_by_user() -> None:
     server = ResponsesHostServer(make_checkpointed_echo_graph())
 
@@ -1083,6 +2384,200 @@ async def test_previous_response_id_chain_resolves_root_thread_id() -> None:
     assert config["configurable"]["thread_id"] == "resp-1"
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("user_id_key", [None, "user-a"])
+@pytest.mark.parametrize("include_checkpoint", [False, True])
+async def test_previous_response_root_metadata_avoids_ancestor_reads(
+    as_json: bool, user_id_key: str | None, include_checkpoint: bool
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    root_config = await server.build_runnable_config(
+        _request(),
+        _context(
+            response_id="resp-root",
+            conversation_id=None,
+            user_id_key=user_id_key,
+        ),
+    )
+    thread_id = root_config["configurable"]["thread_id"]
+    metadata: dict[str, object] = {
+        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+        METADATA_LANGGRAPH_THREAD_ID: "opaque-thread-for-another-user",
+    }
+    if include_checkpoint:
+        metadata[METADATA_LANGGRAPH_CHECKPOINT_ID] = "checkpoint-parent"
+    parent = _response_object(
+        "resp-parent",
+        previous_response_id="resp-root",
+        internal_metadata=json.dumps(metadata) if as_json else metadata,
+    )
+    provider = SimpleNamespace(get_response=AsyncMock(return_value=parent))
+    context = _context(conversation_id=None, provider=provider, user_id_key=user_id_key)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == thread_id
+    assert "checkpoint_id" not in config["configurable"]
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
+
+
+@pytest.mark.parametrize("as_model", [False, True])
+async def test_cached_root_lookup_does_not_copy_response_payload(
+    as_model: bool,
+) -> None:
+    class UncopyablePayload:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+            raise AssertionError("Root lookup must not copy the response payload")
+
+    parent = _response_object(
+        "resp-parent",
+        internal_metadata={METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root"},
+    )
+    parent["output"] = cast(Any, [UncopyablePayload()])
+    response = SimpleNamespace(**parent) if as_model else parent
+    provider = SimpleNamespace(get_response=AsyncMock(return_value=response))
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == "resp-root"
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
+
+
+@pytest.mark.parametrize(
+    ("owner_key", "caller_key"),
+    [("user-a", "user-b"), ("user-a", None), (None, "user-b")],
+)
+async def test_cached_root_scopes_thread_for_current_user(
+    owner_key: str | None, caller_key: str | None
+) -> None:
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    owner_config = await server.build_runnable_config(
+        _request(),
+        _context(response_id="resp-root", conversation_id=None, user_id_key=owner_key),
+    )
+    expected_config = await server.build_runnable_config(
+        _request(),
+        _context(response_id="resp-root", conversation_id=None, user_id_key=caller_key),
+    )
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=[
+                _response_object(
+                    "resp-parent",
+                    previous_response_id="resp-root",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+                        METADATA_LANGGRAPH_THREAD_ID: owner_config["configurable"][
+                            "thread_id"
+                        ],
+                    },
+                ),
+                _response_object("resp-root"),
+            ]
+        )
+    )
+    context = _context(conversation_id=None, provider=provider, user_id_key=caller_key)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert (
+        config["configurable"]["thread_id"]
+        == expected_config["configurable"]["thread_id"]
+    )
+    assert (
+        config["configurable"]["thread_id"] != owner_config["configurable"]["thread_id"]
+    )
+    provider.get_response.assert_awaited_once_with(
+        "resp-parent", context=context.platform_context
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "invalid-json",
+        "[]",
+        {
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: 7,
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+        },
+        {
+            METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "",
+            METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+        },
+    ],
+)
+async def test_previous_response_root_metadata_falls_back_to_root(
+    metadata: dict[str, object] | str | None,
+) -> None:
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            side_effect=[
+                _response_object(
+                    "resp-parent",
+                    previous_response_id="resp-root",
+                    internal_metadata=metadata,
+                ),
+                _response_object("resp-root"),
+            ]
+        )
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    request = _request(previous_response_id="resp-parent")
+    stream = server._new_stream(request, context)
+    with patch.object(server, "_new_stream", return_value=stream):
+        events = [
+            event
+            async for event in server.handle_create(request, context, asyncio.Event())
+        ]
+    assert events[-1]["type"] == "response.completed"
+    assert stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] == "resp-root"
+    assert provider.get_response.await_args_list == [
+        call("resp-parent", context=context.platform_context),
+        call("resp-root", context=context.platform_context),
+    ]
+
+
+async def test_previous_response_conversation_takes_priority_over_metadata() -> None:
+    provider = SimpleNamespace(
+        get_response=AsyncMock(
+            return_value=_response_object(
+                "resp-parent",
+                conversation_id="conv-existing",
+                internal_metadata={
+                    METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+                    METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                    METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                },
+            )
+        )
+    )
+    server = ResponsesHostServer(make_checkpointed_echo_graph())
+    context = _context(conversation_id=None, provider=provider)
+
+    config = await server.build_runnable_config(
+        _request(previous_response_id="resp-parent"), context
+    )
+
+    assert config["configurable"]["thread_id"] == "conv-existing"
+    assert HostingRunnableConfig(config).root_response_id is None
+
+
 async def test_previous_response_uses_conversation_state_store(
     foundry_state_stores: dict[str, dict[str, Any]],
 ) -> None:
@@ -1096,6 +2591,18 @@ async def test_previous_response_uses_conversation_state_store(
     context = _context(
         conversation_id=None,
         conversation_chain_id="chain-1",
+        provider=SimpleNamespace(
+            get_response=AsyncMock(
+                return_value=_response_object(
+                    "resp-2",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+                        METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                    },
+                )
+            )
+        ),
     )
 
     config = await server.build_runnable_config(
@@ -1106,6 +2613,7 @@ async def test_previous_response_uses_conversation_state_store(
     assert config["configurable"]["thread_id"] == "resp-1"
     assert config["configurable"]["checkpoint_id"] == "checkpoint-2"
     assert config["configurable"]["checkpoint_ns"] == ""
+    assert HostingRunnableConfig(config).root_response_id == "resp-root"
 
 
 async def test_explicit_conversation_uses_conversation_state_store(
@@ -1136,6 +2644,18 @@ async def test_recovery_uses_persisted_thread_and_checkpoint(
     context = _context(
         response_id="resp-current",
         conversation_id=None,
+        provider=SimpleNamespace(
+            get_response=AsyncMock(
+                return_value=_response_object(
+                    "resp-parent",
+                    internal_metadata={
+                        METADATA_LANGGRAPH_ROOT_RESPONSE_ID: "resp-root",
+                        METADATA_LANGGRAPH_THREAD_ID: "thread-parent",
+                        METADATA_LANGGRAPH_CHECKPOINT_ID: "checkpoint-parent",
+                    },
+                )
+            )
+        ),
     )
     context.is_recovery = True
     context.persisted_response = _response_object(

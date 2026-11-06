@@ -1,0 +1,359 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
+"""Handler-owned State Store clients; standalone operations keep local ownership."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from contextvars import ContextVar
+from time import perf_counter
+from typing import Any, Literal
+from weakref import WeakSet
+
+import aiohttp
+from anyio import CancelScope
+from azure.ai.agentserver.core import get_request_context, resolve_state_subdir
+from azure.ai.agentserver.core.storage import (
+    FoundryStateStore,
+    FoundryStorageEndpoint,
+    FoundryStorageNotFoundError,
+)
+from azure.core.pipeline.transport import AioHttpTransport
+
+logger = logging.getLogger(__name__)
+_CLEANUP_TIMEOUT_SECONDS = 5.0
+_CONNECTION_OPTIONS = (
+    "connection_timeout",
+    "read_timeout",
+    "connection_verify",
+    "connection_cert",
+    "connection_data_block_size",
+)
+_StoreBinding = tuple[object, tuple[str, str], str | None]
+
+_current_factory: ContextVar[StateStoreClientFactory | None] = ContextVar(
+    "langchain_azure_state_store_client_factory", default=None
+)
+
+
+def _store_resource(
+    name: str, endpoint: FoundryStorageEndpoint | str | None
+) -> tuple[str, str]:
+    if not os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
+        return str(resolve_state_subdir("state_stores")), name
+    if isinstance(endpoint, str):
+        endpoint = FoundryStorageEndpoint.from_endpoint(endpoint)
+    elif endpoint is None:
+        endpoint = FoundryStorageEndpoint.from_env()
+    return endpoint.storage_base_url.rstrip("/"), name
+
+
+class _CleanupTimeoutError(TimeoutError):
+    """A hosting cleanup budget expired, rather than the operation itself."""
+
+    def __init__(self, resource: str) -> None:
+        self.resource = resource
+        super().__init__(f"Hosting cleanup timed out: resource={resource}")
+
+
+async def _close_resource(
+    close: Callable[[], Awaitable[None]],
+    resource: Literal[
+        "handler_iterator", "graph_iterator", "store_client", "shared_session"
+    ],
+    factory: StateStoreClientFactory | None = None,
+) -> None:
+    factory = factory if factory is not None else _current_factory.get()
+    started = perf_counter()
+    task = asyncio.ensure_future(close())
+    done, _ = await asyncio.wait({task}, timeout=_CLEANUP_TIMEOUT_SECONDS)
+    if not done:
+        task.cancel()
+        # Retrieve eventual errors without waiting for cancellation-resistant code.
+        task.add_done_callback(
+            lambda done: None if done.cancelled() else done.exception()
+        )
+        logger.warning(
+            "Hosting cleanup timed out: resource=%s elapsed_seconds=%.3f borrowers=%d",
+            resource,
+            perf_counter() - started,
+            len(factory.borrowers) if factory is not None else 0,
+        )
+        raise _CleanupTimeoutError(resource)
+    await task
+
+
+@asynccontextmanager
+async def _finish_cleanup(close: Awaitable[None]) -> AsyncIterator[None]:
+    """Close on exit without replacing a primary error or control signal.
+
+    Caller cancellation wins; repeated cancellation preserves the first exception.
+    Secondary cleanup errors are logged. Normal exit propagates cleanup errors.
+    """
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        cleanup = asyncio.ensure_future(close)
+        try:
+            # Shield only finalization; the body may be resumed in another Task.
+            with CancelScope(shield=True):
+                while not cleanup.done():
+                    try:
+                        # Only caller cancellation interrupts this wait.
+                        await asyncio.wait({cleanup})
+                    except asyncio.CancelledError as exc:
+                        if not isinstance(primary, asyncio.CancelledError):
+                            primary = exc
+                await cleanup
+        except (Exception, asyncio.CancelledError):
+            if primary is None:
+                raise
+            logger.exception("Hosting cleanup failed during handler exit")
+        finally:
+            if primary is not None:
+                raise primary
+
+
+class StateStoreClientFactory:
+    """Create, lend and close compatible clients within one handler.
+
+    A consumer instance supplies fixed credentials, endpoint and client options.
+    Distinct consumers, store names and platform users never share a client.
+    Stores are resolved on first use and after deletion or a NotFound error.
+    All borrowers must run on the event loop that created the factory.
+    """
+
+    def __init__(self) -> None:
+        self.loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        assert task is not None
+        self.handler_tasks: WeakSet[asyncio.Task[Any]] = WeakSet([task])
+        self.stack = AsyncExitStack()
+        self.clients: dict[_StoreBinding, FoundryStateStore] = {}
+        self.locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self.idle = asyncio.Event()
+        self.idle.set()
+        self.borrowers: dict[asyncio.Task[Any], int] = {}
+        self.closing = False
+        self.closed = False
+        self.session: aiohttp.ClientSession | None = None
+
+    @contextmanager
+    def bind(self) -> Iterator[None]:
+        """Bind this factory only for the current iterator operation."""
+        task = asyncio.current_task()
+        assert task is not None
+        self.handler_tasks.add(task)
+        token = _current_factory.set(self)
+        try:
+            yield
+        finally:
+            _current_factory.reset(token)
+
+    async def acquire(
+        self,
+        key: _StoreBinding,
+        store_type: type[FoundryStateStore],
+        name: str,
+        *args: Any,
+        **options: Any,
+    ) -> FoundryStateStore:
+        """Resolve a store on first use and lend its handler-owned client."""
+        if self.closed:
+            raise RuntimeError("State Store client factory has already ended")
+        async with self.locks.setdefault(key[1], asyncio.Lock()):
+            if self.closed:
+                raise RuntimeError("State Store client factory has already ended")
+            store = self.clients.get(key)
+            if store is not None:
+                return store
+            if os.environ.get("FOUNDRY_HOSTING_ENVIRONMENT"):
+                if self.session is None:
+                    self.session = aiohttp.ClientSession(
+                        cookie_jar=aiohttp.DummyCookieJar(),
+                        trust_env=True,
+                        auto_decompress=False,
+                    )
+                    self.stack.push_async_callback(
+                        _close_resource, self.session.close, "shared_session", self
+                    )
+                options["transport"] = AioHttpTransport(
+                    session=self.session,
+                    session_owner=False,
+                    **{
+                        option: options[option]
+                        for option in _CONNECTION_OPTIONS
+                        if option in options
+                    },
+                )
+            store = await store_type.get_or_create(name, *args, **options)
+            if self.closed:
+                await _close_resource(store.aclose, "store_client", self)
+                raise RuntimeError("State Store client factory has already ended")
+            self.stack.push_async_callback(
+                _close_resource, store.aclose, "store_client", self
+            )
+            self.clients[key] = store
+            return store
+
+
+@asynccontextmanager
+async def _state_store_deletion_scope(
+    owner: object,
+    name: str,
+    *,
+    endpoint: FoundryStorageEndpoint | str | None = None,
+) -> AsyncIterator[Callable[[], None]]:
+    """Invalidate a binding and coordinate deletion across store aliases.
+
+    The yielded callback invalidates all bindings for a whole-store deletion.
+    Existing borrowers may continue item operations during deletion.
+    """
+    factory = _current_factory.get()
+    resource = None
+
+    def invalidate_aliases() -> None:
+        if factory is not None:
+            for binding in list(factory.clients):
+                if binding[1] == resource:
+                    factory.clients.pop(binding)
+
+    if factory is None:
+        yield invalidate_aliases
+        return
+    if asyncio.get_running_loop() is not factory.loop:
+        raise RuntimeError(
+            "State Store client factory must use its original event loop"
+        )
+    if factory.closing:
+        raise RuntimeError("State Store client factory has already ended")
+    resource = _store_resource(name, endpoint)
+    key = (owner, resource, get_request_context().user_id)
+    async with factory.locks.setdefault(resource, asyncio.Lock()):
+        if factory.closing:
+            raise RuntimeError("State Store client factory has already ended")
+        # Existing borrowers keep their client until handler cleanup.
+        factory.clients.pop(key, None)
+        yield invalidate_aliases
+
+
+@asynccontextmanager
+async def state_store_client_scope(
+    *, bind: bool = True
+) -> AsyncIterator[StateStoreClientFactory]:
+    """Own reusable clients and bound cleanup after the handler exits."""
+    factory = StateStoreClientFactory()
+    token = _current_factory.set(factory) if bind else None
+    closing_task: asyncio.Task[Any] | None = None
+
+    async def close() -> None:
+        started = perf_counter()
+        try:
+            await asyncio.wait_for(factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS)
+        except TimeoutError:
+            logger.warning(
+                "Hosting cleanup timed out: resource=borrower_drain "
+                "elapsed_seconds=%.3f borrowers=%d",
+                perf_counter() - started,
+                len(factory.borrowers),
+            )
+            # Earlier handler Tasks may be awaiting this cross-Task cleanup.
+            borrowers = {
+                task
+                for task in factory.borrowers
+                if task not in factory.handler_tasks and task is not closing_task
+            }
+            for borrower in borrowers:
+                borrower.cancel()
+            if borrowers:
+                try:
+                    await asyncio.wait_for(
+                        factory.idle.wait(), _CLEANUP_TIMEOUT_SECONDS
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "Hosting cleanup timed out: resource=borrower_cancel "
+                        "elapsed_seconds=%.3f borrowers=%d",
+                        perf_counter() - started,
+                        len(factory.borrowers),
+                    )
+        finally:
+            factory.closed = True
+            await factory.stack.aclose()
+
+    async with _finish_cleanup(close()):
+        try:
+            yield factory
+        finally:
+            closing_task = asyncio.current_task()
+            factory.closing = True
+            if token is not None:
+                _current_factory.reset(token)
+
+
+@asynccontextmanager
+async def get_state_store(
+    owner: object,
+    store_type: type[FoundryStateStore],
+    name: str,
+    *args: Any,
+    **options: Any,
+) -> AsyncIterator[FoundryStateStore]:
+    """Borrow a handler client or close an operation-owned standalone client.
+
+    Propagated NotFound errors evict only the binding for the borrowed client.
+    """
+    factory = _current_factory.get()
+    if factory is not None and asyncio.get_running_loop() is not factory.loop:
+        raise RuntimeError(
+            "State Store client factory must use its original event loop"
+        )
+    if factory is not None and factory.closing:
+        raise RuntimeError("State Store client factory has already ended")
+    # Custom pipelines/sessions retain their existing ownership and proxy settings.
+    if factory is None or any(
+        key in options
+        for key in (
+            "transport",
+            "pipeline",
+            "session",
+            "session_owner",
+            "use_env_settings",
+        )
+    ):
+        store = await store_type.get_or_create(name, *args, **options)
+        async with store:
+            yield store
+        return
+    # Each consumer instance fixes endpoint, credential and pipeline options.
+    endpoint = options.get("endpoint", args[1] if len(args) > 1 else None)
+    key = (owner, _store_resource(name, endpoint), get_request_context().user_id)
+    borrower = asyncio.current_task()
+    assert borrower is not None
+    factory.borrowers[borrower] = factory.borrowers.get(borrower, 0) + 1
+    factory.idle.clear()
+    try:
+        store = await factory.acquire(key, store_type, name, *args, **options)
+        if factory.closed:
+            raise RuntimeError("State Store client factory has already ended")
+        try:
+            yield store
+        except FoundryStorageNotFoundError:
+            if factory.clients.get(key) is store:
+                factory.clients.pop(key, None)
+            raise
+    finally:
+        factory.borrowers[borrower] -= 1
+        if not factory.borrowers[borrower]:
+            del factory.borrowers[borrower]
+        if not factory.borrowers:
+            factory.idle.set()

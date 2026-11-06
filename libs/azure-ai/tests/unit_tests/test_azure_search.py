@@ -1,5 +1,6 @@
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
@@ -439,6 +440,220 @@ def test_ids_used_correctly() -> None:
 
 
 @pytest.mark.requires("azure.search.documents")
+def test_custom_field_names_set_after_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AZURESEARCH_FIELDS_* env vars must be honored even when set after the
+    `azuresearch` module has already been imported.
+
+    Regression test for https://github.com/langchain-ai/langchain-azure/issues/207:
+    field names used to be resolved once into module-level globals at import
+    time, so setting the env vars afterwards (the normal order of operations
+    for any application) silently had no effect.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.search.documents.indexes import SearchIndexClient
+    from azure.search.documents.indexes.models import SearchIndex
+
+    monkeypatch.setenv("AZURESEARCH_FIELDS_ID", "chunk_id")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT", "chunk")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_TAG", "meta")
+
+    def no_index(self: SearchIndexClient, name: str) -> SearchIndex:
+        raise ResourceNotFoundError
+
+    created_index: Optional[SearchIndex] = None
+
+    def mock_create_index(self: SearchIndexClient, index: SearchIndex) -> None:
+        nonlocal created_index
+        created_index = index
+
+    with patch.multiple(
+        SearchIndexClient, get_index=no_index, create_index=mock_create_index
+    ):
+        vector_store = create_vector_store()
+
+    assert vector_store._field_names.id == "chunk_id"
+    assert vector_store._field_names.content == "chunk"
+    assert vector_store._field_names.content_vector == "vector"
+    assert vector_store._field_names.metadata == "meta"
+
+    assert created_index is not None
+    assert {f.name for f in created_index.fields} == {
+        "chunk_id",
+        "chunk",
+        "vector",
+        "meta",
+    }
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_add_texts_uses_custom_field_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`add_texts` must upload documents keyed by the resolved field names,
+    not by the hardcoded defaults.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    monkeypatch.setenv("AZURESEARCH_FIELDS_ID", "chunk_id")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT", "chunk")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector")
+    monkeypatch.setenv("AZURESEARCH_FIELDS_TAG", "meta")
+
+    class Response:
+        def __init__(self) -> None:
+            self.succeeded: bool = True
+
+    uploaded: List[Dict[str, Any]] = []
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        vector_store.add_texts(["hello world"])
+
+    assert len(uploaded) == 1
+    assert {"chunk_id", "chunk", "vector", "meta"}.issubset(uploaded[0].keys())
+    assert "content_vector" not in uploaded[0]
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_field_names_are_isolated_per_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two `AzureSearch` instances configured with different field names must
+    not clobber each other.
+
+    Previously the field names were resolved once into shared module-level
+    globals, so the most-recently-constructed instance would silently win for
+    every instance in the process.
+    """
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with patch.object(SearchIndexClient, "get_index", mock_default_index):
+        monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector_a")
+        store_a = create_vector_store()
+
+        monkeypatch.setenv("AZURESEARCH_FIELDS_CONTENT_VECTOR", "vector_b")
+        store_b = create_vector_store()
+
+        assert store_a._field_names.content_vector == "vector_a"
+        assert store_b._field_names.content_vector == "vector_b"
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_semantic_hybrid_search_returns_matching_answer() -> None:
+    """`semantic_hybrid_search_with_score_and_rerank` must attach the semantic
+    answer for a document's own id.
+
+    Regression test: the id was previously popped off the raw result before
+    being looked up in the semantic-answers map, so `answers` always came
+    back empty regardless of whether the service returned one.
+    """
+    import json
+
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class FakeAnswer:
+        def __init__(self, key: str, text: str, highlights: str) -> None:
+            self.key = key
+            self.text = text
+            self.highlights = highlights
+
+    class FakeSearchResults:
+        def __init__(
+            self, items: List[Dict[str, Any]], answers: List[FakeAnswer]
+        ) -> None:
+            self._items = items
+            self._answers = answers
+
+        def __iter__(self) -> Any:
+            return iter(self._items)
+
+        def get_answers(self) -> List[FakeAnswer]:
+            return self._answers
+
+    result_item = {
+        "id": "doc-1",
+        "content": "hello world",
+        "content_vector": [1.0, 1.0, 1.0, 0.0],
+        "metadata": json.dumps({"source": "x"}),
+        "@search.score": 0.9,
+        "@search.reranker_score": 2.5,
+    }
+    answer = FakeAnswer(key="doc-1", text="the answer", highlights="the answer")
+
+    def mock_search(self: SearchClient, **kwargs: Any) -> FakeSearchResults:
+        return FakeSearchResults([dict(result_item)], [answer])
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        docs = vector_store.semantic_hybrid_search_with_score_and_rerank("query")
+
+    assert len(docs) == 1
+    doc, _score, _reranker_score = docs[0]
+    assert doc.metadata["id"] == "doc-1"
+    assert doc.metadata["answers"] == {"text": "the answer", "highlights": "the answer"}
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_reorder_mmr_returns_empty_for_no_results() -> None:
+    """The sync MMR reorder helper returns an empty list when the search
+    yielded no candidates."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _reorder_results_with_maximal_marginal_relevance,
+        _resolve_field_names,
+    )
+
+    result = _reorder_results_with_maximal_marginal_relevance(
+        iter([]),  # type: ignore[arg-type]
+        query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+        field_names=_resolve_field_names(),
+    )
+    assert result == []
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_areorder_mmr_returns_empty_for_no_results() -> None:
+    """The async MMR reorder helper must also return an empty list, mirroring
+    the sync path, instead of raising a ValueError when unpacking an empty
+    ``zip`` of results."""
+    import numpy as np
+
+    from langchain_azure_ai.vectorstores.azuresearch import (
+        _areorder_results_with_maximal_marginal_relevance,
+        _resolve_field_names,
+    )
+
+    async def _empty_results() -> AsyncIterator[Dict[Any, Any]]:
+        return
+        yield  # pragma: no cover  -- makes this an (empty) async generator
+
+    async def _run() -> List[Any]:
+        return await _areorder_results_with_maximal_marginal_relevance(
+            _empty_results(),  # type: ignore[arg-type]
+            query_embedding=np.array([1.0, 0.0, 0.0, 0.0]),
+            field_names=_resolve_field_names(),
+        )
+
+    assert asyncio.run(_run()) == []
+
+
+@pytest.mark.requires("azure.search.documents")
 @pytest.mark.parametrize("search_type", ["similarity", "hybrid"])
 async def test_asimilarity_search_with_score_consumes_search_type(
     search_type: str,
@@ -476,3 +691,95 @@ async def test_asimilarity_search_with_score_consumes_search_type(
 
     assert len(captured_kwargs) == 1
     assert "search_type" not in captured_kwargs[0]
+
+
+_RETRIEVER_SEARCH_TYPES = [
+    "similarity",
+    "similarity_score_threshold",
+    "hybrid",
+    "hybrid_score_threshold",
+    "semantic_hybrid",
+    "semantic_hybrid_score_threshold",
+]
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("search_type", _RETRIEVER_SEARCH_TYPES)
+@pytest.mark.parametrize("filter_param", ["filter", "filters"])
+def test_retriever_applies_filter(search_type: str, filter_param: str) -> None:
+    """The documented `filter` search kwarg must reach the search request.
+
+    The store methods only know `filters`, so `filter` was silently dropped by
+    the similarity searches, which returned unfiltered results, and raised
+    `TypeError` on the others.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    captured_kwargs: List[Dict[str, Any]] = []
+
+    def mock_search(
+        self: SearchClient, *args: Any, **kwargs: Any
+    ) -> EmptySearchResults:
+        captured_kwargs.append(kwargs)
+        return EmptySearchResults()
+
+    with (
+        patch.object(SearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        retriever = create_vector_store().as_retriever(
+            search_type=search_type,
+            search_kwargs={filter_param: "tenant eq 'a'"},
+        )
+        retriever.invoke("hello world")
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["filter"] == "tenant eq 'a'"
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("search_type", _RETRIEVER_SEARCH_TYPES)
+@pytest.mark.parametrize("filter_param", ["filter", "filters"])
+async def test_retriever_applies_filter_async(
+    search_type: str, filter_param: str
+) -> None:
+    """The async twin of `test_retriever_applies_filter`."""
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    captured_kwargs: List[Dict[str, Any]] = []
+
+    async def mock_search(
+        self: AsyncSearchClient, *args: Any, **kwargs: Any
+    ) -> EmptyAsyncSearchResults:
+        captured_kwargs.append(kwargs)
+        return EmptyAsyncSearchResults()
+
+    with (
+        patch.object(AsyncSearchClient, "search", mock_search),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        retriever = create_vector_store().as_retriever(
+            search_type=search_type,
+            search_kwargs={filter_param: "tenant eq 'a'"},
+        )
+        await retriever.ainvoke("hello world")
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["filter"] == "tenant eq 'a'"
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_retriever_rejects_filter_and_filters_together() -> None:
+    """Conflicting filters must fail rather than search with only one of them."""
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with patch.object(SearchIndexClient, "get_index", mock_default_index):
+        retriever = create_vector_store().as_retriever(
+            search_type="similarity",
+            search_kwargs={"filter": "tenant eq 'a'", "filters": "tenant eq 'b'"},
+        )
+
+        with pytest.raises(ValueError, match="`filter` or `filters`"):
+            retriever.invoke("hello world")

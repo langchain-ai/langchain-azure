@@ -431,6 +431,62 @@ class TestThreadScoping:
     """
 
     @REAL_INTERRUPT_ASYNC_XFAIL
+    @pytest.mark.parametrize("channel", ["approval", "function_call_output"])
+    def test_old_resume_does_not_approve_a_later_turn(self, channel: str) -> None:
+        """A consumed turn's resume cannot answer a new pause in the same thread."""
+        host = ResponsesHostServer(build_simple_interrupt_graph())
+        conversation = {"id": "conv-stale-resume"}
+
+        def resume_for(payload: dict) -> dict:
+            if channel == "approval":
+                return {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval_requests(payload)[0]["id"],
+                    "approve": True,
+                }
+            return resume_item(sentinels(payload)[0]["call_id"], "approved")
+
+        with client_for(host) as client:
+            first = client.post(
+                "/responses", json={"input": "first turn", "conversation": conversation}
+            )
+            assert first.status_code == 200, first.text
+            old_call_id = sentinels(first.json())[0]["call_id"]
+            old_resume = resume_for(first.json())
+            completed = client.post(
+                "/responses", json={"input": [old_resume], "conversation": conversation}
+            )
+            assert completed.status_code == 200, completed.text
+            assert completed.json()["status"] == "completed", completed.text
+            assert not sentinels(completed.json()), completed.text
+
+            later = client.post(
+                "/responses", json={"input": "next turn", "conversation": conversation}
+            )
+            assert later.status_code == 200, later.text
+            new_call_id = sentinels(later.json())[0]["call_id"]
+            assert new_call_id != old_call_id
+            retried = client.post(
+                "/responses", json={"input": [old_resume], "conversation": conversation}
+            )
+            assert retried.status_code == 200, retried.text
+            assert [item["call_id"] for item in sentinels(retried.json())] == [
+                new_call_id
+            ], retried.text
+            assert approval_requests(retried.json()), retried.text
+
+            completed = client.post(
+                "/responses",
+                json={
+                    "input": [resume_for(retried.json())],
+                    "conversation": conversation,
+                },
+            )
+            assert completed.status_code == 200, completed.text
+            assert completed.json()["status"] == "completed", completed.text
+            assert not sentinels(completed.json()), completed.text
+
+    @REAL_INTERRUPT_ASYNC_XFAIL
     def test_does_not_resume_a_pause_from_another_conversation(self) -> None:
         """An interrupt id is only meaningful on the thread that produced it.
 

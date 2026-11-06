@@ -18,7 +18,9 @@ Prereqs:
 * ``FOUNDRY_PROJECT_ENDPOINT`` set in the shell or in
   ``samples/hosting/langgraph-hosted-agents/.env``,
 * optionally ``AZURE_AI_MODEL_DEPLOYMENT_NAME`` (defaults to ``gpt-4o``),
-* for the Foundry-Toolbox sample: ``TOOLBOX_NAME``.
+* for the Foundry-Toolbox and local Deep Agents samples: ``TOOLBOX_NAME``;
+* optionally ``DEEP_AGENTS_NAME`` to validate an already-deployed Deep Agent
+  instead of launching its local host.
 
 Usage (from ``samples/hosting/langgraph-hosted-agents/``)::
 
@@ -55,6 +57,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import partial
@@ -870,239 +873,250 @@ def check_07_observability() -> None:
 
 
 def check_06_pause_then_resume() -> None:
-    """responses/08_hitl: approval-style HITL — mcp_approval_request paired
-    with function_call; primary resume via mcp_approval_response; rejection
-    surfaces as response.failed; rich override still works via
-    function_call_output.
+    """responses/08_hitl: whole-turn approval, ID-bound edits/rejections,
+    validation recovery, matching tool results, and stale approval retries.
     """
     requires_foundry_endpoint()
     server = start_sample("responses/08_hitl/main.py")
-    try:
-        # ------------------------------------------------------------------
-        # Run A (primary path): approve via the OpenAI-standard
-        # mcp_approval_response. This is the headline UX.
-        # ------------------------------------------------------------------
-        conversation_a = f"e2e-hitl-approve-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run A — approve)", conversation_a)
 
-        _step("Run A turn 1 — POST /responses (expect paired approval items)")
-        first = _post(
+    def post_response(conversation_id: str, input_items: Any) -> dict[str, Any]:
+        response = _post(
             server,
             "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_a},
-            },
-            timeout=180.0,
+            json_body={"conversation": {"id": conversation_id}, "input": input_items},
+            timeout=300.0,
         )
-        _assert(first.status_code == 200, f"turn 1 HTTP 200 (got {first.status_code})")
-        first_payload = first.json()
-        _assert(first_payload["status"] == "completed", "turn 1 status == completed")
+        _assert(response.status_code == 200, f"HTTP 200 (got {response.status_code})")
+        return response.json()
+
+    def review_batch(
+        payload: dict[str, Any], cities: list[str]
+    ) -> tuple[str, str, list[dict[str, Any]]]:
+        _assert(payload["status"] == "completed", "approval response completed")
         approvals = [
             item
-            for item in first_payload["output"]
+            for item in payload["output"]
             if item.get("type") == "mcp_approval_request"
             and item.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
         interrupts = [
             item
-            for item in first_payload["output"]
+            for item in payload["output"]
             if item.get("type") == "function_call"
             and item.get("name") == "__hosted_agent_adapter_interrupt__"
         ]
+        _assert(len(approvals) == len(interrupts) == 1, "one paired batch approval")
+        envelope = json.loads(approvals[0]["arguments"])
         _assert(
-            bool(approvals),
-            "turn 1 surfaces the OpenAI-standard mcp_approval_request item",
+            json.loads(interrupts[0]["arguments"]) == envelope
+            and envelope["interrupt_id"] == interrupts[0]["call_id"],
+            "both channels describe the same batch interrupt",
+        )
+        calls = envelope["value"]["tool_calls"]
+        _assert(len(calls) == len(cities), "all calls visible in the batch review")
+        _assert(
+            len({call["id"] for call in calls}) == len(calls)
+            and all(isinstance(call["id"], str) and call["id"] for call in calls),
+            "each tool call retains its unique ID",
         )
         _assert(
-            bool(interrupts),
-            "turn 1 also surfaces the paired function_call (advanced channel)",
+            all(call["name"] == "get_weather" for call in calls), "tool names retained"
         )
-        approval_id = approvals[0]["id"]
-        call_id = interrupts[0]["call_id"]
-        _kv("mcp_approval_request.id", approval_id)
-        _kv("function_call.call_id", call_id)
+        for city in cities:
+            _assert(
+                sum(
+                    city.lower() in call["arguments"]["location"].lower()
+                    for call in calls
+                )
+                == 1,
+                f"batch contains exactly one call for {city}",
+            )
         _assert(
-            approval_id == call_id,
-            "mcp_approval_request.id == function_call.call_id (same interrupt id)",
+            not any(
+                item.get("type") == "function_call_output" for item in payload["output"]
+            ),
+            "no tool results emitted during batch review",
         )
-        # Envelope shape: arguments JSON describes the proposed tool call.
-        try:
-            envelope = json.loads(approvals[0]["arguments"])
-        except (TypeError, ValueError):
-            envelope = None
-        _assert(
-            isinstance(envelope, dict)
-            and envelope.get("interrupt_id") == approval_id
-            and isinstance(envelope.get("value"), dict)
-            and envelope["value"].get("tool") == "get_weather",
-            "approval arguments envelope describes the proposed get_weather call",
-        )
+        return approvals[0]["id"], interrupts[0]["call_id"], calls
 
-        _step("Run A turn 2 — approve via mcp_approval_response")
-        second = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_a},
-                "input": [
+    def check_results(
+        payload: dict[str, Any], calls: list[dict[str, Any]], decision: str
+    ) -> None:
+        _assert(payload["status"] == "completed", "reviewed turn completed")
+        _assert(
+            not any(
+                item.get("type") == "mcp_approval_request" for item in payload["output"]
+            ),
+            "no extra approvals after reviewing the batch",
+        )
+        outputs = [
+            item
+            for item in payload["output"]
+            if item.get("type") == "function_call_output"
+        ]
+        _assert(
+            len(outputs) == len(calls)
+            and {item["call_id"] for item in outputs} == {call["id"] for call in calls},
+            "exactly one tool result per original call ID",
+        )
+        outputs_by_id = {item["call_id"]: item["output"] for item in outputs}
+        for call in calls:
+            location = call["arguments"]["location"]
+            if "paris" in location.lower():
+                if decision == "mixed":
+                    expected = "Tool call rejected by the reviewer."
+                else:
+                    location = "Vancouver" if decision == "edit" else location
+                    expected = f"It's sunny and 22C in {location}."
+            else:
+                expected = f"It's sunny and 22C in {location}."
+            _assert(
+                outputs_by_id[call["id"]] == expected,
+                f"correct result for {call['id']}",
+            )
+
+    try:
+        for decision in [
+            "approve",
+            "edit",
+            "reject",
+            "mixed",
+            "partial",
+            "partial_approve",
+            "invalid_arguments",
+            "invalid_arguments_approve",
+        ]:
+            recovering = decision.startswith(("partial", "invalid_arguments"))
+            conversation_id = f"e2e-hitl-{decision}-{uuid.uuid4().hex[:8]}"
+            _step(f"{decision}: review Seattle and Paris together")
+            payload = post_response(
+                conversation_id,
+                "Call get_weather exactly twice in the SAME model turn, once for "
+                "Seattle and once for Paris. After reviewing, summarize the results; "
+                "do not retry rejected tool calls.",
+            )
+            approval_id, call_id, calls = review_batch(payload, ["Seattle", "Paris"])
+            approval = {
+                "type": "mcp_approval_response",
+                "approval_request_id": approval_id,
+                "approve": decision != "reject",
+            }
+            resume: dict[str, Any] = approval
+            if decision in ("edit", "mixed") or recovering:
+                decisions = []
+                for call in reversed(calls):
+                    choice: dict[str, Any] = {"id": call["id"], "type": "approve"}
+                    if "paris" in call["arguments"]["location"].lower():
+                        if decision == "edit" or decision.startswith(
+                            "invalid_arguments"
+                        ):
+                            choice["type"] = "edit"
+                            choice["arguments"] = (
+                                {} if recovering else {"location": "Vancouver"}
+                            )
+                        elif decision == "mixed":
+                            choice["type"] = "reject"
+                    decisions.append(choice)
+                if decision.startswith("partial"):
+                    decisions = decisions[:1]
+                resume = {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps({"resume": {"decisions": decisions}}),
+                }
+            payload = post_response(conversation_id, [resume])
+            if recovering:
+                for attempt in range(2):
+                    retry_approval_id, retry_call_id, retry_calls = review_batch(
+                        payload, ["Seattle", "Paris"]
+                    )
+                    _assert(
+                        retry_call_id == call_id and retry_calls == calls,
+                        "invalid decisions keep the complete original batch pending",
+                    )
+                    error = next(
+                        json.loads(item["arguments"])["value"].get("validation_error")
+                        for item in payload["output"]
+                        if item.get("type") == "mcp_approval_request"
+                    )
+                    _assert(bool(error), "review prompt explains the validation error")
+                    if attempt == 0:
+                        payload = post_response(conversation_id, [resume])
+                if decision.endswith("_approve"):
+                    correction = {
+                        "type": "mcp_approval_response",
+                        "approval_request_id": retry_approval_id,
+                        "approve": True,
+                    }
+                else:
+                    corrected = []
+                    for call in reversed(calls):
+                        choice = {"id": call["id"], "type": "approve"}
+                        if "paris" in call["arguments"]["location"].lower():
+                            choice.update(
+                                type="edit", arguments={"location": "Vancouver"}
+                            )
+                        corrected.append(choice)
+                    correction = {
+                        "type": "function_call_output",
+                        "call_id": retry_call_id,
+                        "output": json.dumps({"resume": {"decisions": corrected}}),
+                    }
+                payload = post_response(conversation_id, [correction])
+            if decision == "reject":
+                _assert(
+                    payload["status"] == "failed"
+                    and payload["error"]["code"] == "interrupt_rejected",
+                    "whole-batch rejection fails the turn",
+                )
+                _assert(
+                    not any(
+                        item.get("type") == "function_call_output"
+                        for item in payload["output"]
+                    ),
+                    "rejected batch emits no tool results",
+                )
+                continue
+            expected_decision = (
+                "edit" if recovering and not decision.endswith("_approve") else decision
+            )
+            check_results(payload, calls, expected_decision)
+            if decision != "approve":
+                continue
+
+            _step("new turn: stale approval cannot approve Tokyo and London")
+            payload = post_response(
+                conversation_id,
+                "Now call get_weather exactly twice in the SAME model turn: "
+                "Tokyo and London. Summarize only after approval.",
+            )
+            next_approval_id, next_call_id, next_calls = review_batch(
+                payload, ["Tokyo", "London"]
+            )
+            _assert(next_call_id != call_id, "new batch has a new interrupt identity")
+            payload = post_response(conversation_id, [approval])
+            retry_approval_id, retry_call_id, retry_calls = review_batch(
+                payload, ["Tokyo", "London"]
+            )
+            _assert(
+                retry_call_id == next_call_id and retry_calls == next_calls,
+                "retry of the old approval leaves the new batch unchanged and pending",
+            )
+            _assert(
+                next_approval_id != approval_id,
+                "new approval differs from old approval",
+            )
+            payload = post_response(
+                conversation_id,
+                [
                     {
                         "type": "mcp_approval_response",
-                        "approval_request_id": approval_id,
+                        "approval_request_id": retry_approval_id,
                         "approve": True,
                     }
                 ],
-            },
-            timeout=300.0,
-        )
-        _assert(second.status_code == 200, f"turn 2 HTTP 200 (got {second.status_code})")
-        second_payload = second.json()
-        _assert(second_payload["status"] == "completed", "turn 2 status == completed")
-        _assert(
-            not [
-                it
-                for it in second_payload["output"]
-                if it.get("type")
-                in ("function_call", "mcp_approval_request")
-                and it.get("name") == "__hosted_agent_adapter_interrupt__"
-            ],
-            "turn 2 does not re-interrupt after approve=true",
-        )
-        _assert(
-            "seattle" in _response_text(second_payload).lower(),
-            "turn 2 final text mentions seattle (tool ran with approved args)",
-        )
-
-        # ------------------------------------------------------------------
-        # Run B: reject via mcp_approval_response — the host should
-        # surface response.failed(code="interrupt_rejected").
-        # ------------------------------------------------------------------
-        conversation_b = f"e2e-hitl-reject-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run B — reject)", conversation_b)
-
-        _step("Run B turn 1 — POST /responses (expect approval prompt)")
-        firstb = _post(
-            server,
-            "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_b},
-            },
-            timeout=180.0,
-        )
-        _assert(
-            firstb.status_code == 200,
-            f"Run B turn 1 HTTP 200 (got {firstb.status_code})",
-        )
-        approvals_b = [
-            it
-            for it in firstb.json()["output"]
-            if it.get("type") == "mcp_approval_request"
-        ]
-        _assert(bool(approvals_b), "Run B turn 1 surfaces mcp_approval_request")
-        approval_id_b = approvals_b[0]["id"]
-
-        _step("Run B turn 2 — reject via mcp_approval_response")
-        secondb = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_b},
-                "input": [
-                    {
-                        "type": "mcp_approval_response",
-                        "approval_request_id": approval_id_b,
-                        "approve": False,
-                        "reason": "automated test rejection",
-                    }
-                ],
-            },
-            timeout=120.0,
-        )
-        _assert(
-            secondb.status_code == 200,
-            f"Run B turn 2 HTTP 200 (got {secondb.status_code})",
-        )
-        secondb_payload = secondb.json()
-        _assert(
-            secondb_payload["status"] == "failed",
-            f"Run B turn 2 status == failed (got {secondb_payload.get('status')!r})",
-        )
-        err = secondb_payload.get("error") or {}
-        _assert(
-            err.get("code") == "interrupt_rejected",
-            f"error.code == interrupt_rejected (got {err.get('code')!r})",
-        )
-        _assert(
-            approval_id_b in (err.get("message") or ""),
-            "rejection message references the interrupt id",
-        )
-
-        # ------------------------------------------------------------------
-        # Run C (advanced): override the proposed tool args via
-        # function_call_output (richer channel for non-vanilla clients).
-        # ------------------------------------------------------------------
-        conversation_c = f"e2e-hitl-override-{uuid.uuid4().hex[:8]}"
-        _kv("conversation.id (Run C — function_call_output override)", conversation_c)
-
-        _step("Run C turn 1 — POST /responses (expect approval prompt)")
-        firstc = _post(
-            server,
-            "/responses",
-            json_body={
-                "input": "What is the weather in Seattle?",
-                "conversation": {"id": conversation_c},
-            },
-            timeout=180.0,
-        )
-        _assert(
-            firstc.status_code == 200,
-            f"Run C turn 1 HTTP 200 (got {firstc.status_code})",
-        )
-        interrupts_c = [
-            it
-            for it in firstc.json()["output"]
-            if it.get("type") == "function_call"
-            and it.get("name") == "__hosted_agent_adapter_interrupt__"
-        ]
-        _assert(bool(interrupts_c), "Run C turn 1 surfaces sentinel function_call")
-        call_id_c = interrupts_c[0]["call_id"]
-
-        _step("Run C turn 2 — override args via function_call_output")
-        override_payload = {
-            "resume": {
-                "tool": "get_weather",
-                "arguments": {"location": "Vancouver"},
-            }
-        }
-        secondc = _post(
-            server,
-            "/responses",
-            json_body={
-                "conversation": {"id": conversation_c},
-                "input": [
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id_c,
-                        "output": json.dumps(override_payload),
-                    }
-                ],
-            },
-            timeout=300.0,
-        )
-        _assert(
-            secondc.status_code == 200,
-            f"Run C turn 2 HTTP 200 (got {secondc.status_code})",
-        )
-        secondc_payload = secondc.json()
-        _assert(
-            secondc_payload["status"] == "completed",
-            "Run C turn 2 status == completed",
-        )
-        _assert(
-            "vancouver" in _response_text(secondc_payload).lower(),
-            "Run C final text reflects the overridden location (Vancouver)",
-        )
+            )
+            check_results(payload, next_calls, "approve")
     finally:
         server.terminate()
 
@@ -1367,6 +1381,730 @@ def check_11_message_limit() -> None:
 
 
 # ---------------------------------------------------------------------------
+def _deep_agents_response(
+    client: Any,
+    *,
+    stream: bool,
+    session_ids: set[str] | None = None,
+    blob_names: set[str] | None = None,
+    **request: Any,
+) -> dict[str, Any]:
+    def remember_session(value: Any) -> None:
+        if session_ids is not None and isinstance(value, str) and value:
+            session_ids.add(value)
+
+    request.setdefault("max_output_tokens", 12000)
+    exchange = _start_raw_api_exchange(
+        method="POST",
+        url=f"{str(client.base_url).rstrip('/')}/responses",
+        path="/responses",
+        stream=stream,
+        timeout=600,
+        request_json={**request, "stream": stream},
+    )
+
+    def record_response(value: Any) -> None:
+        exchange.url = str(value.request.url)
+        exchange.request_json = json.loads(value.request.content)
+        exchange.response_status = value.status_code
+        exchange.response_headers = dict(value.headers)
+        remember_session(value.headers.get("x-agent-session-id"))
+
+    response = None
+    try:
+        if not stream:
+            raw = client.responses.with_raw_response.create(stream=False, **request)
+            record_response(raw.http_response)
+            exchange.response_body = raw.http_response.text
+            response = raw.parse().model_dump()
+            remember_session(response.get("agent_session_id"))
+            if blob_names is not None:
+                _deep_agents_exports(response, blob_names)
+        else:
+            with client.responses.with_streaming_response.create(
+                stream=True,
+                **request,
+            ) as raw:
+                record_response(raw.http_response)
+                lines = []
+                try:
+                    for line in raw.iter_lines():
+                        lines.append(line)
+                finally:
+                    exchange.response_body = "\n".join(lines)
+                    if blob_names is not None:
+                        partial_output = []
+                        for _, data in _iter_sse_events(exchange.response_body):
+                            try:
+                                event = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            snapshot = event.get("response")
+                            if isinstance(snapshot, dict):
+                                remember_session(snapshot.get("agent_session_id"))
+                                _deep_agents_exports(snapshot, blob_names)
+                            if event.get("type") == "response.output_item.done":
+                                partial_output.append(event["item"])
+                        _deep_agents_exports({"output": partial_output}, blob_names)
+            event_types = []
+            stream_errors = []
+            for event_name, data in _iter_sse_events(exchange.response_body):
+                if data == "[DONE]":
+                    continue
+                event = json.loads(data)
+                event_type = event.get("type", event_name)
+                _assert(
+                    event_name in {"message", event_type},
+                    "SSE event name matches its payload type",
+                )
+                event_types.append(event_type)
+                snapshot = event.get("response")
+                if isinstance(snapshot, dict):
+                    remember_session(snapshot.get("agent_session_id"))
+                    if blob_names is not None:
+                        _deep_agents_exports(snapshot, blob_names)
+                if event_type in {"error", "response.failed", "response.incomplete"}:
+                    stream_errors.append(event)
+                if event_type in {
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                }:
+                    response = snapshot
+            _assert(not stream_errors, f"SSE has no error events: {stream_errors}")
+            _assert(
+                event_types.count("response.created") == 1
+                and event_types.count("response.completed") == 1
+                and event_types[0] == "response.created"
+                and event_types[-1] == "response.completed",
+                "SSE has one ordered created/completed lifecycle",
+            )
+    except Exception as exc:
+        failed_response = getattr(exc, "response", None)
+        if failed_response is not None:
+            record_response(failed_response)
+            if not stream:
+                exchange.response_body = failed_response.text
+        exchange.error = f"{exc.__class__.__name__}: {exc}"
+        raise
+    if not isinstance(response, dict):
+        raise AssertionError("Response is missing a terminal snapshot")
+    remember_session(response.get("agent_session_id"))
+    _dump_json("Deep Research response", response)
+    _assert(
+        response.get("status") == "completed",
+        f"response completed: {response.get('status')}; "
+        f"error={response.get('error')}; "
+        f"incomplete_details={response.get('incomplete_details')}",
+    )
+    return response
+
+
+def _deep_agents_file_outputs(
+    response: dict[str, Any], file_path: str = "/final_report.md"
+) -> list[str]:
+    last_edit = max(
+        (
+            index
+            for index, item in enumerate(response.get("output", []))
+            if item.get("type") == "function_call"
+            and item.get("name") in {"write_file", "edit_file"}
+            and json.loads(item["arguments"]).get("file_path") == file_path
+        ),
+        default=-1,
+    )
+    read_ids = {
+        item["call_id"]
+        for item in response.get("output", [])[last_edit + 1 :]
+        if item.get("type") == "function_call"
+        and item.get("name") == "read_file"
+        and json.loads(item["arguments"]).get("file_path") == file_path
+    }
+    return [
+        str(item.get("output", ""))
+        for item in response.get("output", [])
+        if item.get("type") == "function_call_output"
+        and item.get("call_id") in read_ids
+    ]
+
+
+def _deep_agents_report_matches(
+    response: dict[str, Any], report: str, file_path: str = "/final_report.md"
+) -> bool:
+    expected = report.replace("\r\n", "\n").removesuffix("\n").split("\n")
+    covered: set[int] = set()
+    for output in _deep_agents_file_outputs(response, file_path):
+        match = re.fullmatch(
+            r"@@ lines (\d+)-(\d+)(?: of (\d+))?(?: \| [^\n]*?)? @@\n(.*)",
+            output.replace("\r\n", "\n"),
+            re.DOTALL,
+        )
+        if match is None:
+            continue
+        start, end = int(match[1]), int(match[2])
+        if not 1 <= start <= end <= len(expected):
+            return False
+        if match[3] is not None and int(match[3]) != len(expected):
+            return False
+        lines = match[4].split("\n")
+        if len(lines) == end - start + 2 and lines[-1] == "":
+            lines.pop()
+        if lines != expected[start - 1 : end]:
+            return False
+        covered.update(range(start - 1, end))
+    return len(covered) == len(expected)
+
+
+def _deep_agents_answer_matches(
+    response: dict[str, Any], report: str, download_url: str | None = None
+) -> bool:
+    messages = [
+        item for item in response.get("output", []) if item.get("type") == "message"
+    ]
+    if not messages:
+        return False
+    answer = "".join(part.get("text", "") for part in messages[-1].get("content", []))
+    expected = report.replace("\r\n", "\n").rstrip("\n")
+    if download_url is not None:
+        expected += f"\n\nDownload: {download_url}"
+    return answer.replace("\r\n", "\n").rstrip("\n") == expected
+
+
+def _deep_agents_exports(
+    response: dict[str, Any], blob_names: set[str]
+) -> list[dict[str, Any]]:
+    from urllib.parse import urlsplit
+
+    call_ids = {
+        item["call_id"]
+        for item in response.get("output", [])
+        if item.get("type") == "function_call" and item.get("name") == "publish_report"
+    }
+    exports = []
+    for item in response.get("output", []):
+        if (
+            item.get("type") != "function_call_output"
+            or item.get("call_id") not in call_ids
+        ):
+            continue
+        try:
+            exported = json.loads(item["output"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(exported, dict) and "download_url" in exported:
+            exports.append(exported)
+    if not exports:
+        return []
+    account = urlsplit(os.environ["REPORT_STORAGE_ACCOUNT_URL"])
+    container = os.environ["REPORT_STORAGE_CONTAINER"]
+    for exported in exports:
+        url = urlsplit(exported["download_url"])
+        blob_name = url.path.removeprefix(f"/{container}/")
+        match = re.fullmatch(
+            r"[0-9a-f]{32}/([A-Za-z0-9][A-Za-z0-9_-]{0,63}\.md)", blob_name
+        )
+        _assert(
+            url.scheme == "https"
+            and url.netloc == account.netloc
+            and url.path.startswith(f"/{container}/")
+            and match is not None
+            and exported.get("file_path") == f"/{match[1]}",
+            "export targets a new blob in the configured account and container",
+        )
+        blob_names.add(blob_name)
+    return exports
+
+
+def _deep_agents_check_export(
+    response: dict[str, Any],
+    report: str,
+    blob_names: set[str],
+    report_name: str = "final_report.md",
+) -> str:
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+
+    exports = _deep_agents_exports(response, blob_names)
+    _assert(bool(exports), "publish_report returned a Blob export")
+    exported = exports[-1]
+    download_url = exported["download_url"]
+    permissions = parse_qs(urlsplit(download_url).query)
+    _assert(
+        exported.get("file_path") == f"/{report_name}"
+        and exported.get("sha256")
+        == hashlib.sha256(report.encode("utf-8")).hexdigest(),
+        "export digest matches the complete saved report",
+    )
+    _assert(
+        permissions.get("sp") == ["r"]
+        and permissions.get("spr") == ["https"]
+        and permissions.get("sr") == ["b"],
+        "download SAS is read-only, HTTPS-only, and scoped to one blob",
+    )
+    expires_at = datetime.fromisoformat(exported["expires_at"])
+    _assert(
+        0 < (expires_at - datetime.now(timezone.utc)).total_seconds() <= 3600,
+        "download link expires within one hour",
+    )
+    _assert(
+        _deep_agents_answer_matches(response, report, download_url),
+        "final assistant answer contains the complete report and exact download URL",
+    )
+    downloaded = httpx.get(download_url, timeout=30)
+    downloaded.raise_for_status()
+    _assert(
+        downloaded.headers.get("content-disposition")
+        == f'attachment; filename="{report_name}"',
+        "download uses the selected report filename",
+    )
+    _assert(
+        downloaded.content == report.encode("utf-8"),
+        "downloaded Blob bytes exactly match the saved and delivered report",
+    )
+    return download_url
+
+
+def _deep_agents_revised_report(
+    response: dict[str, Any], report: str, file_path: str = "/final_report.md"
+) -> str:
+    outputs = {
+        item["call_id"]: str(item.get("output", ""))
+        for item in response.get("output", [])
+        if item.get("type") == "function_call_output"
+    }
+    revised = report
+    for item in response.get("output", []):
+        if item.get("type") != "function_call" or item.get("name") != "edit_file":
+            continue
+        arguments = json.loads(item["arguments"])
+        if arguments.get("file_path") != file_path:
+            continue
+        result = outputs.get(item["call_id"], "")
+        if not result or result.lower().startswith("error"):
+            continue
+        old = arguments["old_string"]
+        _assert(bool(old) and old in revised, "revision edits existing saved content")
+        revised = revised.replace(
+            old, arguments["new_string"], -1 if arguments.get("replace_all") else 1
+        )
+    _assert(revised != report, "coordinator edited the existing report")
+    return revised
+
+
+def _deep_agents_delete_exports(storage: Any, container: str, names: set[str]) -> None:
+    errors = []
+    for name in sorted(names):
+        try:
+            storage.get_blob_client(container, name).delete_blob()
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    if errors:
+        raise RuntimeError(f"Could not delete Deep Agents test exports: {errors}")
+
+
+def _deep_agents_stop_sessions(
+    project: Any, agent_name: str, session_ids: set[str]
+) -> None:
+    errors = []
+    for session_id in sorted(session_ids):
+        try:
+            project.agents.stop_session(agent_name, session_id)
+        except Exception as exc:
+            errors.append(f"{session_id}: {exc}")
+    if errors:
+        raise RuntimeError(f"Could not stop Deep Agents test sessions: {errors}")
+
+
+def _check_deep_agents(*, stream: bool) -> None:
+    requires_foundry_endpoint()
+    if not all(
+        os.environ.get(name)
+        for name in ("REPORT_STORAGE_ACCOUNT_URL", "REPORT_STORAGE_CONTAINER")
+    ):
+        raise SkipCheck(
+            "Configure REPORT_STORAGE_ACCOUNT_URL and REPORT_STORAGE_CONTAINER."
+        )
+    from azure.ai.projects import AIProjectClient
+    from azure.identity import DefaultAzureCredential
+    from openai import OpenAI
+
+    try:
+        from azure.storage.blob import BlobServiceClient
+    except ImportError as exc:
+        raise SkipCheck(
+            "Install responses/12_deep_agents/requirements.txt first."
+        ) from exc
+
+    with ExitStack() as resources:
+        agent_name = os.environ.get("DEEP_AGENTS_NAME")
+        client: Any
+        session_ids: set[str] = set()
+        credential = resources.enter_context(DefaultAzureCredential())
+        if agent_name:
+            project = resources.enter_context(
+                AIProjectClient(
+                    endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+                    credential=credential,
+                )
+            )
+            resources.callback(
+                _deep_agents_stop_sessions, project, agent_name, session_ids
+            )
+            client = resources.enter_context(
+                project.get_openai_client(
+                    agent_name=agent_name,
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
+        else:
+            requires_foundry_toolbox()
+            from importlib.util import find_spec
+
+            missing = [
+                name
+                for name in ("deepagents", "langchain_mcp_adapters")
+                if find_spec(name) is None
+            ]
+            if missing:
+                raise SkipCheck(
+                    f"Missing Deep Agents dependencies: {', '.join(missing)}. "
+                    "Install responses/12_deep_agents/requirements.txt first."
+                )
+            state_root = resources.enter_context(
+                tempfile.TemporaryDirectory(prefix="deep-agents-checkpoints-")
+            )
+            server = start_sample(
+                "responses/12_deep_agents/main.py",
+                extra_env={"AGENTSERVER_STATE_ROOT": state_root},
+            )
+            resources.callback(server.terminate)
+            client = resources.enter_context(
+                OpenAI(
+                    base_url=server.base_url,
+                    api_key="local",
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
+        storage = resources.enter_context(
+            BlobServiceClient(os.environ["REPORT_STORAGE_ACCOUNT_URL"], credential)
+        )
+        blob_names: set[str] = set()
+        resources.callback(
+            _deep_agents_delete_exports,
+            storage,
+            os.environ["REPORT_STORAGE_CONTAINER"],
+            blob_names,
+        )
+        marker = f"research-{uuid.uuid4().hex}"
+        _step("Research with planning, delegation, and a saved report")
+        response = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            input=(
+                "Research how LangGraph checkpoints support multi-turn agents. "
+                "Plan with write_todos, save /research_request.md, delegate to one "
+                "research-agent to use web_search and think_tool and return "
+                "findings with source URLs, without writing the final report. "
+                "The coordinator must write /report-v1.md itself, with a "
+                "short cited report based on those findings. Read back the "
+                "entire report, reading all remaining pages if needed, before "
+                "publishing it with publish_report(report_name='report-v1.md') "
+                "and returning its full contents "
+                "followed by the exact Download paragraph. Limit this to one search. "
+                f"Include this exact label in the report: {marker}"
+            ),
+        )
+        calls = [
+            item
+            for item in response.get("output", [])
+            if item.get("type") == "function_call"
+        ]
+        names = {item.get("name") for item in calls}
+        _assert(
+            {"write_todos", "task", "write_file", "read_file"} <= names,
+            "coordinator planned, delegated, wrote, and read working files",
+        )
+        _assert(
+            any(
+                item.get("name") == "task"
+                and json.loads(item["arguments"]).get("subagent_type")
+                == "research-agent"
+                for item in calls
+            ),
+            "coordinator used the configured research-agent",
+        )
+        reports = [
+            arguments["content"]
+            for item in calls
+            if item.get("name") == "write_file"
+            for arguments in [json.loads(item["arguments"])]
+            if arguments.get("file_path") == "/report-v1.md"
+        ]
+        _assert(bool(reports), "coordinator wrote /report-v1.md")
+        report = reports[-1]
+        task_outputs = [
+            item.get("output", "")
+            for item in response.get("output", [])
+            if item.get("type") == "function_call_output"
+            and item.get("call_id")
+            in {call.get("call_id") for call in calls if call.get("name") == "task"}
+        ]
+        _assert(
+            any(
+                isinstance(output, str) and "https://" in output
+                for output in task_outputs
+            ),
+            "delegated researcher returned findings with source URLs",
+        )
+        _assert(
+            marker in report and "https://" in report,
+            "saved report contains its label and source URLs",
+        )
+        _assert(
+            _deep_agents_report_matches(response, report, "/report-v1.md"),
+            "read_file returned the complete report written during research",
+        )
+        original_url = _deep_agents_check_export(
+            response, report, blob_names, "report-v1.md"
+        )
+
+        session_options: dict[str, Any] = {}
+        if agent_name:
+            session_id = response.get("agent_session_id")
+            _assert(
+                isinstance(session_id, str) and bool(session_id),
+                "deployed response identifies its test session",
+            )
+            session_options["extra_body"] = {"agent_session_id": session_id}
+
+        if not agent_name:
+            _step("Restart the local host with the same checkpoint storage")
+            server.terminate()
+            _assert(
+                any((Path(state_root) / "state_stores").glob("*.json")),
+                "local checkpoint files exist before restart",
+            )
+            server = start_sample(
+                "responses/12_deep_agents/main.py",
+                extra_env={"AGENTSERVER_STATE_ROOT": state_root},
+            )
+            resources.callback(server.terminate)
+            client = resources.enter_context(
+                OpenAI(
+                    base_url=server.base_url,
+                    api_key="local",
+                    timeout=600,
+                    max_retries=0,
+                )
+            )
+
+        _step("Read the report in the same conversation")
+        continued = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            previous_response_id=response["id"],
+            input=(
+                "Use read_file to return the entire existing /report-v1.md. "
+                "Read all remaining pages if needed. Do not research, edit or write."
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                continued.get("agent_session_id") == session_id,
+                "continuation stayed in the original test session",
+            )
+        _assert(
+            "read_file" in _tool_call_names(continued), "continuation read saved state"
+        )
+        _assert(
+            not {"task", "web_search", "write_file", "edit_file", "publish_report"}
+            & set(_tool_call_names(continued)),
+            "continuation did not research or rewrite the report",
+        )
+        _assert(
+            _deep_agents_report_matches(continued, report, "/report-v1.md"),
+            "continued read_file returned the complete saved report",
+        )
+        _assert(
+            _deep_agents_answer_matches(continued, report),
+            "continued assistant answer contains the complete saved report",
+        )
+
+        _step("Revise and re-export the saved report without repeating research")
+        revision_marker = f"revision-{uuid.uuid4().hex}"
+        revision_section = (
+            "## Recovery limitations\n\n"
+            "Checkpoints restore saved state, not arbitrary in-flight work.\n\n"
+            f"Validation label: {revision_marker}"
+        )
+        revised_response = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            previous_response_id=continued["id"],
+            input=(
+                "Read /report-v1.md and use write_file to copy its exact content "
+                "to /report-v2.md. Then use edit_file to add the following exact "
+                "section to /report-v2.md. Do not change /report-v1.md. Keep the "
+                "entire original report, citations and URLs "
+                "unchanged; this revision needs no new research. The validation "
+                "label is only an identifier, not a research finding. "
+                "Read the entire updated file after editing, call "
+                "publish_report(report_name='report-v2.md'), "
+                "then return its full contents followed by the new Download paragraph."
+                f"\n\n{revision_section}"
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                revised_response.get("agent_session_id") == session_id,
+                "revision stayed in the original test session",
+            )
+        copies = [
+            arguments["content"]
+            for item in revised_response.get("output", [])
+            if item.get("type") == "function_call" and item.get("name") == "write_file"
+            for arguments in [json.loads(item["arguments"])]
+            if arguments.get("file_path") == "/report-v2.md"
+        ]
+        _assert(copies == [report], "revision starts from an exact named working copy")
+        revised = _deep_agents_revised_report(revised_response, report, "/report-v2.md")
+        revised_lines = iter(revised.splitlines())
+        _assert(
+            all(
+                any(original == line for line in revised_lines)
+                for original in report.splitlines()
+            )
+            and revision_section in revised,
+            "revision preserves the original report and adds the requested section",
+        )
+        _assert(
+            not {"task", "web_search"} & set(_tool_call_names(revised_response)),
+            "revision did not repeat research",
+        )
+        _assert(
+            not any(
+                item.get("type") == "function_call"
+                and item.get("name") in {"write_file", "edit_file"}
+                and json.loads(item["arguments"]).get("file_path") == "/report-v1.md"
+                for item in revised_response.get("output", [])
+            ),
+            "revision did not modify the original working file",
+        )
+        _assert(
+            _deep_agents_report_matches(revised_response, revised, "/report-v2.md"),
+            "read_file returned the complete revised saved report",
+        )
+        revised_url = _deep_agents_check_export(
+            revised_response, revised, blob_names, "report-v2.md"
+        )
+        _assert(revised_url != original_url, "revision has a new download snapshot")
+        original_download = httpx.get(original_url, timeout=30)
+        original_download.raise_for_status()
+        _assert(
+            original_download.content == report.encode("utf-8"),
+            "the original download still contains the original report",
+        )
+
+        _step("Read the revised report using the latest response ID")
+        reread = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            previous_response_id=revised_response["id"],
+            input=(
+                "Use read_file to read both /report-v1.md and /report-v2.md in full, "
+                "then return only the full /report-v2.md contents verbatim. "
+                "Do not research, edit or publish another copy."
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                reread.get("agent_session_id") == session_id,
+                "revised read stayed in the original test session",
+            )
+        _assert(
+            _deep_agents_report_matches(reread, report, "/report-v1.md")
+            and _deep_agents_report_matches(reread, revised, "/report-v2.md")
+            and _deep_agents_answer_matches(reread, revised),
+            "read-back and assistant answer both match the entire revised report",
+        )
+        _assert(
+            not {"task", "web_search", "write_file", "edit_file", "publish_report"}
+            & set(_tool_call_names(reread)),
+            "revised read did not research, edit or export",
+        )
+
+        _step("Check a new conversation cannot read that report")
+        isolated = _deep_agents_response(
+            client,
+            stream=stream,
+            session_ids=session_ids,
+            blob_names=blob_names,
+            input=(
+                "Use read_file on both /report-v1.md and /report-v2.md. "
+                "If they are missing, report that; "
+                "do not create or research anything."
+            ),
+            **session_options,
+        )
+        if agent_name:
+            _assert(
+                isolated.get("agent_session_id") == session_id,
+                "new conversation used the same test session",
+            )
+        _assert(
+            "read_file" in _tool_call_names(isolated),
+            "new conversation checked the file",
+        )
+        _assert(
+            all(
+                any(
+                    "not found" in output.lower()
+                    for output in _deep_agents_file_outputs(isolated, file_path)
+                )
+                for file_path in ("/report-v1.md", "/report-v2.md")
+            ),
+            "neither named report exists in the new conversation",
+        )
+        _assert(
+            marker not in json.dumps(isolated)
+            and revision_marker not in json.dumps(isolated),
+            "new conversation has neither version of the prior report",
+        )
+        _assert(
+            not {
+                "task",
+                "web_search",
+                "write_file",
+                "edit_file",
+                "publish_report",
+                "delete",
+            }
+            & set(_tool_call_names(isolated)),
+            "isolated conversation did not research or modify files",
+        )
+
+
+def check_12_deep_agents() -> None:
+    """responses/12_deep_agents: research, revision, Blob downloads, isolation."""
+    _check_deep_agents(stream=False)
+
+
+def check_12_deep_agents_streaming() -> None:
+    """responses/12_deep_agents: same research workflow and state over SSE."""
+    _check_deep_agents(stream=True)
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1418,6 +2156,8 @@ def _build_registry() -> list[Check]:
         Check("responses/11_middleware", "reject_json", partial(check_11_middleware, "reject", stream=False), "Native middleware reject (JSON)."),
         Check("responses/11_middleware", "reject_sse", partial(check_11_middleware, "reject", stream=True), "Native middleware reject (SSE)."),
         Check("responses/11_middleware", "message_limit", check_11_message_limit, check_11_message_limit.__doc__ or ""),
+        Check("responses/12_deep_agents", "research", check_12_deep_agents, check_12_deep_agents.__doc__ or ""),
+        Check("responses/12_deep_agents", "streaming", check_12_deep_agents_streaming, check_12_deep_agents_streaming.__doc__ or ""),
         Check("invocations/01_basic", "multi_turn", check_03_multi_turn, check_03_multi_turn.__doc__ or ""),
         Check("invocations/01_basic", "streaming", check_03_streaming, check_03_streaming.__doc__ or ""),
         Check("invocations/02_tools", "final_text", check_04_final_text, check_04_final_text.__doc__ or ""),

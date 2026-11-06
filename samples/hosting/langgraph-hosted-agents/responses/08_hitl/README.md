@@ -3,12 +3,12 @@
 A [LangGraph](https://langchain-ai.github.io/langgraph/) **human-in-the-loop**
 agent hosted using the **Responses protocol**, modelled as a
 **tool-call approval flow**: before any tool runs, the graph pauses
-and surfaces the proposed call to the client as the **standard OpenAI
+and surfaces the complete model-turn batch to the client as the **standard OpenAI
 `mcp_approval_request` output item**. Any Responses-API client that
 already supports MCP server approvals (e.g. the OpenAI Python SDK)
 can drive this agent without code changes.
 
-The host also emits a paired `function_call` item with the same id, so
+The host also emits a paired `function_call` item for the same interrupt, so
 clients that need to override the approval payload (or send a richer
 LangGraph `Command`) can use the standard `function_call_output` channel
 as an alternative.
@@ -25,25 +25,35 @@ See [main.py](main.py) for the full implementation.
 
 ### Approval-style HITL
 
-The graph has three nodes:
+The graph has two nodes:
 
 - `agent` — invokes the chat model.
-- `approve_and_call_tool` — when the model emits a tool call, this
-  node pauses with `langgraph.types.interrupt(proposed)` where
-  `proposed` is the proposed tool name and arguments. On resume, it
-  invokes the tool and emits a `ToolMessage`.
+- `approve_and_call_tool` — pauses **for the whole model turn** with
+  `langgraph.types.interrupt({"tool_calls": [...]})`, preserving every call's
+  ID, name, and arguments. A standard MCP approval approves the whole batch.
+  The rich channel accepts per-call approve/edit/reject decisions, matched by
+  call ID rather than list position. The node validates the entire decision
+  set and every accepted call's final arguments against its tool input schema
+  before executing any tools, then emits one `ToolMessage` per original ID.
+
+Do not loop over `interrupt()` in the same node to ask separate approval
+questions: those pauses share an interrupt ID, so retrying the previous
+approval could approve the next call. Every review here presents the **same
+complete batch**; validation retries never advance to another individual call.
+All tool execution remains after successful validation, so invalid decisions
+cannot repeat earlier tool executions on [node replay](https://docs.langchain.com/oss/python/langgraph/interrupts#rules-of-interrupts).
 
 When the graph pauses, the host serializes the pending interrupt as
-**two** output items in the same response, both keyed by the same
-LangGraph interrupt id:
+**two** output items in the same response, both referring to the same
+LangGraph interrupt:
 
-1. An **`mcp_approval_request`** item with `id == interrupt.id`,
+1. An **`mcp_approval_request`** item with its own approval `id`,
    `server_label == "langgraph"`, `name ==
    "__hosted_agent_adapter_interrupt__"`, and `arguments` JSON of the
    form:
 
    ```json
-   {"interrupt_id": "<id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
+   {"interrupt_id": "<id>", "value": {"tool_calls": [{"id": "<tool call id>", "name": "get_weather", "arguments": {"location": "Seattle"}}]}}
    ```
 
 2. A `function_call` item with the same `name` and `call_id ==
@@ -91,16 +101,27 @@ The response `output` array will contain:
 - an `mcp_approval_request` item — the OpenAI-standard approval
   prompt. **Copy its `id`** to use in Step 2.
 - a paired `function_call` item with `name ==
-  "__hosted_agent_adapter_interrupt__"` and the same id (advanced
+  "__hosted_agent_adapter_interrupt__"` and `call_id` equal to the raw
+  LangGraph interrupt ID (advanced
   channel — see "Advanced resume" below).
 
-The approval item's `arguments` JSON describes the proposed action:
+The approval item's `arguments` JSON describes every call from that model turn:
 
 ```json
-{"interrupt_id": "<langgraph interrupt id>", "value": {"tool": "get_weather", "arguments": {"location": "Seattle"}}}
+{
+  "interrupt_id": "<langgraph interrupt id>",
+  "value": {
+    "tool_calls": [
+      {"id": "<tool call id>", "name": "get_weather", "arguments": {"location": "Seattle"}}
+    ]
+  }
+}
 ```
 
-### Step 2 — approve (or reject)
+Ask for Seattle and Paris together to see both calls in one approval prompt
+when the model proposes them in the same turn.
+
+### Step 2 — approve (or reject) the entire batch
 
 #### Approve — `mcp_approval_response` with `approve: true`
 
@@ -173,10 +194,28 @@ can retry with a different decision.
 
 ### Advanced resume — `function_call_output` (override the proposed payload)
 
-When you need to **override** the proposed tool call (e.g. change the
-arguments) or drive a LangGraph `Command` with `update`/`goto` fields,
-target the paired `function_call` item via the standard
-`function_call_output` channel:
+To decide per call, target the paired `function_call` item via
+`function_call_output`. Include exactly one decision for every proposed tool
+call ID. `approve` keeps the original arguments, `edit` supplies replacement
+arguments without changing the tool name, and `reject` returns a rejection
+`ToolMessage` without executing that call. Missing, duplicate, or unknown IDs
+and invalid decision types are rejected before any tools execute. Edited
+arguments must also satisfy the tool's input schema; a dictionary alone is
+not enough (for example, `get_weather` requires `location`). Decisions may be
+returned in any order.
+
+An invalid review does **not** fail and strand the paused turn. The response
+contains a new approval prompt with the same original `tool_calls` and a
+`validation_error` explanation. Send a complete corrected decision set to that
+prompt's paired `function_call.call_id`, or use the latest MCP approval to
+approve the **original** proposed arguments, discarding the invalid edits.
+Repeating an invalid review simply re-prompts for that same batch.
+
+This preflight prevents argument-validation failures from partially executing
+a batch. It is not a transaction or an exactly-once guarantee for failures
+during tool execution.
+
+For a batch containing a single Seattle call, this changes its arguments:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
@@ -187,18 +226,27 @@ curl -X POST http://127.0.0.1:8088/responses \
       {
         "type": "function_call_output",
         "call_id": "<call_id of the __hosted_agent_adapter_interrupt__ item>",
-        "output": "{\"resume\": {\"tool\": \"get_weather\", \"arguments\": {\"location\": \"Vancouver\"}}}"
+        "output": "{\"resume\": {\"decisions\": [{\"id\": \"<tool call id>\", \"type\": \"edit\", \"arguments\": {\"location\": \"Vancouver\"}}]}}"
       }
     ]
   }'
 ```
 
-The graph resumes with the client-supplied payload (`Vancouver` instead
-of `Seattle`) and the tool is invoked with the overridden arguments.
+For a two-call batch, a combined per-call resume value could be:
 
-This channel supports `{"resume": ...}`, `{"update": {...}}`, and
-`{"goto": "..."}` in any combination — the same payload shape as a
-LangGraph `Command(...)`.
+```json
+{
+  "decisions": [
+    {"id": "<Paris tool call id>", "type": "reject"},
+    {"id": "<Seattle tool call id>", "type": "edit", "arguments": {"location": "Vancouver"}}
+  ]
+}
+```
+
+The standard `approve: false` shortcut rejects the entire batch at the host
+boundary; a rich `reject` decision skips only that specific call. Do not send
+partial decisions as separate resumes. A later model turn gets a new batch
+interrupt, so retrying an earlier batch's approval cannot approve the new one.
 
 #### Conflict resolution
 

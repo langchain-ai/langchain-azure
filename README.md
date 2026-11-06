@@ -19,6 +19,12 @@ The [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#s
 For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
 For durable execution of compiled LangGraph workflows and LangChain agents (per-step and per-tool fault isolation, automatic worker failover, and durable `interrupt()` / `resume()` waits), use [`langchain_azure_compute.graph` backed by the Azure Durable Task Scheduler](./libs/azure-compute/README.md#durable-langgraph-execution-durable-task-scheduler) and explore the [10 runnable Durable Task LangGraph samples](./samples/langgraph-durabletask/README.md).
 
+## Samples
+
+- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
+- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
+- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
+
 # Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
