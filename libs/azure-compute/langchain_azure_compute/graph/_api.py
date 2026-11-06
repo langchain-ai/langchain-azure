@@ -259,7 +259,9 @@ def sdk_options(
         endpoint: Emulator or hosted scheduler endpoint; defaults to DTS environment
         settings.
         taskhub: Task hub name, overriding the connection string and environment.
-        token_credential: Azure credential used for authenticated endpoints.
+        token_credential: Azure credential used for authenticated endpoints. Defaults
+            to `DefaultAzureCredential` for hosted `.durabletask.io` endpoints when
+            neither a credential nor a connection-string authentication mode is set.
         secure_channel: Whether to use TLS; inferred from the endpoint when omitted.
         connection_string: Scheduler connection string, optionally read from the
         environment.
@@ -391,6 +393,15 @@ def sdk_options(
         else:
             raise ValueError(f"unsupported Authentication mode {parsed_auth!r}")
 
+    if (
+        resolved_cred is None
+        and parsed_auth is None
+        and _extract_hostname(host_address).endswith(".durabletask.io")
+    ):
+        from azure.identity import DefaultAzureCredential
+
+        resolved_cred = DefaultAzureCredential()
+
     if secure_channel is not None:  # pragma: no cover
         resolved_secure = bool(secure_channel)  # pragma: no cover
     elif scheme_secure is not None:
@@ -404,7 +415,7 @@ def sdk_options(
     else:
         resolved_secure = False
 
-    ua_pair = ("grpc.primary_user_agent", "langchain-azure-compute")
+    ua_pair = ("grpc.primary_user_agent", "langgraph-durabletask")
     options: dict[str, Any] = dict(
         host_address=host_address,
         taskhub=resolved_taskhub,

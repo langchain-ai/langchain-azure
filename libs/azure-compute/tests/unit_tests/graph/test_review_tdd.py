@@ -1147,6 +1147,11 @@ def test_p1_2_bundle_single_ckpt_size_guard_and_sdk_options_default_channel() ->
     assert opts_default["channel_options"].max_send_message_length is None
     opts_custom = sdk_options("127.0.0.1:8080", max_message_bytes=8 * 1024 * 1024)
     assert opts_custom["channel_options"].max_receive_message_length == 8 * 1024 * 1024
+    assert opts_custom["channel_options"].max_send_message_length == 8 * 1024 * 1024
+    for opts in (opts_default, opts_custom):
+        assert opts["channel_options"].raw_options == [
+            ("grpc.primary_user_agent", "langgraph-durabletask")
+        ]
 
 
 def test_p1_3_invoke_does_not_catch_user_type_error_or_double_store_async_input() -> (
@@ -1869,7 +1874,7 @@ def test_p2_5_sdk_options_precedence_user_agent_and_async_client(
     )
     assert opts["taskhub"] == "myhub"
     assert "channel_options" in opts and any(
-        k == "grpc.primary_user_agent" and "langchain-azure-compute" in v
+        k == "grpc.primary_user_agent" and v == "langgraph-durabletask"
         for k, v in opts["channel_options"].raw_options
     )
 

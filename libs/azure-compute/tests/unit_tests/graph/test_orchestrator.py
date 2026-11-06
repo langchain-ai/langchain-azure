@@ -14,6 +14,120 @@ from langchain_azure_compute.graph.runner import (
 )
 
 
+@pytest.mark.parametrize("source", ["endpoint", "environment", "connection_string"])
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://my-scheduler.westus2.durabletask.io",
+        "grpcs://my-scheduler.westus2.durabletask.io/",
+        "my-scheduler.westus2.durabletask.io",
+        "https://MY-SCHEDULER.WESTUS2.DURABLETASK.IO:443/",
+    ],
+)
+def test_sdk_options_defaults_hosted_dts_to_default_azure_credential(
+    monkeypatch, source, endpoint
+):
+    from unittest.mock import Mock
+
+    from langchain_azure_compute.graph import sdk_options
+
+    credential = object()
+    factory = Mock(return_value=credential)
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", factory)
+    for name in (
+        "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
+        "DTS_CONNECTION_STRING",
+        "DTS_ENDPOINT",
+        "DTS_EMULATOR",
+        "DTS_TASKHUB",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    if source == "endpoint":
+        opts = sdk_options(endpoint, taskhub="prod-hub")
+    elif source == "environment":
+        monkeypatch.setenv("DTS_ENDPOINT", endpoint)
+        monkeypatch.setenv("DTS_TASKHUB", "prod-hub")
+        opts = sdk_options()
+    else:
+        opts = sdk_options(connection_string=f"Endpoint={endpoint};TaskHub=prod-hub")
+
+    factory.assert_called_once_with()
+    assert opts["token_credential"] is credential
+    assert opts["secure_channel"] is True
+    assert opts["taskhub"] == "prod-hub"
+    assert opts["host_address"] == endpoint.removeprefix("https://").removeprefix(
+        "grpcs://"
+    ).rstrip("/")
+
+
+@pytest.mark.parametrize("authentication", ["None", "Anonymous", "Emulator", ""])
+def test_sdk_options_preserves_explicit_anonymous_authentication(
+    monkeypatch, authentication
+):
+    from unittest.mock import Mock
+
+    from langchain_azure_compute.graph import sdk_options
+
+    factory = Mock()
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", factory)
+    opts = sdk_options(
+        connection_string=(
+            "Endpoint=my-scheduler.westus2.durabletask.io;TaskHub=prod-hub;"
+            f"Authentication={authentication}"
+        )
+    )
+
+    factory.assert_not_called()
+    assert opts["token_credential"] is None
+    assert opts["secure_channel"] is True
+
+
+def test_sdk_options_preserves_explicit_token_credential(monkeypatch):
+    from unittest.mock import Mock
+
+    from langchain_azure_compute.graph import sdk_options
+
+    factory = Mock()
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", factory)
+    credential = object()
+    opts = sdk_options(
+        "https://my-scheduler.westus2.durabletask.io",
+        token_credential=credential,
+    )
+
+    factory.assert_not_called()
+    assert opts["token_credential"] is credential
+    assert opts["secure_channel"] is True
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "secure"),
+    [
+        ("127.0.0.1:8080", False),
+        ("http://localhost:8080/", False),
+        ("dts-emulator:8080", False),
+        ("https://scheduler.example.com", True),
+        ("https://durabletask.io", True),
+        ("https://scheduler.durabletask.io.example.com", True),
+    ],
+)
+def test_sdk_options_does_not_default_credentials_for_other_hosts(
+    monkeypatch, endpoint, secure
+):
+    from unittest.mock import Mock
+
+    from langchain_azure_compute.graph import sdk_options
+
+    factory = Mock()
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", factory)
+    opts = sdk_options(endpoint)
+
+    factory.assert_not_called()
+    assert opts["token_credential"] is None
+    assert opts["secure_channel"] is secure
+
+
 class ActTask(tuple):
     is_complete = False
     is_failed = False
