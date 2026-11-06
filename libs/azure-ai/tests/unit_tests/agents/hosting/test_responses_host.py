@@ -953,15 +953,24 @@ def test_background_handler_keeps_clients_after_http_request_ends(
     store.aclose.assert_awaited_once()
 
 
-def test_constructor_registers_responses_features() -> None:
+@pytest.mark.parametrize("enable_response_branching", [False, True])
+def test_constructor_registers_responses_features(
+    enable_response_branching: bool,
+) -> None:
     with patch(
         "langchain_azure_ai.agents.hosting._responses_host."
         "_add_process_hosting_features"
     ) as add_process_features:
-        server = ResponsesHostServer(make_checkpointed_echo_graph())
+        server = ResponsesHostServer(
+            make_checkpointed_echo_graph(),
+            enable_response_branching=enable_response_branching,
+        )
 
-    assert server._hosting_features == HostingFeature.RESPONSES
-    add_process_features.assert_called_once_with(HostingFeature.RESPONSES)
+    expected = HostingFeature.RESPONSES
+    if enable_response_branching:
+        expected |= HostingFeature(0x40)
+    assert server._hosting_features == expected
+    add_process_features.assert_called_once_with(expected)
 
 
 def test_constructor_registers_resilient_background_feature() -> None:

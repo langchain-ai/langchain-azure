@@ -127,6 +127,7 @@ class HostingFeature(IntFlag):
     FOUNDRY_CHECKPOINT = 0x8
     RESILIENT_BACKGROUND = 0x10
     STEERABLE_CONVERSATIONS = 0x20
+    RESPONSE_BRANCHING = 0x40
 
 
 _HOSTING_PREFIX_KEY = "langchain_azure_ai.agents.hosting"
