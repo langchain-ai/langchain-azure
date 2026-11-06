@@ -10,6 +10,7 @@ Install only the integration you need:
 ```bash
 pip install "langchain-azure-compute[dynamic-sessions]"
 pip install "langchain-azure-compute[sandboxes]"
+pip install "langchain-azure-compute[durabletask]"
 ```
 
 Extras control *dependencies*, not which modules are present — every module
@@ -167,6 +168,237 @@ the request first: `execute` then returns an error `ExecuteResponse` rather
 than raising, and the command may keep running server-side. To use timeouts
 above ~300 seconds, construct the `SandboxClient` with a transport whose read
 timeout exceeds them.
+
+## Durable LangGraph execution (Durable Task Scheduler)
+
+`langchain_azure_compute.graph` runs compiled LangGraph graphs (`StateGraph.compile()`),
+LangChain agents (`create_agent` / `create_react_agent`), and Deep Agents
+(`create_deep_agent`) on the
+[Azure Durable Task Scheduler (DTS)](https://learn.microsoft.com/azure/azure-functions/durable/durable-task-scheduler/durable-task-scheduler)
+or the local DTS emulator.
+
+```python
+from typing import Annotated, TypedDict
+
+from durabletask.azuremanaged.client import DurableTaskSchedulerClient
+from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from langgraph.types import interrupt
+
+from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
+
+
+class SupportState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    approved: bool
+
+
+@durable_tool(retries=3)
+@tool
+def refund_order(order_id: str) -> str:
+    """Runs as an isolated Durable Task activity with its own retry policy."""
+    return f"Refunded order {order_id}"
+
+
+def manager_gate(state: SupportState) -> dict:
+    decision = interrupt({"question": "Approve refund?", "order_id": "ord-42"})
+    return {
+        "approved": bool(decision.get("approved")),
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "refund_order",
+                        "args": {"order_id": "ord-42"},
+                    }
+                ],
+            )
+        ],
+    }
+
+
+builder = StateGraph(SupportState)
+builder.add_node("approve", manager_gate)
+builder.add_node("tools", ToolNode([refund_order]))
+builder.add_edge(START, "approve")
+builder.add_conditional_edges(
+    "approve", lambda s: "tools" if s.get("approved") else END,
+    {"tools": "tools", END: END},
+)
+builder.add_edge("tools", END)
+graph = builder.compile()
+
+reg = attach_durability(graph, name="support")
+
+# Connect to the local DTS emulator ("127.0.0.1:8080") or an Azure DTS endpoint
+# ("https://<scheduler>.<region>.durabletask.io") with DefaultAzureCredential:
+opts = sdk_options("127.0.0.1:8080")
+worker = DurableTaskSchedulerWorker(**opts)
+sdk = DurableTaskSchedulerClient(**opts)
+reg.register(worker)
+worker.start()
+try:
+    client = reg.client(sdk)
+    run = client.start(
+        {"messages": [HumanMessage(content="Refund order 42")], "approved": False},
+        instance_id="refund-42",
+    )
+    pending = run.wait_pending(timeout=30)
+    run.resume(pending, {"approved": True})
+    result = run.wait_result(timeout=60)
+finally:
+    worker.stop()
+    sdk.close()
+```
+
+Key capabilities include:
+
+- **Control plane vs. state plane separation:** Graph state stays in LangGraph's
+  checkpointer (`SqliteSaver`, `PostgresSaver`, `CosmosDBSaver`, or an automatic
+  `InMemorySaver` checkpoint bundle in zero-config mode) while DTS carries compact
+  checkpoint pointers and rolls over long-running conversations via `continue_as_new`.
+- **Per-tool and per-node activity isolation:** `@durable_tool` calls inside a
+  `ToolNode` and `@durable_node` branches (including dynamic `Send()` map-reduce
+  fan-out) execute as parallel DTS activities with independent retry policies.
+- **Human-in-the-loop (`interrupt()` / `resume()`):** Maps LangGraph `interrupt()`
+  and static breakpoints to DTS external events without holding worker threads.
+- **Azure Functions hosting (`LangGraphFunctionApp`):** Exposes `/api/graphs/<name>/start`,
+  `/status/{instanceId}`, and `/respond/{instanceId}/{interruptId}` routes on Azure
+  Functions Python v2.
+
+  Non-anonymous Function apps require verified per-instance identity through Azure
+  EasyAuth or an `identity_provider` token-validation callback. A Function key alone
+  does not identify a user. `require_instance_owner=False` explicitly selects shared,
+  platform-key-authorized access without user isolation. See the
+  [Functions sample identity contract](../../samples/langgraph-durabletask/10_azure_functions_hitl/README.md#identity-and-ownership-contract)
+  for deployment requirements and the opt-in loopback demo.
+
+### Connecting to Hosted Azure DTS (Entra ID / Managed Identity) vs. Local Emulator
+
+`sdk_options()` supports both the local DTS emulator and hosted Azure Durable Task
+Scheduler resources:
+
+```python
+import os
+from azure.identity import DefaultAzureCredential
+from durabletask.azuremanaged.client import DurableTaskSchedulerClient
+from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_azure_compute.graph import sdk_options
+
+# 1. Local DTS Emulator (secure_channel=False, token_credential=None, taskhub="default")
+emulator_opts = sdk_options("127.0.0.1:8080")
+
+# 2. Hosted Azure DTS with Entra ID / Managed Identity (secure_channel=True auto-enabled)
+hosted_opts = sdk_options(
+    "https://<scheduler>.<region>.durabletask.io",
+    taskhub="my-taskhub",
+    token_credential=DefaultAzureCredential(),
+)
+
+# 3. Hosted Azure DTS via Connection String (Endpoint=...;TaskHub=...;Authentication=DefaultAzure)
+conn_str_opts = sdk_options(
+    connection_string=os.environ["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"],
+    token_credential=DefaultAzureCredential(),
+)
+
+worker = DurableTaskSchedulerWorker(**hosted_opts)
+sdk = DurableTaskSchedulerClient(**hosted_opts)
+```
+
+### Two-Tier State Model
+
+| Mode | How to Enable | How State Moves | Best For |
+| --- | --- | --- | --- |
+| **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, or any `BaseCheckpointSaver`) | `inline_checkpoints=False` (default). DTS carries only `< 1 KB` checkpoint IDs and small control envelopes. Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
+| **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice (up to the 900 KB bundle guard) is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Single-turn runs or getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
+
+### Configuring Tool Durability, Retries, and Concurrency
+
+By default (`durable_tools=True`), every tool inside a `ToolNode` executes as an
+isolated `langgraph.<name>.tool` activity. You can customize retries or opt out
+pure in-memory helpers either via `@durable_tool` or centrally on `attach_durability()`:
+
+```python
+from langchain_core.tools import tool
+from langgraph.prebuilt import ToolNode
+from langchain_azure_compute.graph import attach_durability, durable_tool
+
+
+@durable_tool(retries=4)
+@tool
+def book_flight(destination: str) -> str:
+    """Runs as an isolated DTS activity with up to 4 attempts."""
+    return f"FLIGHT-{destination}"
+
+
+@durable_tool(durable=False)
+@tool
+def format_itinerary(summary: str) -> str:
+    """Pure in-memory helper: runs locally inside the tool-commit step."""
+    return summary.upper()
+
+
+reg = attach_durability(
+    graph,
+    name="travel_agent",
+    tool_policy={"tools::book_flight": "durable", "tools::format_itinerary": "local"},
+    tool_retries={"book_flight": 4},
+    tool_max_concurrency=2,  # None = parallel batch (default), 1 = sequential, N = batches of N
+)
+```
+
+### Durable Nodes (`@durable_node`) for Parallel Fan-Out & `Send()` Map-Reduce
+
+When a graph fans out across parallel branches (`START -> [branch_a, branch_b] -> join`)
+or uses `Send("worker", item)` map-reduce, decorate the branch/target node with
+`@durable_node(retries=3)` (or pass `durable_nodes=True` / `node_policy=...` to
+`attach_durability()`). Each parallel branch or `Send()` packet executes concurrently
+as its own `langgraph.<name>.node` activity across workers with per-branch retry
+isolation.
+
+### Graph Versioning & Live Migration
+
+When deploying an updated graph topology (`"v2"`) while `"v1"` runs are in flight:
+
+```python
+reg = attach_durability(
+    graph_v2,
+    name="order_workflow",
+    version="v2",
+    previous_versions={"v1": graph_v1},
+    migrations={
+        ("v1", "v2"): lambda state, snap, resume_val: {
+            "as_node": "new_approval_gate",
+            "values": {"approved_by": resume_val},
+        }
+    },
+    upgrade_on_continue_as_new=True,
+)
+```
+
+### Runnable Samples
+
+Ten end-to-end runnable samples (each with its own `README.md`, `requirements.txt`,
+and `sample.py`) are available in [`samples/langgraph-durabletask/`](../../samples/langgraph-durabletask/README.md):
+
+| # | Sample | What It Demonstrates |
+| --- | --- | --- |
+| 01 | [`01_hello_graph`](../../samples/langgraph-durabletask/01_hello_graph/README.md) | Minimal linear & conditional graph (Zero-Config `builder.compile()`) |
+| 02 | [`02_vacation_booking`](../../samples/langgraph-durabletask/02_vacation_booking/README.md) | Per-tool retry isolation inside a `ToolNode` (`book_car` retries without re-running `book_flight` or `book_hotel`) & idempotent `client.start(..., instance_id=...)` |
+| 03 | [`03_human_in_the_loop`](../../samples/langgraph-durabletask/03_human_in_the_loop/README.md) | Sequential and parallel `interrupt()`, `pending_interrupts()`, and `run.resume()` |
+| 04 | [`04_react_agent_and_subgraphs`](../../samples/langgraph-durabletask/04_react_agent_and_subgraphs/README.md) | Prebuilt ReAct agents (`create_agent` / `create_react_agent`) and compiled subgraphs as nodes |
+| 05 | [`05_multi_turn_conversation`](../../samples/langgraph-durabletask/05_multi_turn_conversation/README.md) | Multi-turn conversation with `SqliteSaver`, `SqliteStore`, and `Runtime[Context]` propagation |
+| 06 | [`06_durable_nodes_map_reduce`](../../samples/langgraph-durabletask/06_durable_nodes_map_reduce/README.md) | Static parallel fan-out and dynamic `Send()` map-reduce with `@durable_node` and `node_max_concurrency` |
+| 07 | [`07_multi_graph_app`](../../samples/langgraph-durabletask/07_multi_graph_app/README.md) | Multiple durable graphs (`triage`, `vacation`, `refund`) sharing one worker and delegating across graphs |
+| 08 | [`08_graph_versioning_and_migration`](../../samples/langgraph-durabletask/08_graph_versioning_and_migration/README.md) | Graph versioning and live checkpoint migration (`version="v2"`, `previous_versions`, `migrations`, `run.upgrade()`) |
+| 09 | [`09_two_process_crash_recovery`](../../samples/langgraph-durabletask/09_two_process_crash_recovery/README.md) | Two OS worker processes (`pod-A` hard-killed mid-run, `pod-B` recovers via Zero-Config `checkpoint_bundle`) |
+| 10 | [`10_azure_functions_hitl`](../../samples/langgraph-durabletask/10_azure_functions_hitl/README.md) | Azure Functions Python v2 HTTP routes (`LangGraphFunctionApp` `/start`, `/status/{id}`, `/respond/{id}/{interruptId}`) across two worker processes |
 
 ## Development
 
