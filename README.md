@@ -10,7 +10,7 @@ the Get started column links to samples or quick starts with setup instructions.
 
 | Package | Purpose | Get started |
 | --- | --- | --- |
-| [langchain-azure-ai](./libs/azure-ai/README.md) | Microsoft Foundry models and embeddings, existing agents as graph nodes, LangGraph hosting, tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search. | [Foundry model quick start](#microsoft-foundry-models) · [Agent node quick start](./libs/azure-ai/README.md#microsoft-foundry-agent-service) |
+| [langchain-azure-ai](./libs/azure-ai/README.md) | Microsoft Foundry models and embeddings, existing agents as graph nodes, LangGraph hosting, tools, remote skills, MCP, memory, guardrails, tracing, and Azure AI Search. | [Foundry model quick start](#microsoft-foundry-models) · [Agent node quick start](./libs/azure-ai/README.md#microsoft-foundry-agent-service) |
 | [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code and provide Deep Agents compute backends with Azure Container Apps dynamic sessions and sandboxes. | [Dynamic sessions quick start](./libs/azure-compute/README.md#dynamic-sessions) · [Sandbox quick start](./libs/azure-compute/README.md#sandboxes-deep-agents-backend) |
 | [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Vector search, semantic caching, and chat history; LangGraph checkpoints, node caching, and stores for data shared across threads in Azure Cosmos DB. | [Cosmos DB samples](./samples/cosmosdb-nosql/README.md) |
 | [langchain-sqlserver](./libs/sqlserver/README.md) | Vector search and chat history in Azure SQL and SQL Server. | [Azure SQL samples](https://github.com/Azure-Samples/azure-sql-langchain) |
@@ -24,7 +24,7 @@ Browse by integration type or agent capability:
 
 - **Chat models and embedding models**: [Foundry model quick start](#microsoft-foundry-models) and [embedding model guide](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).
 - **Tools and middleware**: [Document Intelligence sample](./samples/react-agent-docintelligence/README.md) and [Content Safety guardrails sample](./samples/unified-moderation/basic_usage.py).
-- **Skills**: Load Deep Agents skill files from Foundry Toolbox with [AzureAIProjectToolbox.get_skills](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_skills).
+- **Remote skills**: Access agent skills managed in [Foundry Toolbox](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox).
 - **MCP**: Load managed MCP tools from Foundry Toolbox with [AzureAIProjectToolbox.get_tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools).
 - **Document loaders**: [Content Understanding guide](./libs/azure-ai/README.md#microsoft-foundry-tools) and [Azure Blob Storage quick start](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage).
 - **Vector stores**: [Azure AI Search sample](./samples/rag-storage-document-loaders/README.md), [Azure Cosmos DB samples](./samples/cosmosdb-nosql/README.md#langchain-integrations), [Azure SQL and SQL Server samples](https://github.com/Azure-Samples/azure-sql-langchain), and [Azure Database for PostgreSQL quick start](./libs/azure-postgresql/README.md#usage).
