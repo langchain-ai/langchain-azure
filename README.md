@@ -23,8 +23,8 @@ the Get started column links to samples or quick starts with setup instructions.
 Browse by integration type or agent capability:
 
 - **Chat models and embedding models**: [Foundry model quick start](#microsoft-foundry-models) and [embedding model guide](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).
-- **Tools**: [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
-- **Guardrails**: [Content Safety guardrails sample](./samples/unified-moderation/basic_usage.py).
+- **Tools**: Extract information from documents with Azure AI tools. See the [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
+- **Guardrails**: Apply content safety policies to agent inputs, outputs, and tool calls. See the [Content Safety guardrails sample](./samples/unified-moderation/basic_usage.py).
 - **Skills**: Access agent skills managed in [Foundry Toolbox](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox).
 - **MCP**: Load managed MCP tools from Foundry Toolbox with [AzureAIProjectToolbox.get_tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools).
 - **Document loaders**: [Content Understanding guide](./libs/azure-ai/README.md#microsoft-foundry-tools) and [Azure Blob Storage quick start](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage).
