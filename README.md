@@ -1,16 +1,22 @@
 # 🦜️🔗 LangChain Azure
 
-This repository contains the following packages with Azure integrations with LangChain:
+Python integrations for building LangChain, LangGraph, and Deep Agents applications on Azure.
+Each package is maintained independently and supports Python 3.11 through 3.14.
 
-- [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
-- [langchain-azure-compute](./libs/azure-compute)
-- [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
-- [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
-- [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
-- [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
-- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
+## Packages
 
-**Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
+Choose a package by its purpose. Package names link to their documentation;
+the Get started column links to quick starts or samples with setup instructions.
+
+| Package | Purpose | Get started |
+| --- | --- | --- |
+| [langchain-azure-ai](./libs/azure-ai/README.md) | Microsoft Foundry models and agents; LangGraph hosting, guardrails, tracing, tools, and Azure AI Search. | [Chat model quick start](#microsoft-foundry-models) · [Hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) |
+| [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code and provide Deep Agents compute backends with Azure Container Apps dynamic sessions and sandboxes. | [Dynamic sessions quick start](./libs/azure-compute/README.md#dynamic-sessions) · [Sandbox quick start](./libs/azure-compute/README.md#sandboxes-deep-agents-backend) |
+| [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Vector search, semantic caching, and chat history; LangGraph checkpoints, node caching, and long-term memory in Azure Cosmos DB. | [Cosmos DB samples](./samples/cosmosdb-nosql/README.md) |
+| [langchain-sqlserver](./libs/sqlserver/README.md) | Vector search and chat history in Azure SQL and SQL Server. | [Azure SQL samples](https://github.com/Azure-Samples/azure-sql-langchain) |
+| [langchain-azure-postgresql](./libs/azure-postgresql/README.md) | Vector search in Azure Database for PostgreSQL with Microsoft Entra ID authentication and DiskANN indexing. | [Vector store quick start](./libs/azure-postgresql/README.md#usage) |
+| [langchain-azure-storage](./libs/azure-storage/README.md) | Load documents from Azure Blob Storage and persist Deep Agents files in blob containers. | [Document loader quick start](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage) · [Deep Agents samples](./samples/deepagents-storage-backend/README.md) |
+| [langchain-azure-dynamic-sessions](./libs/azure-dynamic-sessions/README.md) | **Deprecated.** Azure Container Apps dynamic sessions integrations, replaced by `langchain-azure-compute`. | [Migration instructions](./libs/azure-dynamic-sessions/README.md) |
 
 ## LangGraph on Azure
 
@@ -21,25 +27,24 @@ For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Sto
 ## Samples
 
 - [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
-- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
+- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Microsoft Foundry Agent Service, Content Safety, and Content Understanding.
 - [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
 
-# Quick Start with langchain-azure-ai
+## Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
 
 This package includes:
 
-* [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
-* [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
+* [Microsoft Foundry Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
+* [Microsoft Foundry models](./libs/azure-ai/langchain_azure_ai/chat_models)
 * [Microsoft Foundry Content Safety](./libs/azure-ai/langchain_azure_ai/agents/middleware)
 * [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 
-Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+For a chat model quick start, use the example below. For more details, see the [LangChain and LangGraph development guide for Microsoft Foundry](https://aka.ms/azureai/langchain).
 
-### Install langchain-azure
+### Install langchain-azure-ai
 
 ```bash
 pip install -U langchain-azure-ai
@@ -116,8 +121,8 @@ model.invoke("Hello!").pretty_print()
 
 ### Microsoft Foundry Agent Service
 
-Use `AgentServiceFactory` to create a managed Foundry agent and add it as a
-node in a LangGraph graph.
+Use `AgentServiceFactory` to create an agent in Microsoft Foundry Agent Service
+and add it as a node in a LangGraph graph.
 
 For local development, install the required extra and sign in:
 
@@ -148,7 +153,7 @@ echo_node = factory.create_prompt_agent_node(
 )
 ```
 
-Agent Service nodes run in Microsoft Foundry but can be added to any graph:
+Add Microsoft Foundry Agent Service nodes to your graph:
 
 ```python
 graph = StateGraph(AgentServiceAgentState)
@@ -177,6 +182,6 @@ Name: my-echo-agent
 You're not a genius and you don't love programming!
 ```
 
-# Contributing
+## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
