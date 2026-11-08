@@ -1,6 +1,6 @@
 # 🦜️🔗 LangChain Azure
 
-Python integrations for building LangChain, LangGraph, and Deep Agents applications on Azure.
+Python integrations for building LangGraph, LangChain, and Deep Agents applications on Azure.
 Each package is maintained independently and supports Python 3.11 through 3.14.
 
 ## Packages
