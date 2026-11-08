@@ -106,7 +106,12 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
     async def __aenter__(self) -> AsyncCosmosDBChatMessageHistory:
         """Async context manager entry point."""
         await self._client.__aenter__()
-        await self.prepare_cosmos()
+        try:
+            await self.prepare_cosmos()
+        except BaseException as e:
+            # __aexit__ does not run when __aenter__ raises.
+            await self._client.__aexit__(type(e), e, e.__traceback__)
+            raise
         return self
 
     async def __aexit__(

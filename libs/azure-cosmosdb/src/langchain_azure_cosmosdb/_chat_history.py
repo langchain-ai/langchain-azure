@@ -101,7 +101,12 @@ class CosmosDBChatMessageHistory(BaseChatMessageHistory):
     def __enter__(self) -> "CosmosDBChatMessageHistory":
         """Context manager entry point."""
         self._client.__enter__()
-        self.prepare_cosmos()
+        try:
+            self.prepare_cosmos()
+        except BaseException as e:
+            # __exit__ does not run when __enter__ raises.
+            self._client.__exit__(type(e), e, e.__traceback__)
+            raise
         return self
 
     def __exit__(

@@ -304,6 +304,8 @@ def test_failed_load_does_not_upsert_on_exit() -> None:
         with history:
             pass
     container.upsert_item.assert_not_called()
+    history._client.__exit__.assert_called_once()
+    assert history._client.__exit__.call_args.args[0] is CosmosHttpResponseError
 
 
 def test_load_messages_not_found_subclass_starts_new_session() -> None:

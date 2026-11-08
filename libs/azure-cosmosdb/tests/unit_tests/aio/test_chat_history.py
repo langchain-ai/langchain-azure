@@ -406,6 +406,8 @@ async def test_async_failed_load_does_not_upsert_on_exit() -> None:
         async with history:
             pass
     container.upsert_item.assert_not_awaited()
+    client.__aexit__.assert_awaited_once()
+    assert client.__aexit__.await_args.args[0] is CosmosHttpResponseError
 
 
 async def test_async_load_messages_no_session_no_etag() -> None:
