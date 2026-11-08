@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Multi-agent document intake and analysis pipeline using LangGraph and Azure AI Foundry."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10.0,<4.0"
+requires-python = ">=3.11,<4.0"
 
 dependencies = [
     "aiohttp~=3.14",

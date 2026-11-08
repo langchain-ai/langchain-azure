@@ -27,7 +27,7 @@ A lightweight **bridging node** (`prepare_analysis`) converts the parser's outpu
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.11 through 3.14
 - Azure subscription with access to:
   - Azure AI Foundry project
   - Azure OpenAI Service (with GPT-4 deployment)
@@ -219,4 +219,4 @@ The pipeline will first extract the raw content (parser agent), then produce a s
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](../../LICENSE) file for details.
