@@ -1,0 +1,6 @@
+durabletask>=1.13.0,<1.14
+durabletask-azuremanaged>=1.13.0,<1.14
+langchain-core>=0.3.0
+langgraph>=1.2.0,<1.3
+langgraph-checkpoint-sqlite>=3.0.0
+langchain-azure-compute[durabletask]
