@@ -556,7 +556,6 @@ uv run --frozen --all-extras --group test --group test_integration \
 
 - **0.2.0**:
 
-  - This is the first release of `langchain-azure-compute` published to PyPI. It includes all changes listed under 0.1.1 below.
   - **[NEW]** We introduced the `langchain-azure-compute` package for running LangChain, LangGraph, and Deep Agents workloads on Azure compute services. [#907](https://github.com/langchain-ai/langchain-azure/pull/907)
   - **[NEW]** We added the Azure Container Apps dynamic sessions tools under `langchain_azure_compute.dynamic_sessions`. [#908](https://github.com/langchain-ai/langchain-azure/pull/908)
   - **[NEW]** We added a Deep Agents backend that runs code and file operations inside Azure Container Apps dynamic sessions. [#909](https://github.com/langchain-ai/langchain-azure/pull/909)
