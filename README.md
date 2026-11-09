@@ -5,67 +5,40 @@ Each package is maintained independently and supports Python 3.11 through 3.14.
 
 ## Packages
 
-Choose a package by its purpose. Package names link to their documentation;
-the Get started column links to samples or quick starts with setup instructions.
+Install the packages for the Azure services your application uses.
+Package names link to their documentation;
+links in the Purpose column lead to usage guides and samples.
 
-| Package | Purpose | Get started |
-| --- | --- | --- |
-| [langchain-azure-ai](./libs/azure-ai/README.md) | Microsoft Foundry models and embeddings, existing agents as graph nodes, LangGraph hosting, tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search. | [Foundry model quick start](#microsoft-foundry-models) · [Agent node quick start](./libs/azure-ai/README.md#microsoft-foundry-agent-service) |
-| [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code and provide Deep Agents compute backends with Azure Container Apps dynamic sessions and sandboxes. | [Dynamic sessions quick start](./libs/azure-compute/README.md#dynamic-sessions) · [Sandbox quick start](./libs/azure-compute/README.md#sandboxes-deep-agents-backend) |
-| [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Vector search, semantic caching, and chat history; LangGraph checkpoints, node caching, and stores for data shared across threads in Azure Cosmos DB. | [Cosmos DB samples](./samples/cosmosdb-nosql/README.md) |
-| [langchain-sqlserver](./libs/sqlserver/README.md) | Vector search and chat history in Azure SQL and SQL Server. | [Azure SQL samples](https://github.com/Azure-Samples/azure-sql-langchain) |
-| [langchain-azure-postgresql](./libs/azure-postgresql/README.md) | Vector search in Azure Database for PostgreSQL with DiskANN indexing. | [Vector store quick start](./libs/azure-postgresql/README.md#usage) |
-| [langchain-azure-storage](./libs/azure-storage/README.md) | Load documents from Azure Blob Storage and persist Deep Agents files in blob containers. | [Deep Agents samples](./samples/deepagents-storage-backend/README.md) · [Document loader quick start](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage) |
-| [langchain-azure-dynamic-sessions](./libs/azure-dynamic-sessions/README.md) | **Deprecated.** Azure Container Apps dynamic sessions integrations, replaced by `langchain-azure-compute`. | [Migration instructions](./libs/azure-dynamic-sessions/README.md) |
+| Package | Purpose |
+| --- | --- |
+| [langchain-azure-ai](./libs/azure-ai/README.md) | Call Microsoft Foundry [chat models](#get-started-with-microsoft-foundry-models) and [embedding models](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).<br>Use [existing Foundry agents as graph nodes](./libs/azure-ai/README.md#microsoft-foundry-agent-service).<br>Access [tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search](#explore-azure-integrations).<br>Host [LangGraph applications as Foundry hosted agents](#host-applications-on-microsoft-foundry). |
+| [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code with [Azure Container Apps dynamic sessions](./libs/azure-compute/README.md#dynamic-sessions).<br>Provide Deep Agents compute backends with [dynamic sessions](./libs/azure-compute/README.md#deep-agents-backend) and [Azure Container Apps sandboxes](./libs/azure-compute/README.md#sandboxes-deep-agents-backend). |
+| [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Use [Azure Cosmos DB for vector search, semantic caching, and chat history](./samples/cosmosdb-nosql/README.md#langchain-integrations).<br>Persist [LangGraph checkpoints, node caches, and data shared across threads](./samples/cosmosdb-nosql/README.md#langgraph-integrations) in Azure Cosmos DB. |
+| [langchain-sqlserver](./libs/sqlserver/README.md) | Use [SQL Server and Azure SQL for vector search and chat history](https://github.com/Azure-Samples/azure-sql-langchain). |
+| [langchain-azure-postgresql](./libs/azure-postgresql/README.md) | Use [Azure Database for PostgreSQL for vector search with DiskANN indexing](./libs/azure-postgresql/README.md#usage). |
+| [langchain-azure-storage](./libs/azure-storage/README.md) | Load documents with the [Azure Blob Storage document loader](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage).<br>Persist Deep Agents files with the [Azure Blob Storage filesystem backend](./samples/deepagents-storage-backend/README.md). |
+| [langchain-azure-dynamic-sessions](./libs/azure-dynamic-sessions/README.md) | **Deprecated.** Azure Container Apps dynamic sessions integrations. [Migrate to langchain-azure-compute](./libs/azure-dynamic-sessions/README.md). |
 
-## Integrations
+For help choosing between `langchain-azure-ai` and `langchain-openai`,
+see the [Microsoft integrations guide](https://docs.langchain.com/oss/python/integrations/providers/microsoft#choose-a-package).
 
-Browse by integration type or agent capability:
+## Get started with Microsoft Foundry models
 
-- **Chat models and embedding models**: [Foundry model quick start](#microsoft-foundry-models) and [embedding model guide](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).
-- **Tools**: Extract information from documents with Azure AI tools. See the [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
-- **Guardrails**: Apply content safety policies to agent inputs, outputs, and tool calls. See the [Content Safety guardrails sample](./samples/unified-moderation/basic_usage.py).
-- **Skills**: Access agent skills managed in [Foundry Toolbox](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox).
-- **MCP**: Load managed MCP tools from Foundry Toolbox with [AzureAIProjectToolbox.get_tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools).
-- **Document loaders**: [Content Understanding guide](./libs/azure-ai/README.md#microsoft-foundry-tools) and [Azure Blob Storage quick start](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage).
-- **Vector stores**: [Azure AI Search sample](./samples/rag-storage-document-loaders/README.md), [Azure Cosmos DB samples](./samples/cosmosdb-nosql/README.md#langchain-integrations), [Azure SQL and SQL Server samples](https://github.com/Azure-Samples/azure-sql-langchain), and [Azure Database for PostgreSQL quick start](./libs/azure-postgresql/README.md#usage).
-- **Checkpointers and stores**: Persist graph execution state or store data shared across threads. See [Foundry State Store checkpoints](./libs/azure-ai/README.md#durable-graph-state) and [Cosmos DB checkpointer and store samples](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
-- **Memory**: Extract and recall information from conversations across sessions. See the [Foundry memory sample](./samples/foundry-memory/README.md).
-- **Sandboxes and filesystem backends**: [Azure Container Apps compute quick starts](./libs/azure-compute/README.md) and [Deep Agents file samples with Azure Blob Storage](./samples/deepagents-storage-backend/README.md).
-- **Observability**: [Azure Application Insights tracing sample](./samples/enable_auto_tracing_appinsights.py).
-
-## LangGraph on Azure
-
-### Microsoft Foundry Agent Service
-
-Use `AgentServiceFactory.get_agent_node` to reference an agent that already exists
-in Microsoft Foundry and use it as a node in your LangGraph graph. The agent runs
-in Foundry and can be built independently of LangChain or LangGraph, using the
-Foundry portal or other SDKs. See the [Agent node quick start](./libs/azure-ai/README.md#microsoft-foundry-agent-service).
-
-### Checkpoints and stores
-
-Persist graph state with [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state)
-in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer).
-For data your application manages across threads, use the [Azure Cosmos DB store samples](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
-
-### Hosting applications on Foundry
-
-To deploy a LangChain, LangGraph, or Deep Agents application to Foundry as a hosted agent,
-see the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents).
-
-## Quick Start with langchain-azure-ai
+Call models deployed in Microsoft Foundry through LangChain's chat model interface.
+The example below shows how to authenticate and make your first model call with `langchain-azure-ai`.
 
 ### Install langchain-azure-ai
+
+Install the package and sign in to Azure with the Azure CLI.
 
 ```bash
 pip install -U langchain-azure-ai
 az login
 ```
 
-### Microsoft Foundry Models
+### Call a model
 
-This example uses the Responses API through LangChain's chat model interface.
+This example uses the Responses API.
 Use a Microsoft Foundry project with a model deployment that supports the Responses API.
 Your identity needs the **Azure AI Developer** role on the project.
 Replace the project endpoint and model deployment name below.
@@ -90,10 +63,49 @@ model.invoke("Translate 'Hello!' into Italian.").pretty_print()
 For endpoint and authentication options, see the [model quick start](./libs/azure-ai/README.md#microsoft-foundry-models)
 and the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain).
 
+## Host applications on Microsoft Foundry
+
+Deploy your LangChain, LangGraph, or Deep Agents application to Microsoft Foundry as a hosted agent.
+The `langchain-azure-ai` hosting adapter connects your application to Foundry's agent APIs.
+
+For an existing LangGraph application, point `langgraph.json` at its compiled graph.
+With the application's dependencies, credentials, and model settings configured,
+run these commands from the application directory to start a local Responses endpoint:
+
+```bash
+pip install -U "langchain-azure-ai[hosting]"
+python -m langchain_azure_ai.agents.hosting.run --protocol responses
+```
+
+See the [hosting quick start](./libs/azure-ai/README.md#hosting-langgraph-agents-on-microsoft-foundry)
+for configuration and examples, and the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+for Azure deployment.
+
+## Explore Azure integrations
+
+Connect your application to Azure services for search, document loading, tools, memory, and tracing.
+Browse the guides and samples by integration type or agent capability:
+
+- **Chat models**: Generate responses with models deployed in Microsoft Foundry. See the [Foundry model quick start](#get-started-with-microsoft-foundry-models).
+- **Graph nodes**: Use [an agent already running in Microsoft Foundry as a LangGraph node](./libs/azure-ai/README.md#microsoft-foundry-agent-service). Also see the [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
+- **Tools, skills and MCPs**: Load [MCP tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools) and [agent skills](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_resources) from Foundry Toolbox. Also see the [Document Intelligence tool sample](./samples/react-agent-docintelligence/README.md).
+- **Sandbox**: Use [Azure Container Apps dynamic sessions and sandboxes](./libs/azure-compute/README.md) to run agent-generated codes.
+- **Backends**: Use [Azure Blob Storage](./samples/deepagents-storage-backend/README.md) as storage backends.
+- **Checkpointers**: Persist graph execution state with [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
+- **Stores**: Store data shared across threads in [Azure Cosmos DB](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
+- **Memory**: Extract and recall long-term information across sessions with [Foundry Memory](./samples/foundry-memory/README.md).
+- **Embedding models**: Convert text into vectors for similarity search. See the [embedding model guide](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).
+- **Vector stores**: Store vectors and retrieve relevant documents. See the [Azure AI Search sample](./samples/rag-storage-document-loaders/README.md), [Azure Cosmos DB samples](./samples/cosmosdb-nosql/README.md#langchain-integrations), [Azure SQL and SQL Server samples](https://github.com/Azure-Samples/azure-sql-langchain), and [Azure Database for PostgreSQL quick start](./libs/azure-postgresql/README.md#usage).
+- **Document loaders**: Load documents from [Azure Blob Storage](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage). Also see the [Azure AI Content Understanding loader](./libs/azure-ai/docs/content_understanding_loader_demo.ipynb).
+- **Middleware**: Apply Content Safety guardrails to agent inputs, outputs, and tool calls. See the [Content Safety middleware sample](./samples/unified-moderation/basic_usage.py).
+- **Observability**: Trace model calls and agent execution. See the [Azure Application Insights tracing sample](./samples/enable_auto_tracing_appinsights.py).
+
 ## Samples
 
-Explore the [samples](./samples) for database, memory, storage, tools, guardrails, and tracing integrations.
+Use the [samples](./samples) to try individual integrations and build applications with Azure services.
+They cover databases, memory, storage, tools, guardrails, and tracing.
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
+Contribute bug fixes, integrations, samples, or documentation improvements.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and pull request guidelines.
