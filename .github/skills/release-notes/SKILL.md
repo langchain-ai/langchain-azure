@@ -75,6 +75,7 @@ Each package maintains a `## Changelog` section in its `README.md`. When a new v
    | `langchain-azure-ai` | `libs/azure-ai/README.md` |
    | `langchain-azure-compute` | `libs/azure-compute/README.md` |
    | `langchain-azure-dynamic-sessions` | `libs/azure-dynamic-sessions/README.md` |
+   | `langchain-azure-kusto` | `libs/azure-kusto/README.md` |
    | `langchain-sqlserver` | `libs/sqlserver/README.md` |
    | `langchain-azure-storage` | `libs/azure-storage/README.md` |
    | `langchain-azure-postgresql` | `libs/azure-postgresql/README.md` |

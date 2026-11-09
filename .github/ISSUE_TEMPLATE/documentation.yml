@@ -14,6 +14,7 @@ body:
       options:
         - langchain-azure-ai
         - langchain-azure-dynamic-sessions
+        - langchain-azure-kusto
         - langchain-azure-postgresql
         - langchain-azure-storage
         - langchain-sqlserver
