@@ -2567,7 +2567,7 @@ async def test_cached_root_lookup_does_not_copy_response_payload(
         },
     )
     parent["output"] = cast(Any, [UncopyablePayload()])
-    response = SimpleNamespace(**parent) if as_model else parent
+    response = SimpleNamespace(**parent, get=parent.get) if as_model else parent
     provider = SimpleNamespace(get_response=AsyncMock(return_value=response))
     server = ResponsesHostServer(
         make_checkpointed_echo_graph() if checkpointed else make_echo_graph()

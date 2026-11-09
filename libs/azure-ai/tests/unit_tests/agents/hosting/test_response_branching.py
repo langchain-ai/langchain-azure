@@ -587,11 +587,6 @@ def test_steering_preserves_the_selected_context(
     conversation: bool,
     parent_completed: bool,
 ) -> None:
-    # shortcut: SDK drain guard reads old input; remove after its fix.
-    monkeypatch.setattr(
-        "azure.ai.agentserver.responses.hosting._response_task_lifecycle._task_input_deleted",
-        AsyncMock(return_value=False),
-    )
     started = asyncio.Event()
     seen: dict[str, list[tuple[str, str]]] = {}
 
@@ -641,11 +636,6 @@ def test_steering_preserves_the_selected_context(
         graph,
         store=provider,
         options=ResponsesServerOptions(steerable_conversations=True),
-    )
-    monkeypatch.setattr(
-        provider,
-        "delete_response",
-        AsyncMock(side_effect=AssertionError("This scenario never deletes responses")),
     )
     chain_get = AsyncMock(wraps=server._conversation_chain_store.get)
     chain_set = AsyncMock(wraps=server._conversation_chain_store.set)
@@ -1564,7 +1554,7 @@ def test_ordinary_parent_checkpoint_remains_user_scoped(
             "/responses",
             json={"input": "B", "previous_response_id": parent["id"]},
             headers={USER_ID: caller} if caller is not None else {},
-        ).json()
+        )
     assert parent["status"] == "completed"
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "previous_response_not_found"

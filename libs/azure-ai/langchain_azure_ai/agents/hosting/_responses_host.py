@@ -36,7 +36,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -811,11 +811,6 @@ class ResponsesHostServer:
         parent = await _load_parent_response(parent_id, context)
         if self._is_response_branch(request, context) and context.is_recovery:
             _validate_branch_parent(parent_id, parent, context)
-        # shortcut: Ineligible parents (not completed, paused, or owned by another
-        # user) are rejected after response.created, so clients receive
-        # response.failed with server_error rather than a 4xx before execution.
-        if _response_field(parent, "id") != parent_id:
-            raise ValueError("The response provider returned a different parent.")
         # shortcut: ordinary parents may be in_progress, revisit with shared checks.
         if self._is_response_branch(request, context) and (
             _response_field(parent, "status") != "completed"
