@@ -823,9 +823,16 @@ def _check_payload(value: Any, label: str) -> None:
     """Reject oversized complete wire payloads before scheduling or returning them."""
     size = len((_PAYLOAD_CONVERTER.serialize(value) or "").encode("utf-8"))
     if size > MAX_PAYLOAD_BYTES:
+        advice = (
+            "configure a persistent checkpointer (SqliteSaver, PostgresSaver, "
+            "CosmosDBSaver) so checkpoints stay in external storage"
+            if isinstance(value, Mapping) and value.get("checkpoint_bundle") is not None
+            else "reduce durable tool/node input or return sizes, or store large "
+            "blobs in external storage and pass references"
+        )
         raise RunError(
             f"{label} size ({size} bytes) exceeds the {MAX_PAYLOAD_BYTES}-byte "
-            "DTS payload limit; configure a persistent checkpointer or payload_store"
+            f"DTS payload limit; {advice}"
         )
 
 

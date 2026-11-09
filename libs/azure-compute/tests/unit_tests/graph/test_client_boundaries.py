@@ -13,7 +13,7 @@ from langgraph.types import Command
 from langchain_azure_compute.graph import RunError
 from langchain_azure_compute.graph._api import AsyncRun, PendingInterrupt, Run
 from langchain_azure_compute.graph.runner import pack, unpack
-from tests.unit_tests.graph.test_wave2 import Sdk, registration
+from tests.unit_tests.graph.test_functions_auth import Sdk, registration
 
 
 def state(status="RUNNING", custom=None, output=None):

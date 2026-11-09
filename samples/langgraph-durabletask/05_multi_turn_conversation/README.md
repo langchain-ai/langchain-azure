@@ -1,7 +1,7 @@
 # 05 - Multi-Turn Stateful Conversation (`SqliteSaver`, `SqliteStore` & `Runtime[Context]`)
 
 This sample demonstrates how to run **multi-turn stateful conversations** across separate durable runs that share a `thread_id`, combining:
-1. **`SqliteSaver`** for pointer-only checkpoint persistence across turns (`inline_checkpoints=False`),
+1. **`SqliteSaver`** for external checkpoint persistence across turns (`inline_checkpoints=False`),
 2. **`SqliteStore`** (`BaseStore`) for cross-thread / per-tenant semantic memory (`runtime.store`), and
 3. **`RunnableConfig`** + **`Runtime[AppContext]`** propagation from `client.start(..., config=..., context=...)` into graph nodes.
 
@@ -13,7 +13,7 @@ the fact count or `Turn #`. Supply a stable, distinct message ID for every
 logical turn, including turns with identical text.
 
 - **Shared `thread_id` Across Separate Runs**: Starting Turn 1 and Turn 2 as two distinct DTS orchestrations that share `thread_id="conversation-user-42"`, automatically accumulating conversation history (`messages`) in `SqliteSaver`.
-- **Pointer-Only Checkpoint Mode**: When a graph is compiled with a persistent checkpointer (`builder.compile(checkpointer=saver, store=store)`), the DTS orchestration history carries only lightweight checkpoint pointers while full state lives in SQLite.
+- **External Checkpoint Mode**: With a persistent checkpointer (`builder.compile(checkpointer=saver, store=store)`), step transitions pass `< 1 KB` checkpoint IDs instead of full checkpoint bundles stored in SQLite. Durable tool/node inputs and outputs, plus final output returned through DTS, still travel in DTS payloads and must fit the payload limit.
 - **`BaseStore` (`SqliteStore`) Long-Term Memory**: Reading and writing structured user facts (`runtime.store.get` / `runtime.store.put`) namespaced by `("memories", tenant_id, user_id)`.
 - **`Runtime[AppContext]` & `RunnableConfig` Forwarding**: Passing a dataclass `context=AppContext(tenant_id="acme-corp")` and `config={"configurable": {"channel": "mobile"}, "tags": ["vip"]}` to `client.start(...)` and reading both inside the node.
 

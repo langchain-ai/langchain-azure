@@ -6,12 +6,12 @@ checkpointers.
 
 `langchain_azure_compute.graph` supports two state persistence tiers transparently:
 
-1. **Tier 1 - Persistent Checkpointer (Pointer-Only Mode):**
+1. **Tier 1 - Persistent Checkpointer (External Checkpoint Mode):**
    When the caller supplies an external checkpointer (`SqliteSaver`, `AsyncSqliteSaver`,
    `PostgresSaver`, etc.), `inline_checkpoints` defaults to `False`. Graph state lives
-   exclusively in that external store. DTS orchestration payloads carry only lightweight
-   control pointers (`thread_id`, `checkpoint_id`, step counters, and tool/interrupt
-   envelopes), keeping DTS history `O(steps)` regardless of state size.
+   in that external store. Step transitions carry compact checkpoint IDs instead
+   of full checkpoint bundles. Durable tool/node inputs and outputs, and any final
+   output returned through DTS, still travel in wire payloads and DTS history.
 
 2. **Tier 2 - Zero-Config `InMemorySaver` (Inline Checkpoint Bundle Mode):**
    When a user compiles a graph with `InMemorySaver()` (or omits a checkpointer),

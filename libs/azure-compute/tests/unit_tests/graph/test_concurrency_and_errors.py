@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
-"""Regression tests for the Wave 1 runtime review findings."""
+"""Concurrency, retry isolation, interrupt races, and payload limits."""
 
 from __future__ import annotations
 
@@ -406,7 +406,7 @@ async def test_wait_result_reads_hydrated_bundle_when_output_is_null(async_handl
 @pytest.mark.parametrize("where", ["report", "commit", "can", "start"])
 def test_entire_payload_budget_is_checked(where):
     oversized = {"padding": "x" * 950_000}
-    with pytest.raises(RunError, match="persistent checkpointer|payload_store"):
+    with pytest.raises(RunError, match="tool/node|external storage"):
         if where == "report":
             reg = _echo_reg(inline_checkpoints=False, checkpointer=InMemorySaver())
             run_step(

@@ -282,7 +282,9 @@ def sdk_options(
         connection_string: Scheduler connection string, optionally read from the
         environment.
         max_message_bytes: Optional maximum gRPC message size; None keeps SDK defaults.
-        payload_store: Optional external storage for large payloads.
+        payload_store: Optional SDK payload storage; this does not bypass the
+            integration's wire-size guard. Pass external blob references for
+            oversized durable activity data.
         log_handler: Optional logging handler passed to the SDK.
 
     Returns:
@@ -927,7 +929,8 @@ class Registration:
             start_worker: Whether to start an embedded worker.
             identity_provider: Callback validating tokens and returning principal IDs.
             require_instance_owner: Enforce per-user ownership; see create_function_app.
-            respond_authorizer: Optional verified responder policy (caller, ID, owner).
+            respond_authorizer: Optional approver policy (caller, ID, owner[, graph]).
+                Authorized approvers may also read the instance's status.
 
         Returns:
             The supplied function app with graph routes registered.

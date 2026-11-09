@@ -363,7 +363,7 @@ def test_respond_policy_separates_owner_and_stamps_identity(arity):
     )
     stamped = unpack(sdk.events[0][2]["value"])
     assert stamped == {**value, "reviewer": "manager", "responder": "manager"}
-    assert dispatch(app, "status/EXP-7", caller="manager").status_code == 403
+    assert dispatch(app, "status/EXP-7", caller="manager").status_code == 200
 
 
 def test_default_respond_owner_and_server_stamp():

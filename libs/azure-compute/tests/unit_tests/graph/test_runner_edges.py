@@ -18,8 +18,8 @@ from langgraph.types import Command, interrupt
 from langchain_azure_compute.graph import attach_durability
 from langchain_azure_compute.graph import runner as r
 from tests.unit_tests.graph.test_checkpoint_edges import snapshot
+from tests.unit_tests.graph.test_functions_auth import registration
 from tests.unit_tests.graph.test_real_backend import FanoutState
-from tests.unit_tests.graph.test_wave2 import registration
 
 
 def test_lineage_parent_traversal_and_empty_inline_output():

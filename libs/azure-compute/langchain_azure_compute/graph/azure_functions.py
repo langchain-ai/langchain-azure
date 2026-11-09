@@ -243,11 +243,15 @@ def _resolve_durable_owner(
     instance_id: str,
     *,
     bypass_cache: bool = True,
+    graph_name: str | None = None,
+    require_owner: bool = True,
 ) -> str | None:
     """Resolve ownership from DTS, never from a potentially stale host cache.
 
     bypass_cache is retained for explicit post-start verification; all lookups
-    bypass the cache regardless of its value.
+    bypass the cache regardless of its value. Graph names, when present in DTS
+    metadata, must match graph_name. require_owner=False supports explicitly
+    unauthenticated local routes without disabling graph-scope checks.
     """
     try:
         existing = sdk.get_orchestration_state(instance_id, fetch_payloads=True)
@@ -256,6 +260,13 @@ def _resolve_durable_owner(
     if existing is None:
         state.owner_by_instance.pop(instance_id, None)
         return None
+    if graph_name is not None:
+        orchestration_name = getattr(existing, "name", None)
+        pattern = rf"langgraph\.{re.escape(graph_name)}(?:@[^@]+)?\.run"
+        if orchestration_name is not None and not re.fullmatch(
+            pattern, str(orchestration_name)
+        ):
+            raise PermissionError("Instance belongs to another graph")
     for field in ("serialized_input", "serialized_custom_status", "serialized_output"):
         raw = getattr(existing, field, None)
         if not raw:
@@ -268,7 +279,10 @@ def _resolve_durable_owner(
         if isinstance(owner, str) and owner:
             state.owner_by_instance[instance_id] = owner
             return owner
-    raise PermissionError("Existing instance has no verifiable owner")
+    if require_owner:
+        raise PermissionError("Existing instance has no verifiable owner")
+    state.owner_by_instance.pop(instance_id, None)
+    return None
 
 
 class _FunctionAppState:
@@ -463,8 +477,9 @@ def register_function_routes(
 
     Embedded workers (start_worker=True) are for local development or Dedicated
     Always-On plans only; use standalone ACA/AKS workers for Consumption/Flex.
-    respond_authorizer optionally accepts (caller, instance_id[, owner]) and
-    replaces the default owner-only response policy, but never authentication.
+    respond_authorizer accepts (caller, instance_id, owner[, graph_name]).
+    Legacy two-argument policies remain supported. Authorized approvers may also
+    read status; policies never replace authentication or graph-scope checks.
     Incremental registrations inherit the app's security policy; changing it
     or a live app's connection options requires a new app.
     """
@@ -537,8 +552,9 @@ def _register_function_routes(
         require_instance_owner: Ownership defaults to True, including ANONYMOUS
             behind EasyAuth or identity_provider. ANONYMOUS without an identity source
             requires explicit False for unauthenticated local/shared-key access.
-        respond_authorizer: Optional (caller, instance_id[, owner]) policy for
-            authenticated approvers; None requires the caller to own the instance.
+        respond_authorizer: Optional (caller, instance_id, owner[, graph_name])
+            policy for authenticated responses and non-owner status reads.
+            Legacy two-argument policies remain supported.
 
     Returns:
         The supplied function app with routes registered.
@@ -559,16 +575,25 @@ def _register_function_routes(
     respond_arity = 3
     if respond_authorizer is not None:
         signature = inspect.signature(respond_authorizer)
-        try:
-            signature.bind("caller", "instance", "owner")
-        except TypeError:
+        positional = [
+            p
+            for p in signature.parameters.values()
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        arities = (4, 3, 2) if len(positional) >= 4 else (3, 2)
+        for arity in arities:
             try:
-                signature.bind("caller", "instance")
-            except TypeError as exc:
-                raise ValueError(
-                    "respond_authorizer must accept 2 or 3 arguments"
-                ) from exc
-            respond_arity = 2
+                signature.bind(*("caller", "instance", "owner", "graph")[:arity])
+            except TypeError:
+                continue
+            respond_arity = arity
+            break
+        else:
+            raise ValueError("respond_authorizer must accept 2, 3 or 4 arguments")
     regs = _normalize_registrations(registrations)
     if not regs:
         raise ValueError("Provide at least one graph registration")
@@ -592,11 +617,15 @@ def _register_function_routes(
         req: Any,
         instance_id: str | None = None,
         *,
+        graph_name: str | None = None,
         allow_new: bool = False,
         responding: bool = False,
+        allow_approver_read: bool = False,
     ) -> tuple[str | None, Any]:
-        custom_respond = responding and respond_authorizer is not None
-        needs_identity = enforce_owner or custom_respond
+        uses_approver_policy = respond_authorizer is not None and (
+            responding or allow_approver_read
+        )
+        needs_identity = enforce_owner or uses_approver_policy
         caller = None
         if needs_identity:
             try:
@@ -611,29 +640,41 @@ def _register_function_routes(
             return None, _json_response(
                 {"error": "Authentication required"}, status_code=401
             )
-        if needs_identity and instance_id is not None:
+        if instance_id is not None:
             try:
                 sdk = state.get_sdk()
-                expected_owner = _resolve_durable_owner(state, sdk, str(instance_id))
+                expected_owner = _resolve_durable_owner(
+                    state,
+                    sdk,
+                    str(instance_id),
+                    graph_name=graph_name,
+                    require_owner=needs_identity,
+                )
             except Exception:
                 return None, _json_response(
                     {"error": "Cannot verify instance ownership"}, status_code=403
                 )
-            if custom_respond:
+            authorize_approver = uses_approver_policy and (
+                responding or caller != expected_owner
+            )
+            if authorize_approver:
                 allowed = False
                 if expected_owner is not None and respond_authorizer is not None:
                     try:
-                        args = (caller, instance_id, expected_owner)[:respond_arity]
+                        args = (caller, instance_id, expected_owner, graph_name)[
+                            :respond_arity
+                        ]
                         allowed = respond_authorizer(*args) is True
                     except Exception:
                         allowed = False
                 if not allowed:
                     return None, _json_response(
-                        {"error": "Caller is not authorized to respond"},
+                        {"error": "Caller is not authorized for this instance"},
                         status_code=403,
                     )
-            elif (expected_owner is None and not allow_new) or (
-                expected_owner is not None and expected_owner != caller
+            elif needs_identity and (
+                (expected_owner is None and not allow_new)
+                or (expected_owner is not None and expected_owner != caller)
             ):
                 return None, _json_response(
                     {"error": "Caller is not authorized for this instance"},
@@ -679,7 +720,10 @@ def _register_function_routes(
         node_max_concurrency = controls.get("node_max_concurrency")
 
         caller, err_resp = _check_auth(
-            req, str(instance_id) if instance_id is not None else None, allow_new=True
+            req,
+            str(instance_id) if instance_id is not None else None,
+            graph_name=name,
+            allow_new=True,
         )
         if err_resp is not None:
             return err_resp
@@ -710,7 +754,11 @@ def _register_function_routes(
         )
         if enforce_owner and caller is not None:
             durable_owner = _resolve_durable_owner(
-                state, sdk, run.instance_id, bypass_cache=True
+                state,
+                sdk,
+                run.instance_id,
+                bypass_cache=True,
+                graph_name=name,
             )
             if durable_owner != caller:
                 raise PermissionError("Cannot verify instance ownership")
@@ -736,7 +784,12 @@ def _register_function_routes(
         reg = state.registrations.get(name)
         if reg is None:
             return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
-        _, err_resp = _check_auth(req, instance_id)
+        _, err_resp = _check_auth(
+            req,
+            instance_id,
+            graph_name=name,
+            allow_approver_read=True,
+        )
         if err_resp is not None:
             return err_resp
 
@@ -797,7 +850,12 @@ def _register_function_routes(
         reg = state.registrations.get(name)
         if reg is None:
             return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
-        caller, err_resp = _check_auth(req, instance_id, responding=True)
+        caller, err_resp = _check_auth(
+            req,
+            instance_id,
+            graph_name=name,
+            responding=True,
+        )
         if err_resp is not None:
             return err_resp
 
@@ -841,9 +899,6 @@ def _register_function_routes(
             )
         ):
             raise ValueError("Internal orchestration envelopes are not permitted")
-        if caller is not None and isinstance(value, dict):
-            value = {**value, "responder": caller, "reviewer": caller}
-
         sdk = state.get_sdk()
         run = reg.client(sdk).attach_run(instance_id)
         if run.status() == "NOT_FOUND":
@@ -854,6 +909,24 @@ def _register_function_routes(
                 },
                 status_code=404,
             )
+
+        if caller is not None and isinstance(value, dict):
+            pending_ids = (
+                {intr.interrupt_id for intr in run.pending_interrupts()}
+                if eff_interrupt_id is None
+                else set()
+            )
+            if eff_interrupt_id is None and value and set(value) <= pending_ids:
+                value = {
+                    key: (
+                        {**item, "responder": caller, "reviewer": caller}
+                        if isinstance(item, dict)
+                        else item
+                    )
+                    for key, item in value.items()
+                }
+            else:
+                value = {**value, "responder": caller, "reviewer": caller}
 
         try:
             if eff_interrupt_id is not None:
@@ -1000,7 +1073,8 @@ def create_function_app(
             False; omission without an identity source raises ValueError.
             Set False only for intentionally shared, platform-key-authorized access.
             The local Python server does not validate Function keys.
-        respond_authorizer: Optional (caller, instance_id[, owner]) approver policy.
+        respond_authorizer: Optional (caller, instance_id, owner[, graph_name])
+            approver policy for responses and non-owner status reads.
             None requires the owner. Verified callers are stamped into dict resumes
             as responder and reviewer, replacing untrusted request fields.
 

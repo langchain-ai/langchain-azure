@@ -12,7 +12,7 @@ import pytest
 
 from langchain_azure_compute.graph import RunError
 from langchain_azure_compute.graph import azure_functions as af
-from tests.unit_tests.graph.test_wave2 import Sdk, registration
+from tests.unit_tests.graph.test_functions_auth import Sdk, registration
 
 
 def request(path, body=b"", method="POST"):

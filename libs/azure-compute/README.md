@@ -260,10 +260,12 @@ finally:
 
 Key capabilities include:
 
-- **Control plane vs. state plane separation:** Graph state stays in LangGraph's
-  checkpointer (`SqliteSaver`, `PostgresSaver`, `CosmosDBSaver`, or an automatic
-  `InMemorySaver` checkpoint bundle in zero-config mode) while DTS carries compact
-  checkpoint pointers and rolls over long-running conversations via `continue_as_new`.
+- **Control plane vs. state plane separation:** With a persistent checkpointer
+  (`SqliteSaver`, `PostgresSaver`, or `CosmosDBSaver`), step transitions pass
+  `< 1 KB` checkpoint IDs instead of full checkpoint bundles. Durable tool/node
+  inputs and outputs, plus final output returned through DTS, still travel in
+  DTS payloads. Zero-config `InMemorySaver` checkpoints also travel as inline
+  bundles. Long-running conversations roll over via `continue_as_new`.
 - **Per-tool and per-node activity isolation:** `@durable_tool` calls inside a
   `ToolNode` and `@durable_node` branches (including dynamic `Send()` map-reduce
   fan-out) execute as parallel DTS activities with independent retry policies.
@@ -301,12 +303,15 @@ leaving queued work stalled. A successful HTTP response means the event was queu
 not that a graph worker is alive.
 
 By default `/respond` is owner-only. Supply
-`respond_authorizer(caller, instance_id, owner)` (two-argument callbacks are also
-supported) to require an independently authenticated approver, for example a
-configured manager principal distinct from the starter. Ownership lookups always
-consult DTS and fail closed. The server overwrites dict resume fields `responder`
-and `reviewer` with the verified caller; the expense sample uses this identity,
-not a body-supplied reviewer.
+`respond_authorizer(caller, instance_id, owner[, graph_name])` (legacy
+two-argument callbacks are also supported) to require an independently
+authenticated approver, for example a configured manager principal distinct from
+the starter. Authorized approvers can read `/status` before responding. Ownership
+and graph-scope lookups consult DTS and fail closed; an instance from another
+graph cannot be controlled through these routes. The server overwrites dict resume
+fields `responder` and `reviewer` with the verified caller. For a batch
+`{"value": {"interrupt-id": {...}}}`, it stamps each dict payload, never the outer
+interrupt-ID map. The expense sample uses this identity, not a body-supplied reviewer.
 
 Authenticated default thread IDs are owner-namespaced. Checkpoints record
 `durable_owner` alongside `durable_instance_id`; sync/async starts and worker
@@ -378,7 +383,7 @@ sdk = DurableTaskSchedulerClient(**hosted_opts)
 
 | Mode | How to Enable | How State Moves | Best For |
 | --- | --- | --- | --- |
-| **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, or any `BaseCheckpointSaver`) | `inline_checkpoints=False` (default). DTS carries only `< 1 KB` checkpoint IDs and small control envelopes. Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
+| **Tier 1: Shared Checkpointer** *(Checkpoint IDs)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, or any `BaseCheckpointSaver`) | `inline_checkpoints=False` (default). Step transitions pass `< 1 KB` checkpoint IDs instead of full checkpoint bundles stored in your external database. Durable tool/node inputs and outputs, plus final output returned through DTS, still travel in DTS payloads. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
 | **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice (up to the 900 KB bundle guard) is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Single-turn runs or getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
 
 Final inline results carry the checkpoint bundle once, without a duplicate state
@@ -387,8 +392,9 @@ Every complete activity input/result, orchestration input/output, and
 `continue_as_new` input must fit the 950,000-byte serialized payload guard. The
 900 KB bundle guard is a separate limit on the encoded bundle, not raw graph state.
 Oversized payloads fail without activity retries. Use a persistent checkpointer
-for large state and configure `sdk_options(payload_store=...)` for external SDK
-payload storage; the integration still enforces its conservative wire-size guard.
+for large inline checkpoint bundles. For large durable tool/node inputs or return
+values, reduce their size or store blobs externally and pass references.
+`sdk_options(payload_store=...)` does not bypass the integration's wire-size guard.
 
 Caller-supplied checkpointer serializers are preserved, including custom or
 encrypted `InMemorySaver` serializers. For custom state types used in activity

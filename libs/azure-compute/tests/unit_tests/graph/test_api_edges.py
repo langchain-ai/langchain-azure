@@ -13,7 +13,7 @@ from langgraph.graph import StateGraph
 from langchain_azure_compute.graph import _api as api
 from langchain_azure_compute.graph.runner import RunError, pack, unpack
 from tests.unit_tests.graph.test_client_boundaries import AsyncSdk, state
-from tests.unit_tests.graph.test_wave2 import Sdk, registration
+from tests.unit_tests.graph.test_functions_auth import Sdk, registration
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ def test_client_reuse_payloads_missing_and_invalid_owner():
 
 
 def test_uncompiled_current_and_previous_graph_are_rejected():
-    from tests.unit_tests.graph.test_wave2 import State
+    from tests.unit_tests.graph.test_functions_auth import State
 
     builder = StateGraph(State)
     with pytest.raises(ValueError, match="uncompiled"):

@@ -12,7 +12,7 @@ import azure.functions as func
 import pytest
 
 from langchain_azure_compute.graph import azure_functions as af
-from tests.unit_tests.graph.test_wave2 import Sdk, registration
+from tests.unit_tests.graph.test_functions_auth import Sdk, registration
 
 
 @dataclass
@@ -69,7 +69,7 @@ def test_factory_registration_shapes_and_invalid_inputs():
         af.create_function_app()
     with pytest.raises(ValueError, match="least one"):
         af.create_function_app([], Sdk())
-    with pytest.raises(ValueError, match="2 or 3"):
+    with pytest.raises(ValueError, match="2, 3 or 4"):
         af.create_function_app(reg, Sdk(), respond_authorizer=lambda caller: True)
     with pytest.raises(ValueError, match="mapping keys"):
         af.create_function_app({"wrong": reg}, Sdk())

@@ -33,6 +33,22 @@ test_readiness_cleanup = module.test_review_worker_readiness_success_and_failure
 test_local_identity = module.test_review_sample_local_identity_requires_explicit_opt_in
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ("libs", "azure-compute", "README.md"),
+        ("samples", "langgraph-durabletask", "05_multi_turn_conversation", "README.md"),
+    ],
+)
+def test_persistent_checkpoint_docs_do_not_hide_durable_activity_payloads(relative):
+    text = ROOT.joinpath(*relative).read_text()
+    assert "step transitions pass" in text.lower()
+    assert "Durable tool/node inputs and outputs" in text
+    assert "final output" in text and "DTS payloads" in text
+    assert "DTS carries only" not in text
+    assert "history carries only" not in text
+
+
 def test_sample_requirements_match_supported_minor_series():
     requirements = sorted(
         (ROOT / "samples" / "langgraph-durabletask").glob("*/requirements.txt")

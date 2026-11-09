@@ -17,8 +17,8 @@ from langchain_azure_compute.graph import _config as config
 from langchain_azure_compute.graph import runner as r
 from tests.unit_tests.graph.test_api_edges import AsyncSdk
 from tests.unit_tests.graph.test_checkpoint_edges import snapshot
+from tests.unit_tests.graph.test_functions_auth import Sdk, registration
 from tests.unit_tests.graph.test_orchestration_edges import Context, initial
-from tests.unit_tests.graph.test_wave2 import Sdk, registration
 
 
 def test_persistent_checkpoint_migration_does_not_use_inline_completion_cache():

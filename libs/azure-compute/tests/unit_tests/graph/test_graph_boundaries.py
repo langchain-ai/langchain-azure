@@ -280,7 +280,7 @@ def test_safe_method_and_unknown_extensions_delegate(serializer_globals, monkeyp
 
 def test_checkpoint_bundle_limit_and_missing_parent(monkeypatch):
     from langchain_azure_compute.graph.runner import pack, run_step
-    from tests.unit_tests.graph.test_wave2 import registration
+    from tests.unit_tests.graph.test_functions_auth import registration
 
     graph = SimpleNamespace(checkpointer=object(), _durable_inline_checkpoints=False)
     assert inline._export_checkpoint_bundle(graph, "t") is None
