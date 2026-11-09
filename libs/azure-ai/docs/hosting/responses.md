@@ -27,7 +27,7 @@ and uses the same LangGraph hosting interface.
 | `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
 | `store` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
 | `conversation_chain_store` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for explicit conversation turns. |
-| `enable_response_branching` | `False` | Enable completed-parent branching checks. Both flag values select a referenced response's exact checkpoint. |
+| `enable_response_branching` | `False` | Enable checkpoint-based branching from a completed parent selected by `previous_response_id`. Requires a graph checkpointer. `False` uses ordinary continuation. |
 | `prefix` | Empty | Add a prefix to the protocol routes. |
 | `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
 
@@ -70,14 +70,21 @@ the graph; request `model` and `tools` do not reconfigure it.
 > `store=false` returns HTTP 400 before streaming or graph execution. Without a
 > checkpointer, foreground requests can use `store=false`.
 
-A LangGraph checkpointer determines the conversation's state source:
+### Ordinary continuation
+
+With `enable_response_branching=False`, the host uses ordinary continuation.
+The graph's checkpointer determines the state source:
 
 | Graph configuration | History used on later turns | Input sent to the graph |
 | --- | --- | --- |
 | Without a checkpointer | Responses history resolved by the provider | History plus current input. |
 | With a checkpointer | Saved LangGraph state | Current input only. |
 
-For checkpointed graphs, request linkage selects the saved context:
+Without a checkpointer, the Responses provider resolves the history for
+`conversation` or `previous_response_id`. That history and the current input
+are passed to the graph.
+
+With a checkpointer, request linkage selects the saved context:
 
 | Request linkage | Context source |
 | --- | --- |
@@ -85,7 +92,8 @@ For checkpointed graphs, request linkage selects the saved context:
 | `previous_response_id` only | The referenced response's exact checkpoint, stored with that response. |
 | Neither | A fresh response thread. |
 
-`previous_response_id` uses the same source with branching enabled or disabled.
+For checkpointed graphs, `previous_response_id` selects the referenced response's
+exact saved checkpoint in both ordinary continuation and branching mode.
 An unavailable response or checkpoint fails instead of selecting the thread's
 latest state. Only conversation-only requests read or update
 `conversation_chain_store`. A response-linked request leaves its parent's
@@ -131,9 +139,10 @@ completes with partial output.
 
 ### Branching
 
-Enable completed-parent branching checks with `enable_response_branching=True`
-and `previous_response_id`. The parent must have a completed response and a
-finished graph. Siblings can run sequentially or
+Set `enable_response_branching=True` to enable checkpoint-based branching from
+a parent selected by `previous_response_id`. This mode requires a graph
+checkpointer, a completed parent response, and a finished parent graph.
+Siblings can run sequentially or
 concurrently: children B and C of A see A+B and A+C respectively. Each child
 can become a new parent.
 

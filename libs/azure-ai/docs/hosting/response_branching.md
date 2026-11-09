@@ -229,9 +229,11 @@ saver before applying the host's checkpoint proxy. For SQLite, use
 must provide usable implementations of these methods. Validation performs no
 storage reads or writes.
 
-The branching flag enables completed-parent eligibility and capability checks.
-It does not change the checkpoint selected by `previous_response_id`, or the
-public meanings of `conversation`, `store`, or `instructions`.
+`enable_response_branching=True` enables completed-parent checkpoint branching
+and requires a graph checkpointer. With `False`, ordinary continuation restores
+checkpoint state when the graph has a checkpointer, or uses SDK-resolved message
+history otherwise. The flag must not change the public meanings of
+`conversation`, `store`, or `instructions`.
 The constructor's existing automatic provider selection remains available with
 branching enabled or disabled; `store=provider` is an optional override.
 
