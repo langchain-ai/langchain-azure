@@ -99,6 +99,37 @@ class TestSandboxesPackage:
         assert "azure-containerapps-sandbox" in str(excinfo.value)
 
 
+class TestGraphPackage:
+    def test_missing_langgraph_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="durabletask") as excinfo:
+            _exec_module_without("langchain_azure_compute.graph", "langgraph")
+        assert "langgraph" in str(excinfo.value)
+
+    def test_missing_durabletask_names_the_extra(self) -> None:
+        with pytest.raises(ImportError, match="durabletask") as excinfo:
+            _exec_module_without(
+                "langchain_azure_compute.graph",
+                "durabletask.azuremanaged",
+            )
+        assert "durabletask-azuremanaged" in str(excinfo.value)
+
+    def test_missing_durabletask_namespace_names_the_extra(self) -> None:
+        def fake_find_spec(name: str, package: str | None = None) -> object | None:
+            if name == "durabletask.azuremanaged":
+                raise ModuleNotFoundError("No module named 'durabletask'")
+            return _REAL_FIND_SPEC(name, package)
+
+        spec = _REAL_FIND_SPEC("langchain_azure_compute.graph")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with (
+            mock.patch("importlib.util.find_spec", side_effect=fake_find_spec),
+            pytest.raises(ImportError, match="durabletask") as excinfo,
+        ):
+            spec.loader.exec_module(module)
+        assert "durabletask-azuremanaged" in str(excinfo.value)
+
+
 def test_find_spec_is_restored_after_each_stub() -> None:
     assert importlib.util.find_spec is _REAL_FIND_SPEC
 
