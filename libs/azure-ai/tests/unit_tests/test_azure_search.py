@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import json
+import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import patch
 
@@ -437,6 +439,99 @@ def test_ids_used_correctly() -> None:
         ids_used_at_upload = vector_store.add_documents(documents, ids=ids_provided)
         assert len(ids_provided) == len(ids_used_at_upload)
         assert ids_provided == ids_used_at_upload
+
+
+@pytest.mark.requires("azure.search.documents")
+async def test_async_ids_used_correctly() -> None:
+    """Check the async path uses the document ids when provided with them.
+
+    Regression test for https://github.com/langchain-ai/langchain-azure/issues/1318:
+    ``aadd_embeddings`` used to base64-encode a caller-supplied key while the sync
+    ``add_embeddings`` only encoded a uuid it generated itself, so the same document
+    written through ``add_documents`` and ``aadd_documents`` landed under two keys.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from langchain_core.documents import Document
+
+    class Response:
+        def __init__(self) -> None:
+            self.succeeded: bool = True
+
+    uploaded: Dict[str, List[List[Dict[str, Any]]]] = {"sync": [], "async": []}
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        # assume all documents uploaded successfully
+        uploaded["sync"].append(documents)
+        return [Response() for _ in documents]
+
+    async def mock_aio_upload_documents(
+        self: AsyncSearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        # assume all documents uploaded successfully
+        uploaded["async"].append(documents)
+        return [Response() for _ in documents]
+
+    documents = [
+        Document(
+            page_content="page zero Lorem Ipsum",
+            metadata={"source": "document.pdf", "page": 0, "id": "ID-document-1"},
+        ),
+        Document(
+            page_content="page one Lorem Ipsum",
+            metadata={"source": "document.pdf", "page": 1, "id": "ID-document-2"},
+        ),
+    ]
+    ids_provided = [i.metadata.get("id") for i in documents]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(AsyncSearchClient, "upload_documents", mock_aio_upload_documents),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        sync_ids = vector_store.add_documents(documents, ids=ids_provided)
+        async_ids = await vector_store.aadd_documents(documents, ids=ids_provided)
+
+    assert sync_ids == async_ids == ids_provided
+    assert [doc["id"] for doc in uploaded["sync"][0]] == ids_provided
+    assert [doc["id"] for doc in uploaded["async"][0]] == ids_provided
+
+
+@pytest.mark.requires("azure.search.documents")
+async def test_async_generated_ids_are_encoded() -> None:
+    """Check the async path still encodes the id it generates for a new document."""
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        def __init__(self) -> None:
+            self.succeeded: bool = True
+
+    uploaded: List[List[Dict[str, Any]]] = []
+
+    async def mock_upload_documents(
+        self: AsyncSearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        # assume all documents uploaded successfully
+        uploaded.append(documents)
+        return [Response() for _ in documents]
+
+    with (
+        patch.object(AsyncSearchClient, "upload_documents", mock_upload_documents),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        ids_used_at_upload = await vector_store.aadd_texts(["page zero Lorem Ipsum"])
+
+    assert len(ids_used_at_upload) == 1
+    decoded = base64.urlsafe_b64decode(ids_used_at_upload[0]).decode("ascii")
+    # a generated key is a base64-url-encoded uuid, and it is what gets uploaded
+    assert str(uuid.UUID(decoded)) == decoded
+    assert [doc["id"] for doc in uploaded[0]] == ids_used_at_upload
 
 
 @pytest.mark.requires("azure.search.documents")
