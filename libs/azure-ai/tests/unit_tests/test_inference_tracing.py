@@ -18,6 +18,7 @@ pytest.importorskip("opentelemetry")
 pytest.importorskip("langchain_core")
 
 from langchain_core.agents import AgentAction  # noqa: E402
+from langchain_core.callbacks import CallbackManagerForRetrieverRun  # noqa: E402
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.messages import (  # noqa: E402
     AIMessage,
@@ -27,6 +28,8 @@ from langchain_core.messages import (  # noqa: E402
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from langchain_core.retrievers import BaseRetriever  # noqa: E402
+from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
 from opentelemetry import trace as otel_trace  # noqa: E402
 from opentelemetry.sdk.resources import Resource  # noqa: E402
@@ -1978,6 +1981,39 @@ def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     assert attrs.get(tracing.Attrs.RETRIEVER_QUERY) == "q"
     results = json.loads(attrs[tracing.Attrs.RETRIEVER_RESULTS])
     assert len(results) == 3
+
+
+class PolicyRetriever(BaseRetriever):
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        return [Document(page_content="doc", metadata={"source": "a"})]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("run_name", [None, "policy_search"])
+async def test_retriever_span_uses_retriever_name(
+    span_exporter: InMemorySpanExporter,
+    use_async: bool,
+    run_name: Optional[str],
+) -> None:
+    """LangChain passes `serialized=None` and the retriever name as `name`."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+    retriever = PolicyRetriever()
+    config = RunnableConfig(callbacks=[tracer])
+    if run_name:
+        config["run_name"] = run_name
+
+    if use_async:
+        await retriever.ainvoke("q", config=config)
+    else:
+        retriever.invoke("q", config=config)
+
+    expected_name = run_name or "PolicyRetriever"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == f"execute_tool {expected_name}"
+    assert span.attributes is not None
+    assert span.attributes.get(tracing.Attrs.TOOL_NAME) == expected_name
 
 
 def test_parser_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
