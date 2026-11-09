@@ -206,25 +206,6 @@ For credentials, graph configuration, and deployment, follow the
 See [Responses hosting](docs/hosting/responses.md) for supported features
 and configuration requirements.
 
-#### Call the host
-
-With a Responses host running locally, send:
-
-```bash
-curl -X POST http://127.0.0.1:8088/responses \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Hello!", "conversation": {"id": "demo-responses"}}'
-```
-
-The JSON response contains an `output` array and a response ID.
-Add `"stream": true` to the request body and use `curl -N` for SSE output.
-
-For later turns, reuse `conversation.id`.
-Compile the graph with a checkpointer to retain graph state.
-Responses history is stored separately from graph checkpoints. For checkpointed
-Responses requests, omit `store` or set `store=true`; `store=false` returns
-HTTP 400 before execution.
-
 #### Samples
 
 Use these samples for complete setup, request flows, and deployment steps.
@@ -260,7 +241,7 @@ The Invocations protocol is also supported; see the
 Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including
 checkpoints and pending writes, in **Foundry State Store** so a hosted graph
 can resume across turns and container restarts. It is an async-only
-checkpointer, separate from the Responses transcript store described above.
+checkpointer, separate from the Responses transcript store.
 Compile the graph with the saver and keep its async context open for the
 host's lifetime:
 
