@@ -11,7 +11,7 @@ links in the Purpose column lead to usage guides and samples.
 
 | Package | Purpose |
 | --- | --- |
-| [langchain-azure-ai](./libs/azure-ai/README.md) | Call Microsoft Foundry [chat models](#get-started-with-microsoft-foundry-models) and [embedding models](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).<br>Use [existing Foundry agents as graph nodes](./libs/azure-ai/README.md#microsoft-foundry-agent-service).<br>Access [tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search](#explore-azure-integrations).<br>Host [LangGraph applications as Foundry hosted agents](#host-applications-on-microsoft-foundry). |
+| [langchain-azure-ai](./libs/azure-ai/README.md) | Call Microsoft Foundry [chat models](#call-microsoft-foundry-models) and [embedding models](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).<br>Use [existing Foundry agents as graph nodes](./libs/azure-ai/README.md#microsoft-foundry-agent-service).<br>Access [tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search](#explore-azure-integrations).<br>Host [LangGraph applications as Foundry hosted agents](#host-applications-on-microsoft-foundry). |
 | [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code with [Azure Container Apps dynamic sessions](./libs/azure-compute/README.md#dynamic-sessions).<br>Provide Deep Agents compute backends with [dynamic sessions](./libs/azure-compute/README.md#deep-agents-backend) and [Azure Container Apps sandboxes](./libs/azure-compute/README.md#sandboxes-deep-agents-backend). |
 | [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Use [Azure Cosmos DB for vector search, semantic caching, and chat history](./samples/cosmosdb-nosql/README.md#langchain-integrations).<br>Persist [LangGraph checkpoints, node caches, and data shared across threads](./samples/cosmosdb-nosql/README.md#langgraph-integrations) in Azure Cosmos DB. |
 | [langchain-sqlserver](./libs/sqlserver/README.md) | Use [SQL Server and Azure SQL for vector search and chat history](https://github.com/Azure-Samples/azure-sql-langchain). |
@@ -22,7 +22,7 @@ links in the Purpose column lead to usage guides and samples.
 For help choosing between `langchain-azure-ai` and `langchain-openai`,
 see the [Microsoft integrations guide](https://docs.langchain.com/oss/python/integrations/providers/microsoft#choose-a-package).
 
-## Get started with Microsoft Foundry models
+## Call Microsoft Foundry models
 
 Call [Microsoft Foundry models](https://learn.microsoft.com/azure/foundry/concepts/foundry-models-overview) through LangChain's chat model interface.
 The example below shows how to authenticate and make your first model call with `langchain-azure-ai`.
@@ -86,7 +86,7 @@ for Azure deployment.
 Connect your application to Azure services for search, document loading, tools, memory, and tracing.
 Browse the guides and samples by integration type or agent capability:
 
-- **Chat models**: Generate responses with models deployed in Microsoft Foundry. See the [Foundry model quick start](#get-started-with-microsoft-foundry-models).
+- **Chat models**: Generate responses with models deployed in Microsoft Foundry. See the [Foundry model quick start](#call-microsoft-foundry-models).
 - **Graph nodes**: Use [an agent already running in Microsoft Foundry as a LangGraph node](./libs/azure-ai/README.md#microsoft-foundry-agent-service). Also see the [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
 - **Tools, skills and MCPs**: Load [MCP tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools) and [agent skills](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_resources) from Foundry Toolbox. Also see the [Document Intelligence tool sample](./samples/react-agent-docintelligence/README.md).
 - **Sandbox**: Use [Azure Container Apps dynamic sessions and sandboxes](./libs/azure-compute/README.md) to run agent-generated codes.
