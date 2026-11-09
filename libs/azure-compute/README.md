@@ -554,6 +554,14 @@ uv run --frozen --all-extras --group test --group test_integration \
 
 ## Changelog
 
+- **0.2.0**:
+
+  - **[NEW]** We introduced the `langchain-azure-compute` package for running LangChain, LangGraph, and Deep Agents workloads on Azure compute services. [#907](https://github.com/langchain-ai/langchain-azure/pull/907)
+  - **[NEW]** We added the Azure Container Apps dynamic sessions tools under `langchain_azure_compute.dynamic_sessions`. [#908](https://github.com/langchain-ai/langchain-azure/pull/908)
+  - **[NEW]** We added a Deep Agents backend that runs code and file operations inside Azure Container Apps dynamic sessions. [#909](https://github.com/langchain-ai/langchain-azure/pull/909)
+  - **[NEW]** We added `ACASandbox`, a Deep Agents sandbox backend for Azure Container Apps. [#910](https://github.com/langchain-ai/langchain-azure/pull/910)
+  - **[NEW]** We added durable execution for LangGraph graphs and LangChain agents with Azure Durable Task Scheduler under `langchain_azure_compute.graph`, available through the `durabletask` extra. It supports durable tools and nodes, human-in-the-loop interrupts, graph versioning and migration, and Azure Functions hosting. [#1270](https://github.com/langchain-ai/langchain-azure/pull/1270)
+
 - **0.1.1**:
 
   - We raised the minimum supported Python version from 3.10 to 3.11 in accordance with the repository's Python support policy. Users running Python 3.10 must upgrade their runtime to install this release. [#1021](https://github.com/langchain-ai/langchain-azure/pull/1021)
