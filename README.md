@@ -24,7 +24,7 @@ see the [Microsoft integrations guide](https://docs.langchain.com/oss/python/int
 
 ## Get started with Microsoft Foundry models
 
-Call models deployed in Microsoft Foundry through LangChain's chat model interface.
+Call [Microsoft Foundry models](https://learn.microsoft.com/azure/foundry/concepts/foundry-models-overview) through LangChain's chat model interface.
 The example below shows how to authenticate and make your first model call with `langchain-azure-ai`.
 
 ### Install langchain-azure-ai
@@ -40,7 +40,7 @@ az login
 
 This example uses the Responses API.
 Use a Microsoft Foundry project with a model deployment that supports the Responses API.
-Your identity needs the **Azure AI Developer** role on the project.
+Your identity needs the [**Foundry User**](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-models#prerequisites) role on the project.
 Replace the project endpoint and model deployment name below.
 
 ```python
@@ -61,11 +61,11 @@ model.invoke("Translate 'Hello!' into Italian.").pretty_print()
 ```
 
 For endpoint and authentication options, see the [model quick start](./libs/azure-ai/README.md#microsoft-foundry-models)
-and the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain).
+and the [LangChain model guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-models).
 
 ## Host applications on Microsoft Foundry
 
-Deploy your LangChain, LangGraph, or Deep Agents application to Microsoft Foundry as a hosted agent.
+Deploy your LangChain, LangGraph, or Deep Agents application to Microsoft Foundry as a [hosted agent](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents).
 The `langchain-azure-ai` hosting adapter connects your application to Foundry's agent APIs.
 
 For an existing LangGraph application, point `langgraph.json` at its compiled graph.
