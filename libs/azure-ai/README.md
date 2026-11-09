@@ -9,7 +9,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | Call a Foundry model from LangChain or LangGraph | [Model quick start](#microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Build and deploy my first hosted agent | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
-| Branch, rewind, or regenerate from a completed response | [Response branching guide](docs/hosting/responses.md#branching) and [branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
+| Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
 | Compose a graph with managed Foundry agent nodes | [Agent Service quick start](#microsoft-foundry-agent-service) |
 | Add guardrails or Azure tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [tools](#microsoft-foundry-tools) |
 | Trace graph, model, and tool calls | [Application Insights tracing](#auto-tracing-to-azure-application-insights) |
