@@ -6,14 +6,14 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 
 | I want to... | Start with |
 | --- | --- |
-| Call a Foundry model from LangChain or LangGraph | [Model quick start](#microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Build and deploy my first hosted agent | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
-| Compose a graph with managed Foundry agent nodes | [Agent Service quick start](#microsoft-foundry-agent-service) |
-| Add guardrails or Azure tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [tools](#microsoft-foundry-tools) |
-| Trace graph, model, and tool calls | [Application Insights tracing](#auto-tracing-to-azure-application-insights) |
-| Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#durable-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
+| Access agents on Microsoft Foundry Agent Service | [Agent Service quick start](#accessing-agents-on-microsoft-foundry-agent-service) |
+| Add guardrails or Azure tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [tools](#using-azure-tools) |
+| Trace graph, model, and tool calls | [Application Insights tracing](#tracing-with-azure-application-insights) |
+| Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#persisting-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
 | Store long-term memory across threads | [Azure Cosmos DB store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory) |
 
 ## Installation
@@ -55,14 +55,16 @@ This package includes:
 
 * **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) from LangChain and LangGraph.
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
-* **Applying guardrails (middleware):** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
-* **Hosting agents (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
+* **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
+* **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
 * **Using Azure tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
 * **Searching documents (vector store):** index and search documents with [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores).
 
 For more details and tutorials, see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
 
-### Microsoft Foundry Models
+<a id="microsoft-foundry-models"></a>
+
+### Calling Microsoft Foundry models
 
 Call a Microsoft Foundry model using the Chat Completions API:
 
@@ -112,7 +114,9 @@ model = AzureAIOpenAIApiChatModel(
 )
 ```
 
-### Microsoft Foundry Agent Service
+<a id="microsoft-foundry-agent-service"></a>
+
+### Accessing agents on Microsoft Foundry Agent Service
 
 Compose complex graphs by using agents running in the Agent Service:
 
@@ -249,7 +253,9 @@ For the underlying HTTP protocol, see the
 The Invocations protocol is also supported; see the
 [Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md).
 
-### Durable graph state
+<a id="durable-graph-state"></a>
+
+### Persisting graph state
 
 Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including
 checkpoints and pending writes, in **Foundry State Store** so a hosted graph
@@ -286,7 +292,9 @@ compatible. Cross-thread long-term memory is a separate concern; use a
 rather than a checkpointer for that purpose.
 
 
-### Auto tracing to Azure Application Insights
+<a id="auto-tracing-to-azure-application-insights"></a>
+
+### Tracing with Azure Application Insights
 
 To trace your LangChain / LangGraph applications with Azure Application Insights, first install the OpenTelemetry extras:
 
@@ -310,7 +318,9 @@ enable_auto_tracing(
 
 For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights.py`](https://github.com/langchain-ai/langchain-azure/blob/main/samples/enable_auto_tracing_appinsights.py).
 
-### Microsoft Foundry Tools
+<a id="microsoft-foundry-tools"></a>
+
+### Using Azure tools
 
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
 
