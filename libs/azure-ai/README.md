@@ -8,7 +8,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | --- | --- |
 | Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
-| Build and deploy my first hosted agent | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
+| Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
 | Access agents on Microsoft Foundry Agent Service | [Agent Service quick start](#accessing-agents-on-microsoft-foundry-agent-service) |
 | Apply guardrails or use Foundry tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [Microsoft Foundry Tools](#using-microsoft-foundry-tools) |
@@ -111,6 +111,23 @@ model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential="your-api-key",
     model="Mistral-Large-3"
+)
+```
+
+Generate embeddings for search and retrieval using an embedding model deployment:
+
+```python
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
+
+embeddings = AzureAIOpenAIApiEmbeddingsModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential="your-api-key",
+    model="text-embedding-3-small",  # your embedding model deployment name
+)
+
+query_vector = embeddings.embed_query("What is Microsoft Foundry?")
+document_vectors = embeddings.embed_documents(
+    ["Microsoft Foundry helps you build AI applications."]
 )
 ```
 
