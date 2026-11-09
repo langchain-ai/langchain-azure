@@ -6,7 +6,7 @@ Sample scripts demonstrating all `langchain-azure-cosmosdb` integrations — Lan
 
 - **Azure CosmosDB NoSQL** account ([create one](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/quickstart-portal))
 - **Azure OpenAI** deployment with a chat model and an embedding model ([quickstart](https://learn.microsoft.com/en-us/azure/ai-services/openai/quickstart))
-- Python 3.10+
+- Python 3.11 through 3.14
 
 ## Setup
 

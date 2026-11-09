@@ -1,18 +1,33 @@
 version: 2
 updates:
   - package-ecosystem: "uv"
-    directory: "/libs/azure-dynamic-sessions"
+    directories:
+      - "/libs/*"
+      - "/.github/tests"
     schedule:
       interval: "weekly"
       day: "monday"
-    versioning-strategy: increase
+    cooldown:
+      default-days: 7
+    versioning-strategy: increase-if-necessary
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
     ignore:
       - dependency-name: "langchain-core"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "langchain"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "langchain-classic"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "langchain-text-splitters"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "langchain-tests"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "langchain-model-profiles"
+        update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
         patterns:
@@ -20,183 +35,66 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "uv"
-    directory: "/libs/azure-postgresql"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    versioning-strategy: increase
-    ignore:
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain"
-      - dependency-name: "langchain-classic"
-      - dependency-name: "langchain-text-splitters"
-      - dependency-name: "langchain-tests"
-      - dependency-name: "langchain-model-profiles"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "uv"
-    directory: "/libs/azure-storage"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    versioning-strategy: increase
-    ignore:
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain"
-      - dependency-name: "langchain-classic"
-      - dependency-name: "langchain-text-splitters"
-      - dependency-name: "langchain-tests"
-      - dependency-name: "langchain-model-profiles"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "uv"
-    directory: "/libs/sqlserver"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    versioning-strategy: increase
-    ignore:
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain"
-      - dependency-name: "langchain-classic"
-      - dependency-name: "langchain-text-splitters"
-      - dependency-name: "langchain-tests"
-      - dependency-name: "langchain-model-profiles"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "uv"
-    directory: "/libs/azure-ai"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    versioning-strategy: increase
-    ignore:
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain"
-      - dependency-name: "langchain-classic"
-      - dependency-name: "langchain-text-splitters"
-      - dependency-name: "langchain-tests"
-      - dependency-name: "langchain-model-profiles"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "uv"
-    directory: "/libs/azure-cosmosdb"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    versioning-strategy: increase
-    ignore:
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain"
-      - dependency-name: "langchain-classic"
-      - dependency-name: "langchain-text-splitters"
-      - dependency-name: "langchain-tests"
-      - dependency-name: "langchain-model-profiles"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
   - package-ecosystem: "pip"
-    directory: "/samples/react-agent-docintelligence"
+    directories:
+      - "/samples/**"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "samples"
+    commit-message:
+      prefix: "chore(samples)"
     groups:
-      minor-and-patch:
+      samples:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
-  - package-ecosystem: "pip"
-    directory: "/samples/rag-storage-document-loaders"
+  - package-ecosystem: "docker"
+    directories:
+      - "/.devcontainer"
+      - "/samples/**"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
     groups:
-      minor-and-patch:
+      docker:
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
+
+  - package-ecosystem: "devcontainers"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       minor-and-patch:
         patterns:
@@ -204,26 +102,3 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-  - package-ecosystem: "docker"
-    directory: "/.devcontainer"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    groups:
-      minor-and-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
