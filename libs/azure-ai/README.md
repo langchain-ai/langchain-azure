@@ -183,6 +183,8 @@ This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits 
 
 ### Hosting LangGraph agents on Microsoft Foundry
 
+#### Responses protocol
+
 **Already have a compiled LangGraph graph?** Keep its implementation,
 model, and tools. Point `langgraph.json` at its exported graph, as shown
 in the [Responses run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md),
@@ -233,8 +235,24 @@ using `previous_response_id`. See the
 [branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md)
 for branching, rewind, regeneration, and setup requirements.
 
-The Invocations protocol is also supported; see the
-[Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md).
+#### Invocations protocol
+
+Use `InvocationsHostServer` to serve your graph through the `/invocations` endpoint:
+
+```python
+from langchain_azure_ai.agents.hosting import InvocationsHostServer
+
+graph = build_my_graph()  # returns a compiled LangGraph graph
+
+if __name__ == "__main__":
+    InvocationsHostServer(graph).run()
+```
+
+To launch with `langgraph.json`, use `--protocol invocations`.
+See the [Invocations hosting overview](docs/hosting/invocations.md) for supported
+features and configuration, and the
+[Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md)
+for setup and deployment.
 
 <a id="durable-graph-state"></a>
 
