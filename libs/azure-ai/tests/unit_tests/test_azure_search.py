@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pytest_socket import SocketBlockedError
@@ -783,3 +783,92 @@ def test_retriever_rejects_filter_and_filters_together() -> None:
 
         with pytest.raises(ValueError, match="`filter` or `filters`"):
             retriever.invoke("hello world")
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_from_texts_without_key_uses_azure_credential(use_async: bool) -> None:
+    """`from_texts` defaults `azure_search_key` to "", which is not an API key."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    credential = Mock(spec=["get_token"])
+    async_credential = Mock(spec=["get_token"])
+    kwargs: Dict[str, Any] = {
+        "azure_search_endpoint": DEFAULT_ENDPOINT,
+        "index_name": DEFAULT_INDEX_NAME,
+        "azure_credential": credential,
+        "azure_async_credential": async_credential,
+    }
+
+    with (
+        patch.object(
+            SearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=SearchClient.__init__,
+        ) as sync_init,
+        patch.object(
+            AsyncSearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=AsyncSearchClient.__init__,
+        ) as async_init,
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        if use_async:
+            await AzureSearch.afrom_texts(
+                ["hello world"], DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+        else:
+            AzureSearch.from_texts(["hello world"], DEFAULT_EMBEDDING_MODEL, **kwargs)
+
+    assert sync_init.call_args.kwargs["credential"] is credential
+    assert async_init.call_args.kwargs["credential"] is async_credential
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_azure_search_key_takes_precedence_over_azure_credential() -> None:
+    """A non-empty key keeps winning over a credential passed alongside it."""
+    from azure.core.credentials import AzureKeyCredential
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with (
+        patch.object(
+            SearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=SearchClient.__init__,
+        ) as sync_init,
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        AzureSearch(
+            azure_search_endpoint=DEFAULT_ENDPOINT,
+            azure_search_key=DEFAULT_KEY,
+            index_name=DEFAULT_INDEX_NAME,
+            embedding_function=DEFAULT_EMBEDDING_MODEL,
+            azure_credential=Mock(spec=["get_token"]),
+        )
+
+    credential = sync_init.call_args.kwargs["credential"]
+    assert isinstance(credential, AzureKeyCredential)
+    assert credential.key == DEFAULT_KEY
