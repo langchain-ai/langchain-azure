@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace as NS
 
 import pytest
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from langchain_azure_compute.graph import _api as api
 from langchain_azure_compute.graph import _checkpoints as cp
@@ -20,8 +22,12 @@ from tests.unit_tests.graph.test_wave2 import Sdk, registration
 
 
 def test_persistent_checkpoint_migration_does_not_use_inline_completion_cache():
+    class _EmptySaver(BaseCheckpointSaver):
+        def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+            return None
+
     reg = registration()
-    reg.graph.checkpointer = NS(get_tuple=lambda cfg: None)
+    reg.graph.checkpointer = _EmptySaver()
     result = r.run_step(
         reg.graph,
         reg.limits,
