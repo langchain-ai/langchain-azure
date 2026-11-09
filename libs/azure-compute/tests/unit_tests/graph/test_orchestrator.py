@@ -172,7 +172,8 @@ class Ctx:
         return ("evt", name)
 
     def set_custom_status(self, value):
-        self.status.append(value)
+        if value is not None:
+            self.status.append(value)
 
     def continue_as_new(self, new_input, save_events=False):
         self.can = (new_input, save_events)
@@ -262,7 +263,8 @@ def test_interrupt_waits_for_resume_event_and_carries_value():
     }
     ctx, out = run(Limits(), [interrupted, DONE], events=[{"value": pack(True)}])
     assert ctx.events == ["resume:iid"]
-    assert ctx.status[0]["pending"]["id"] == "iid" and ctx.status[-1] is None
+    assert ctx.status[0]["pending"]["id"] == "iid"
+    assert ctx.status[-2:] == [{"state": "running"}, {"state": "completed"}]
     assert ctx.calls[1]["kind"] == "resume" and ctx.calls[1]["expect"] == "a"
 
 
@@ -434,7 +436,7 @@ def test_orchestrator_forwards_bundle_across_steps_tools_and_can():
                 "output": pack({"answer": 42}),
             }
         )
-    assert unpack(done_exc.value.value["output"]) == {"answer": 42}
+    assert not done_exc.value.value.get("output")
     assert done_exc.value.value["checkpoint_bundle"] == b2
 
 

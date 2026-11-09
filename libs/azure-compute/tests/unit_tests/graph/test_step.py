@@ -1409,8 +1409,8 @@ def test_checkpointerless_graph_survives_worker_switch_across_steps_and_tools():
             "checkpoint_bundle": r4["checkpoint_bundle"],
         },
     )
-    assert r5["status"] == "done" and "output" in r5
-    final_val = unpack(r5["output"])
+    assert r5["status"] == "done" and not r5.get("output")
+    final_val = read_output(worker_b_graph, "t-eph", r5["ckpt"])
     assert final_val["turn"] == 1 and final_val["approved"] is True
 
 
@@ -3343,7 +3343,11 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests(monkeypa
     fake_sdk = FakeDtsSdk()
     monkeypatch.setenv("WEBSITE_AUTH_ENABLED", "true")
     app = create_function_app(
-        reg, fake_sdk, start_worker=False, auth_level=func.AuthLevel.ANONYMOUS
+        reg,
+        fake_sdk,
+        start_worker=False,
+        auth_level=func.AuthLevel.ANONYMOUS,
+        require_instance_owner=False,
     )
 
     # 1. GET /api/health with real azure.functions.HttpRequest
@@ -3509,7 +3513,7 @@ def test_azure_functions_http_routes_and_server_with_real_http_requests(monkeypa
     assert dispatch_function_request(default_app, owner_status).status_code == 200
 
     app2 = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-    reg.register_function_routes(app2, fake_sdk)
+    reg.register_function_routes(app2, fake_sdk, require_instance_owner=False)
     with FunctionAppHttpServer(app2) as srv:
         with urllib.request.urlopen(f"{srv.base_url}/api/health", timeout=5) as r:
             assert r.status == 200
@@ -3664,7 +3668,7 @@ def test_push_toolnode_parallel_command_and_toolmessage_commit():
         node_config=reg.node_config,
     )
     assert r3["status"] == "done"
-    final_state = unpack(r3["output"])
+    final_state = read_output(reg.graph, "t-push-v2", r3["ckpt"])
     assert final_state["files"] == {"/plan.md": "step 1"}
     assert (
         final_state["messages"][-1].content

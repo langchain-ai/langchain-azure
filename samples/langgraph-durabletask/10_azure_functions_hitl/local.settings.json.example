@@ -4,8 +4,8 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
     "DTS_EMULATOR": "127.0.0.1:8080",
-    "DURABLE_TASK_SCHEDULER_CONNECTION_STRING": "Endpoint=http://localhost:8080;TaskHub=default;Authentication=None",
-    "START_EMBEDDED_WORKER": "1",
+    "DURABLE_TASK_SCHEDULER_CONNECTION_STRING": "Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None",
+    "START_EMBEDDED_WORKER": "0",
     "WORKER_ID": "func-host"
   }
 }

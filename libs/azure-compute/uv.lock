@@ -1238,6 +1238,8 @@ durabletask = [
     { name = "durabletask" },
     { name = "durabletask-azuremanaged" },
     { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+    { name = "langgraph-prebuilt" },
 ]
 dynamic-sessions = [
     { name = "deepagents" },
@@ -1288,7 +1290,9 @@ requires-dist = [
     { name = "durabletask", marker = "extra == 'durabletask'", specifier = ">=1.13.0,<1.14" },
     { name = "durabletask-azuremanaged", marker = "extra == 'durabletask'", specifier = ">=1.13.0,<1.14" },
     { name = "langchain-core", specifier = ">=1.2.5,<2.0" },
-    { name = "langgraph", marker = "extra == 'durabletask'", specifier = ">=1.0.2,<1.3" },
+    { name = "langgraph", marker = "extra == 'durabletask'", specifier = ">=1.2.0,<1.3" },
+    { name = "langgraph-checkpoint", marker = "extra == 'durabletask'", specifier = ">=4.1.0,<5.0" },
+    { name = "langgraph-prebuilt", marker = "extra == 'durabletask'", specifier = ">=1.1.0,<1.2" },
     { name = "requests", marker = "extra == 'dynamic-sessions'", specifier = ">=2.31" },
 ]
 provides-extras = ["dynamic-sessions", "sandboxes", "durabletask"]

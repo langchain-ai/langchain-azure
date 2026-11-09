@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import (
     Any,
+    Literal,
     Protocol,
     TypeAlias,
     TypedDict,
@@ -38,6 +39,7 @@ from typing import (
 )
 
 import ormsgpack
+from durabletask.serialization import JsonDataConverter
 from langchain_core._api import beta
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
@@ -62,23 +64,41 @@ _BETA_MESSAGE = (
 )
 
 _EXTRA_SAFE_MSGPACK_TYPES: set[tuple[str, ...]] = set()
+_ALLOWED_MSGPACK_MODULES: set[tuple[str, ...]] = set()
+_ALLOW_ALL_MSGPACK_MODULES = False
+_PAYLOAD_CONVERTER = JsonDataConverter()
 _BASE_STRICT_EXT_HOOK = _create_msgpack_ext_hook(None)
+
+
+def _configure_msgpack_modules(
+    allowed_msgpack_modules: Iterable[tuple[str, ...]] | bool | None,
+) -> None:
+    """Register explicitly trusted msgpack types/modules for this process."""
+    global _ALLOW_ALL_MSGPACK_MODULES
+    if isinstance(allowed_msgpack_modules, bool):
+        _ALLOW_ALL_MSGPACK_MODULES = allowed_msgpack_modules
+    elif allowed_msgpack_modules is not None:
+        _ALLOWED_MSGPACK_MODULES.update(allowed_msgpack_modules)
 
 
 def _register_safe_msgpack_type(cls: Any) -> None:
     """Register a user-declared state or context schema type for msgpack decoding."""
-    if isinstance(cls, type):  # pragma: no cover
-        mod = getattr(cls, "__module__", None)  # pragma: no cover
-        qual = getattr(cls, "__qualname__", None) or getattr(
-            cls, "__name__", None
-        )  # pragma: no cover
-        if mod and qual:  # pragma: no cover
-            _EXTRA_SAFE_MSGPACK_TYPES.add((str(mod), str(qual)))  # pragma: no cover
+    if isinstance(cls, type):
+        mod = getattr(cls, "__module__", None)
+        qual = getattr(cls, "__qualname__", None) or getattr(cls, "__name__", None)
+        if mod and qual:
+            _EXTRA_SAFE_MSGPACK_TYPES.add((str(mod), str(qual)))
 
 
 def _is_allowed_msgpack_type(mod: str, name: str) -> bool:
     key = (mod, name)
-    return key in _lg_msgpack.SAFE_MSGPACK_TYPES or key in _EXTRA_SAFE_MSGPACK_TYPES
+    return (
+        _ALLOW_ALL_MSGPACK_MODULES
+        or key in _lg_msgpack.SAFE_MSGPACK_TYPES
+        or key in _EXTRA_SAFE_MSGPACK_TYPES
+        or key in _ALLOWED_MSGPACK_MODULES
+        or (mod,) in _ALLOWED_MSGPACK_MODULES
+    )
 
 
 def _strict_msgpack_ext_hook(code: int, data: bytes) -> Any:
@@ -110,29 +130,30 @@ def _strict_msgpack_ext_hook(code: int, data: bytes) -> Any:
         if code == EXT_CONSTRUCTOR_POS_ARGS:
             import importlib
 
-            if tup[0] == "langgraph.types" and tup[1] == "Send":  # pragma: no cover
+            if tup[0] == "langgraph.types" and tup[1] == "Send":
                 return _BASE_STRICT_EXT_HOOK(code, data)
-            return getattr(importlib.import_module(tup[0]), tup[1])(
-                *tup[2]
-            )  # pragma: no cover
+            return getattr(importlib.import_module(tup[0]), tup[1])(*tup[2])
         import importlib
 
         return getattr(importlib.import_module(tup[0]), tup[1])(**tup[2])
-    if code == EXT_METHOD_SINGLE_ARG:  # pragma: no cover
-        tup = ormsgpack.unpackb(  # pragma: no cover
+    if code == EXT_METHOD_SINGLE_ARG:
+        tup = ormsgpack.unpackb(
             data, ext_hook=_strict_msgpack_ext_hook, option=ormsgpack.OPT_NON_STR_KEYS
         )
         if (
             not isinstance(tup, (tuple, list))
             or len(tup) < 4
-            or (str(tup[0]), str(tup[1]), str(tup[3]))
-            not in _lg_msgpack.SAFE_MSGPACK_METHODS
-        ):  # pragma: no cover
-            raise ValueError(  # pragma: no cover
+            or (
+                (str(tup[0]), str(tup[1]), str(tup[3]))
+                not in _lg_msgpack.SAFE_MSGPACK_METHODS
+                and not _is_allowed_msgpack_type(str(tup[0]), str(tup[1]))
+            )
+        ):
+            raise ValueError(
                 "Blocked deserialization of unregistered msgpack method call"
             )
-        return _BASE_STRICT_EXT_HOOK(code, data)  # pragma: no cover
-    if code in (EXT_PYDANTIC_V1, EXT_PYDANTIC_V2):  # pragma: no cover
+        return _BASE_STRICT_EXT_HOOK(code, data)
+    if code in (EXT_PYDANTIC_V1, EXT_PYDANTIC_V2):
         tup = ormsgpack.unpackb(
             data, ext_hook=_strict_msgpack_ext_hook, option=ormsgpack.OPT_NON_STR_KEYS
         )
@@ -140,7 +161,7 @@ def _strict_msgpack_ext_hook(code: int, data: bytes) -> Any:
             isinstance(tup, (tuple, list))
             and len(tup) >= 3
             and _is_allowed_msgpack_type(str(tup[0]), str(tup[1]))
-        ):  # pragma: no cover
+        ):
             import importlib
 
             cls = getattr(importlib.import_module(tup[0]), tup[1])
@@ -149,12 +170,12 @@ def _strict_msgpack_ext_hook(code: int, data: bytes) -> Any:
             isinstance(tup, (tuple, list))
             and len(tup) >= 3
             and isinstance(tup[2], dict)
-        ):  # pragma: no cover
-            return tup[2]  # pragma: no cover
+        ):
+            return tup[2]
         raise ValueError(
             "Blocked deserialization of unregistered Pydantic msgpack type"
-        )  # pragma: no cover
-    return _BASE_STRICT_EXT_HOOK(code, data)  # pragma: no cover
+        )
+    return _BASE_STRICT_EXT_HOOK(code, data)
 
 
 _SERDE = JsonPlusSerializer(
@@ -195,6 +216,7 @@ class StepStatus(StrEnum):
     TOOLS = "tools"
     NODES = "nodes"
     OK = "ok"
+    ERROR = "error"
 
 
 class TaskResultStatus(StrEnum):
@@ -261,6 +283,8 @@ class ToolCallSpec(TypedDict, total=False):
     """
 
     call_id: str
+    task_id: str | None
+    input_type: Literal["list", "dict", "tool_calls"]
     index: int
     id: str | None
     name: str
@@ -289,6 +313,8 @@ class StepRequest(TypedDict, total=False):
     """Input payload for the `langgraph.<name>.step` activity (`run_step`)."""
 
     thread: str
+    instance_id: str
+    owner: str
     kind: StepKind | str
     expect: str | None
     input: PackedBlob
@@ -319,7 +345,8 @@ class StepReport(TypedDict, total=False):
     checkpoint_bundle: CheckpointBundle
     interrupt: InterruptEntry
     interrupts: list[InterruptEntry]
-    output: PackedBlob
+    output: PackedBlob | None
+    error: str
     result: PackedBlob
     node: str
     tool_calls: list[ToolCallSpec]
@@ -336,6 +363,8 @@ class ToolRequest(TypedDict, total=False):
     ckpt: str | None
     node: str
     call_id: str
+    task_id: str | None
+    input_type: Literal["list", "dict", "tool_calls"]
     index: int
     call: PackedBlob
     version: str | None
@@ -355,6 +384,7 @@ class ToolReport(TypedDict, total=False):
     status: TaskResultStatus | StepStatus | str
     output: PackedBlob
     interrupt: InterruptEntry
+    error: str
 
 
 class NodeRequest(TypedDict, total=False):
@@ -382,6 +412,7 @@ class NodeReport(TypedDict, total=False):
     status: TaskResultStatus | StepStatus | str
     output: PackedBlob
     interrupt: InterruptEntry
+    error: str
 
 
 class OrchestratorInput(TypedDict, total=False):
@@ -417,9 +448,8 @@ class OrchestratorOutput(TypedDict, total=False):
     ckpt: str | None
     version: str | None
     result: PackedBlob
-    output: PackedBlob
+    output: PackedBlob | None
     checkpoint_bundle: CheckpointBundle | Mapping[str, Any]
-    owner: str
 
 
 @runtime_checkable
@@ -465,6 +495,7 @@ CUSTOM_STATUS_INLINE_LIMIT = 16 * 1024
 # task identifier <= 79 characters, well within DTS, OpenTelemetry, and storage
 # identifier limits.
 MAX_GRAPH_NAME_LENGTH = 64
+MAX_PAYLOAD_BYTES = 950_000
 _GRAPH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
@@ -518,6 +549,7 @@ class Limits:
             `tool_retries` is not set).
         tool_retries: Optional default maximum attempts specifically for durable tool
         activities.
+        async_timeout_seconds: Timeout for bridged async operations; None disables it.
     """
 
     custom_status_limit: int = CUSTOM_STATUS_INLINE_LIMIT
@@ -527,19 +559,20 @@ class Limits:
     retries: int = 3
     tool_retries: int | None = None
     node_retries: int | None = None
+    async_timeout_seconds: float | None = 300.0
 
 
 def _versioned_activity_name(base_name: str, version: str | None) -> str:
     """Return a version-qualified activity name `langgraph.<name>@<version>.<kind>` when `version` is set."""  # noqa: E501
-    if not base_name:  # pragma: no cover
-        return base_name  # pragma: no cover
+    if not base_name:
+        return base_name
     dot_idx = base_name.rfind(".")
-    if dot_idx <= 0:  # pragma: no cover
-        return f"{base_name}@{version}" if version else base_name  # pragma: no cover
+    if dot_idx <= 0:
+        return f"{base_name}@{version}" if version else base_name
     prefix, suffix = base_name[:dot_idx], base_name[dot_idx:]
     at_idx = prefix.find("@")
-    if at_idx > 0:  # pragma: no cover
-        prefix = prefix[:at_idx]  # pragma: no cover
+    if at_idx > 0:
+        prefix = prefix[:at_idx]
     if not version:
         return f"{prefix}{suffix}"
     return f"{prefix}@{version}{suffix}"
@@ -593,6 +626,9 @@ class OrchestratorState:
                 int(self.limits["node_retries"])
                 if self.limits.get("node_retries") is not None
                 else fallback.node_retries
+            ),
+            async_timeout_seconds=self.limits.get(
+                "async_timeout_seconds", fallback.async_timeout_seconds
             ),
         )
 
@@ -668,7 +704,7 @@ class OrchestratorState:
     def apply_context_to(
         self, req: dict[str, Any], *, preserve_existing: bool = False
     ) -> dict[str, Any]:
-        """Populate `version`, `run_config`, `context`, and `checkpoint_bundle` on an.
+        """Populate `owner`, `version`, `run_config`, and checkpoint context on an.
 
         activity request dict.
         """
@@ -680,6 +716,8 @@ class OrchestratorState:
         ):
             if val is not None and (not preserve_existing or key not in req):
                 req[key] = val
+        if self.owner is not None:
+            req["owner"] = self.owner
         return req
 
     def apply_step_options_to(
@@ -733,12 +771,11 @@ class OrchestratorState:
             can_payload["run_config"] = self.run_config
         if self.context_blob is not None:
             can_payload["context"] = self.context_blob
-        if self.checkpoint_bundle is not None:
-            can_payload["checkpoint_bundle"] = self.checkpoint_bundle
         if self.limits is not None:
             can_payload["limits"] = dict(self.limits)
         if self.owner is not None:
             can_payload["owner"] = self.owner
+        _check_payload(can_payload, "continue_as_new input")
         return can_payload
 
 
@@ -750,10 +787,8 @@ def pack(value: Any) -> PackedBlob:
 
 def unpack(blob: PackedBlob | Mapping[str, Any]) -> Any:
     """Deserialize a `pack()`ed dict back into its native LangGraph/LangChain object."""
-    if not isinstance(blob, Mapping):  # pragma: no cover
-        raise ValueError(
-            "packed blob must be a mapping with 't' and 'b64' keys"
-        )  # pragma: no cover
+    if not isinstance(blob, Mapping):
+        raise ValueError("packed blob must be a mapping with 't' and 'b64' keys")
     raw_map = blob.get("__resume_map__")
     if isinstance(raw_map, Mapping):
         return {str(k): unpack(v) for k, v in raw_map.items()}
@@ -765,14 +800,12 @@ def unpack(blob: PackedBlob | Mapping[str, Any]) -> Any:
         "null",
         "bytes",
         "empty",
-    ):  # pragma: no cover
-        raise ValueError(f"unsupported packed blob type {kind!r}")  # pragma: no cover
-    if not isinstance(b64, str):  # pragma: no cover
-        raise ValueError(
-            "packed blob 'b64' field must be a base64 string"
-        )  # pragma: no cover
-    if kind == "empty":  # pragma: no cover
-        return None  # pragma: no cover
+    ):
+        raise ValueError(f"unsupported packed blob type {kind!r}")
+    if not isinstance(b64, str):
+        raise ValueError("packed blob 'b64' field must be a base64 string")
+    if kind == "empty":
+        return None
     raw = base64.b64decode(b64)
     if kind == "msgpack":
         return ormsgpack.unpackb(
@@ -783,7 +816,17 @@ def unpack(blob: PackedBlob | Mapping[str, Any]) -> Any:
 
 def _size(value: Any) -> int:
     """Return the compact UTF-8 JSON byte length of `value` for budget accounting."""
-    return len(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _check_payload(value: Any, label: str) -> None:
+    """Reject oversized complete wire payloads before scheduling or returning them."""
+    size = len((_PAYLOAD_CONVERTER.serialize(value) or "").encode("utf-8"))
+    if size > MAX_PAYLOAD_BYTES:
+        raise RunError(
+            f"{label} size ({size} bytes) exceeds the {MAX_PAYLOAD_BYTES}-byte "
+            "DTS payload limit; configure a persistent checkpointer or payload_store"
+        )
 
 
 @overload
@@ -889,8 +932,8 @@ def mark_node(
 
     an optional retry count.
     """
-    if node is None:  # pragma: no cover
-        return lambda fn: mark_node(  # pragma: no cover
+    if node is None:
+        return lambda fn: mark_node(
             fn, durable=durable, execution=execution, retries=retries
         )
     is_durable = (
@@ -1001,48 +1044,43 @@ class ToolConfig:
 
         if isinstance(durable_tools, bool):
             default_durable = durable_tools
-        elif isinstance(durable_tools, (str, bytes)):  # pragma: no cover
+        elif isinstance(durable_tools, (str, bytes)):
             is_dur, r = _parse_policy_value(
                 durable_tools.decode("utf-8")
                 if isinstance(durable_tools, bytes)
                 else durable_tools
             )
             default_durable = is_dur
-            if r is not None:  # pragma: no cover
-                default_retries = r  # pragma: no cover
-        elif isinstance(durable_tools, Mapping):  # pragma: no cover
-            default_durable = False  # pragma: no cover
-            for k, v in durable_tools.items():  # pragma: no cover
-                key = _selector_key(k)  # pragma: no cover
-                is_dur, r = _parse_policy_value(v)  # pragma: no cover
-                policy[key] = is_dur  # pragma: no cover
-                if r is not None:  # pragma: no cover
-                    retries[key] = r  # pragma: no cover
-        elif isinstance(durable_tools, Iterable):  # pragma: no cover
-            default_durable = False  # pragma: no cover
-            for item in durable_tools:  # pragma: no cover
-                name = getattr(item, "name", None) or _selector_key(
-                    item
-                )  # pragma: no cover
-                policy[str(name)] = True  # pragma: no cover
+            default_retries = r
+        elif isinstance(durable_tools, Mapping):
+            default_durable = False
+            for k, v in durable_tools.items():
+                key = _selector_key(k)
+                is_dur, r = _parse_policy_value(v)
+                policy[key] = is_dur
+                if r is not None:
+                    retries[key] = r
+        elif isinstance(durable_tools, Iterable):
+            default_durable = False
+            for item in durable_tools:
+                name = getattr(item, "name", None) or _selector_key(item)
+                policy[str(name)] = True
         else:
-            raise ValueError(
-                f"unsupported durable_tools option {durable_tools!r}"
-            )  # pragma: no cover
+            raise ValueError(f"unsupported durable_tools option {durable_tools!r}")
 
-        if tool_policy is not None:  # pragma: no cover
-            for k, v in tool_policy.items():  # pragma: no cover
-                key = _selector_key(k)  # pragma: no cover
-                is_dur, r = _parse_policy_value(v)  # pragma: no cover
-                policy[key] = is_dur  # pragma: no cover
-                if r is not None:  # pragma: no cover
-                    retries[key] = r  # pragma: no cover
+        if tool_policy is not None:
+            for k, v in tool_policy.items():
+                key = _selector_key(k)
+                is_dur, r = _parse_policy_value(v)
+                policy[key] = is_dur
+                if r is not None:
+                    retries[key] = r
 
         if isinstance(tool_retries, int):
             default_retries = tool_retries
-        elif isinstance(tool_retries, Mapping):  # pragma: no cover
-            for k, r_val in tool_retries.items():  # pragma: no cover
-                retries[_selector_key(k)] = int(r_val)  # pragma: no cover
+        elif isinstance(tool_retries, Mapping):
+            for k, r_val in tool_retries.items():
+                retries[_selector_key(k)] = int(r_val)
 
         return cls(
             default_durable=default_durable,
@@ -1061,30 +1099,30 @@ class ToolConfig:
         scoped = f"{node_name}::{tool_name}"
         bare_scoped = f"{bare_node}::{tool_name}"
         policy = self.policy or {}
-        if scoped in policy:  # pragma: no cover
-            is_durable = policy[scoped]  # pragma: no cover
-        elif bare_scoped in policy:  # pragma: no cover
-            is_durable = policy[bare_scoped]  # pragma: no cover
-        elif tool_name in policy:  # pragma: no cover
-            is_durable = policy[tool_name]  # pragma: no cover
+        if scoped in policy:
+            is_durable = policy[scoped]
+        elif bare_scoped in policy:
+            is_durable = policy[bare_scoped]
+        elif tool_name in policy:
+            is_durable = policy[tool_name]
         elif tool_obj is not None and hasattr(tool_obj, "_durable_tool"):
             is_durable = bool(getattr(tool_obj, "_durable_tool"))
         else:
             is_durable = self.default_durable
 
         retries_map = self.retries or {}
-        if scoped in retries_map:  # pragma: no cover
-            attempts = retries_map[scoped]  # pragma: no cover
-        elif bare_scoped in retries_map:  # pragma: no cover
-            attempts = retries_map[bare_scoped]  # pragma: no cover
-        elif tool_name in retries_map:  # pragma: no cover
-            attempts = retries_map[tool_name]  # pragma: no cover
+        if scoped in retries_map:
+            attempts = retries_map[scoped]
+        elif bare_scoped in retries_map:
+            attempts = retries_map[bare_scoped]
+        elif tool_name in retries_map:
+            attempts = retries_map[tool_name]
         elif tool_obj is not None and hasattr(tool_obj, "_durable_retries"):
             attempts = int(getattr(tool_obj, "_durable_retries"))
-        elif self.default_retries is not None:  # pragma: no cover
-            attempts = self.default_retries  # pragma: no cover
-        elif limits.tool_retries is not None:  # pragma: no cover
-            attempts = limits.tool_retries  # pragma: no cover
+        elif self.default_retries is not None:
+            attempts = self.default_retries
+        elif limits.tool_retries is not None:
+            attempts = limits.tool_retries
         else:
             attempts = limits.retries
         return is_durable, max(1, int(attempts))
@@ -1116,10 +1154,10 @@ def _node_candidates(graph: CompiledGraph, node_name: str) -> list[Any]:
     builder = getattr(graph, "builder", None)
     bnodes = getattr(builder, "nodes", None) or {}
     spec = bnodes.get(node_name)
-    if spec is not None:  # pragma: no cover
+    if spec is not None:
         out.append(spec)
         runnable = getattr(spec, "runnable", None)
-        if runnable is not None:  # pragma: no cover
+        if runnable is not None:
             out.append(runnable)
             if getattr(runnable, "func", None) is not None:
                 out.append(runnable.func)
@@ -1127,10 +1165,10 @@ def _node_candidates(graph: CompiledGraph, node_name: str) -> list[Any]:
                 out.append(runnable.afunc)
     pnodes = getattr(graph, "nodes", None) or {}
     pnode = pnodes.get(node_name)
-    if pnode is not None:  # pragma: no cover
+    if pnode is not None:
         out.append(pnode)
         bound = getattr(pnode, "bound", None)
-        if bound is not None:  # pragma: no cover
+        if bound is not None:
             out.append(bound)
             if getattr(bound, "func", None) is not None:
                 out.append(bound.func)
@@ -1181,10 +1219,8 @@ class NodeConfig:
     def __post_init__(self) -> None:
         if self.max_concurrency is not None:
             mc = int(self.max_concurrency)
-            if mc < 1:  # pragma: no cover
-                raise ValueError(
-                    "node_max_concurrency must be >= 1 or None"
-                )  # pragma: no cover
+            if mc < 1:
+                raise ValueError("node_max_concurrency must be >= 1 or None")
             self.max_concurrency = mc
 
     @classmethod
@@ -1209,65 +1245,62 @@ class NodeConfig:
         default_durable = False
         default_retries: int | None = None
 
-        if isinstance(durable_nodes, bool):  # pragma: no cover
+        if isinstance(durable_nodes, bool):
             default_durable = durable_nodes
-        elif isinstance(durable_nodes, (str, bytes)):  # pragma: no cover
-            is_dur, r = _parse_policy_value(  # pragma: no cover
+        elif isinstance(durable_nodes, (str, bytes)):
+            is_dur, r = _parse_policy_value(
                 durable_nodes.decode("utf-8")
                 if isinstance(durable_nodes, bytes)
                 else durable_nodes
             )
-            default_durable = is_dur  # pragma: no cover
-            if r is not None:  # pragma: no cover
-                default_retries = r  # pragma: no cover
-        elif isinstance(durable_nodes, Mapping):  # pragma: no cover
-            default_durable = False  # pragma: no cover
-            for k, v in durable_nodes.items():  # pragma: no cover
-                key = (  # pragma: no cover
+            default_durable = is_dur
+            default_retries = r
+        elif isinstance(durable_nodes, Mapping):
+            default_durable = False
+            for k, v in durable_nodes.items():
+                key = (
                     getattr(k, "name", None)
                     or getattr(k, "__name__", None)
                     or _selector_key(k)
                 )
-                is_dur, r = _parse_policy_value(v)  # pragma: no cover
-                policy[str(key)] = is_dur  # pragma: no cover
-                if r is not None:  # pragma: no cover
-                    retries[str(key)] = r  # pragma: no cover
-        elif isinstance(durable_nodes, Iterable):  # pragma: no cover
-            default_durable = False  # pragma: no cover
-            for item in durable_nodes:  # pragma: no cover
-                name = (  # pragma: no cover
+                is_dur, r = _parse_policy_value(v)
+                policy[str(key)] = is_dur
+                if r is not None:
+                    retries[str(key)] = r
+        elif isinstance(durable_nodes, Iterable):
+            default_durable = False
+            for item in durable_nodes:
+                name = (
                     getattr(item, "name", None)
                     or getattr(item, "__name__", None)
                     or _selector_key(item)
                 )
-                policy[str(name)] = True  # pragma: no cover
+                policy[str(name)] = True
         else:
-            raise ValueError(
-                f"unsupported durable_nodes option {durable_nodes!r}"
-            )  # pragma: no cover
+            raise ValueError(f"unsupported durable_nodes option {durable_nodes!r}")
 
-        if node_policy is not None:  # pragma: no cover
-            for k, v in node_policy.items():  # pragma: no cover
-                key = (  # pragma: no cover
+        if node_policy is not None:
+            for k, v in node_policy.items():
+                key = (
                     getattr(k, "name", None)
                     or getattr(k, "__name__", None)
                     or _selector_key(k)
                 )
-                is_dur, r = _parse_policy_value(v)  # pragma: no cover
-                policy[str(key)] = is_dur  # pragma: no cover
-                if r is not None:  # pragma: no cover
-                    retries[str(key)] = r  # pragma: no cover
+                is_dur, r = _parse_policy_value(v)
+                policy[str(key)] = is_dur
+                if r is not None:
+                    retries[str(key)] = r
 
-        if isinstance(node_retries, int):  # pragma: no cover
-            default_retries = node_retries  # pragma: no cover
-        elif isinstance(node_retries, Mapping):  # pragma: no cover
-            for k, r_val in node_retries.items():  # pragma: no cover
-                key = (  # pragma: no cover
+        if isinstance(node_retries, int):
+            default_retries = node_retries
+        elif isinstance(node_retries, Mapping):
+            for k, r_val in node_retries.items():
+                key = (
                     getattr(k, "name", None)
                     or getattr(k, "__name__", None)
                     or _selector_key(k)
                 )
-                retries[str(key)] = int(r_val)  # pragma: no cover
+                retries[str(key)] = int(r_val)
 
         return cls(
             default_durable=default_durable,
@@ -1298,26 +1331,26 @@ class NodeConfig:
             ):
                 marked_retries = int(getattr(cand, "_durable_retries"))
 
-        if node_name in policy:  # pragma: no cover
-            is_durable = policy[node_name]  # pragma: no cover
-        elif bare_node in policy:  # pragma: no cover
-            is_durable = policy[bare_node]  # pragma: no cover
+        if node_name in policy:
+            is_durable = policy[node_name]
+        elif bare_node in policy:
+            is_durable = policy[bare_node]
         elif marked_durable is not None:
             is_durable = marked_durable
         else:
             is_durable = self.default_durable
 
         retries_map = self.retries or {}
-        if node_name in retries_map:  # pragma: no cover
-            attempts = retries_map[node_name]  # pragma: no cover
-        elif bare_node in retries_map:  # pragma: no cover
-            attempts = retries_map[bare_node]  # pragma: no cover
+        if node_name in retries_map:
+            attempts = retries_map[node_name]
+        elif bare_node in retries_map:
+            attempts = retries_map[bare_node]
         elif marked_retries is not None:
             attempts = marked_retries
-        elif self.default_retries is not None:  # pragma: no cover
-            attempts = self.default_retries  # pragma: no cover
-        elif limits.node_retries is not None:  # pragma: no cover
-            attempts = limits.node_retries  # pragma: no cover
+        elif self.default_retries is not None:
+            attempts = self.default_retries
+        elif limits.node_retries is not None:
+            attempts = limits.node_retries
         else:
             attempts = limits.retries
         return is_durable, max(1, int(attempts))
@@ -1339,25 +1372,25 @@ def _effective_node_config(
 
 
 def _selector_key(selector: Selector | Any) -> str:
-    if isinstance(selector, str):  # pragma: no cover
-        return selector  # pragma: no cover
-    tool_attr = getattr(selector, "tool", None)  # pragma: no cover
-    if tool_attr is not None:  # pragma: no cover
-        node = getattr(selector, "node", None)  # pragma: no cover
-        return f"{node}::{tool_attr}" if node else str(tool_attr)  # pragma: no cover
-    if isinstance(selector, tuple) and len(selector) == 2:  # pragma: no cover
-        return f"{selector[0]}::{selector[1]}"  # pragma: no cover
-    return str(selector)  # pragma: no cover
+    if isinstance(selector, str):
+        return selector
+    tool_attr = getattr(selector, "tool", None)
+    if tool_attr is not None:
+        node = getattr(selector, "node", None)
+        return f"{node}::{tool_attr}" if node else str(tool_attr)
+    if isinstance(selector, tuple) and len(selector) == 2:
+        return f"{selector[0]}::{selector[1]}"
+    return str(selector)
 
 
 def _parse_policy_value(value: PolicyValue | str) -> tuple[bool, int | None]:
-    if isinstance(value, bool):  # pragma: no cover
-        return value, None  # pragma: no cover
-    if isinstance(value, int):  # pragma: no cover
-        return value > 0, value  # pragma: no cover
+    if isinstance(value, bool):
+        return value, None
+    if isinstance(value, int):
+        return value > 0, value
     s = str(getattr(value, "value", value)).lower()
-    if s in (ExecutionMode.DURABLE, "true"):  # pragma: no cover
-        return True, None  # pragma: no cover
+    if s in (ExecutionMode.DURABLE, "true"):
+        return True, None
     if s in (ExecutionMode.LOCAL, "false"):
         return False, None
     raise ValueError(f"unsupported tool policy value {value!r}")

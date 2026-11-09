@@ -23,8 +23,7 @@ To keep async checkpointers and connections alive across every superstep activit
     coroutines directly to that loop via `asyncio.run_coroutine_threadsafe()`.
   - Otherwise, we lazily start a single daemon event-loop thread
     (`langgraph-durable-async-loop`)
-    and rebind `saver.loop` / `saver.lock` to it so all supersteps share one
-    long-lived event loop.
+    so all supersteps share one long-lived event loop without rebinding caller state.
 """
 
 from __future__ import annotations
@@ -64,7 +63,7 @@ def _get_bg_loop() -> asyncio.AbstractEventLoop:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 _BG_LOOP = loop
-                ready.set()
+                loop.call_soon(ready.set)
                 loop.run_forever()
 
             _BG_THREAD = threading.Thread(
@@ -91,17 +90,17 @@ def _run_async(
     import concurrent.futures
 
     eff_timeout = (
-        float(timeout)
+        timeout
         if timeout is not None
-        else float(getattr(graph, "_durable_async_timeout", DEFAULT_ASYNC_TIMEOUT))
+        else getattr(graph, "_durable_async_timeout", DEFAULT_ASYNC_TIMEOUT)
     )
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
     saver = getattr(graph, "checkpointer", None)
     saver_loop = getattr(saver, "loop", None)
     if isinstance(saver_loop, asyncio.AbstractEventLoop) and saver_loop.is_running():
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
         if running is not saver_loop:
             fut = asyncio.run_coroutine_threadsafe(coro, saver_loop)
             try:
@@ -109,25 +108,43 @@ def _run_async(
             except (
                 TimeoutError,
                 concurrent.futures.TimeoutError,
-            ) as exc:  # pragma: no cover
-                fut.cancel()  # pragma: no cover
-                raise TimeoutError(  # pragma: no cover
+            ) as exc:
+                fut.cancel()
+                raise TimeoutError(
                     f"async operation timed out after {eff_timeout}s"
                 ) from exc
     target_loop = _get_bg_loop()
-    if saver is not None and hasattr(saver, "loop"):
-        with _BG_LOCK:
-            try:
-                cur_loop = getattr(saver, "loop", None)
-                if not (
-                    isinstance(cur_loop, asyncio.AbstractEventLoop)
-                    and cur_loop.is_running()
-                ):
-                    saver.loop = target_loop
-                    if hasattr(saver, "lock"):  # pragma: no cover
-                        saver.lock = asyncio.Lock()
-            except Exception:  # pragma: no cover
-                pass  # pragma: no cover
+    if running is target_loop:
+        # Never synchronously wait for a coroutine on the loop we are blocking.
+        worker_loop = asyncio.new_event_loop()
+        ready = threading.Event()
+
+        def run_worker() -> None:
+            asyncio.set_event_loop(worker_loop)
+            worker_loop.call_soon(ready.set)
+            worker_loop.run_forever()
+            pending = asyncio.all_tasks(worker_loop)
+            for pending_task in pending:
+                pending_task.cancel()
+            if pending:
+                worker_loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            worker_loop.close()
+
+        worker = threading.Thread(target=run_worker, daemon=True)
+        worker.start()
+        ready.wait()
+        future = asyncio.run_coroutine_threadsafe(coro, worker_loop)
+        try:
+            return future.result(timeout=eff_timeout)
+        except (TimeoutError, concurrent.futures.TimeoutError) as exc:
+            future.cancel()
+            raise TimeoutError(
+                f"async operation timed out after {eff_timeout}s"
+            ) from exc
+        finally:
+            worker_loop.call_soon_threadsafe(worker_loop.stop)
     fut = asyncio.run_coroutine_threadsafe(coro, target_loop)
     try:
         return fut.result(timeout=eff_timeout)
@@ -141,23 +158,23 @@ def _is_async_saver(saver: Checkpointer | None) -> bool:
 
     Covers async SQLite, PostgreSQL, MongoDB, and savers without sync get_tuple.
     """
-    if saver is None:  # pragma: no cover
-        return False  # pragma: no cover
+    if saver is None:
+        return False
     cls = type(saver)
     if cls.__name__.startswith("Async"):
         return True
     loop = getattr(saver, "loop", None)
-    if isinstance(loop, asyncio.AbstractEventLoop):  # pragma: no cover
-        return True  # pragma: no cover
+    if isinstance(loop, asyncio.AbstractEventLoop):
+        return True
     # Any BaseCheckpointSaver subclass that overrides aget_tuple but leaves sync
     # get_tuple
     # as the base NotImplementedError stub is an async-only checkpointer.
-    if issubclass(cls, BaseCheckpointSaver):  # pragma: no cover
+    if issubclass(cls, BaseCheckpointSaver):
         if (
             cls.get_tuple is BaseCheckpointSaver.get_tuple
             and cls.aget_tuple is not BaseCheckpointSaver.aget_tuple
-        ):  # pragma: no cover
-            return True  # pragma: no cover
+        ):
+            return True
     return False
 
 

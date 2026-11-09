@@ -12,11 +12,30 @@ It includes:
 - **Turnkey HTTP Lifecycle Endpoints**:
   - `POST /api/graphs/expense_approval/start` - starts a durable workflow run (`202 Accepted`) and returns `instanceId`, `threadId`, `statusQueryGetUri`, and `respondUri`.
   - `GET /api/graphs/expense_approval/status/{instance_id}` - returns `runtimeStatus`, `pendingInterrupts` (each with `interruptId`, `value`, and `respondUrl`), and completed `output`.
-  - `POST /api/graphs/expense_approval/respond/{instance_id}[/{interrupt_id}]` - delivers a human JSON decision (e.g., `{"approved": true, "reviewer": "vp-finance", "notes": "..."}`) to resume a paused `interrupt()`.
+  - `POST /api/graphs/expense_approval/respond/{instance_id}[/{interrupt_id}]` - delivers a human JSON decision (e.g., `{"approved": true, "notes": "..."}`) to resume a paused `interrupt()`. The server stamps the verified approver identity, never trusting a body-supplied reviewer.
   - `GET /api/health` - returns health status and registered graph names.
 - **Cross-Worker HTTP Interrupt Resume**: Proving that the HTTP host and DTS workers are decoupled - `worker-1` can be terminated while waiting for human input, and `worker-2` seamlessly resumes the paused graph when the HTTP `/respond` request arrives.
 
 ## Workflow Architecture
+
+### Supported Production Topologies
+
+- **Topology A (recommended for standalone `DurableTaskSchedulerWorker`):**
+  Azure Functions, ACA, or App Service serves thin HTTP control routes with
+  `start_worker=False`. Dedicated worker replicas run on ACA or AKS, scaled with
+  the `azure-durabletask-scheduler` KEDA scaler, or on a Dedicated App Service
+  plan with Always On. Use the same scheduler connection and task hub for every
+  HTTP host and worker. The automated demo clears conflicting child scheduler
+  variables and explicitly forwards the parent's resolved endpoint and hub.
+- **Topology B (local development / Dedicated Always-On only):** explicitly
+  enable `start_worker=True` (or `START_EMBEDDED_WORKER=1`) for a single-process
+  `func start` session or a Dedicated plan with Always On enabled.
+
+Every helper and this sample default to **no embedded worker**. Consumption and
+Flex plans must use topology A: their scale controller cannot see an HTTP-only
+app's DTS thread, may terminate it mid-activity, and can scale to zero after
+`/respond` returns 200. That response confirms event delivery, not worker liveness.
+Run a dedicated worker before using the default `local.settings.json.example`.
 
 ```text
 HTTP Client / Approver
@@ -33,7 +52,8 @@ HTTP Client / Approver
   │     💥 worker-1 (PID 1) is hard-killed while workflow is paused at interrupt()!
   │
   ├─ 3. POST /api/graphs/expense_approval/respond/{instanceId}/{interruptId}
-  │       Body: {"approved": true, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}
+  │       Body: {"approved": true, "notes": "Approved for Q4 travel"}
+  │       Verified caller: vp-finance (distinct from the expense starter)
   │       │
   │       ▼
   │     [worker-2 (PID 2)]
@@ -112,6 +132,17 @@ authorization is retained), not self-asserted `x-ms-client-principal-id` headers
 Ownership is preserved across continue-as-new generations; unknown ownership or
 a failed lookup is denied.
 
+`AuthLevel.ANONYMOUS` with EasyAuth or an `identity_provider` still enforces
+ownership. Without either identity source, ANONYMOUS requires explicit
+`require_instance_owner=False`; omission raises `ValueError`.
+The sample's `respond_authorizer` requires a caller distinct from the starter
+and present in the comma-separated `APPROVER_PRINCIPAL_IDS` environment setting
+(stable, token-verified principal IDs, not display names). In production configure
+this allowlist; an empty allowlist denies every response. The approver can respond,
+but cannot read the owner's status route. The owner can share the returned
+interrupt response URL with the approver. General-purpose apps without a callback
+retain owner-only responses.
+
 For the **loopback-only local demo**, explicitly opt in to the sample's insecure
 identity stub before launching `sample.py`, `func start`, or `function_app.py`:
 
@@ -123,7 +154,9 @@ export LOCAL_DEMO_IDENTITY=1
 $env:LOCAL_DEMO_IDENTITY = "1"
 ```
 
-The stub accepts `x-demo-user: demo-user` only. This is not authentication and
+The stub accepts `x-demo-user: demo-user` (starter/status reader) and
+`x-demo-user: vp-finance` (approver). The starter cannot approve their own expense.
+These headers are not authentication and
 must never be enabled in a deployed app or exposed beyond loopback. The automated
 demo sends this header; the manual commands below do too. To deliberately use
 shared Function-key-only access instead of user isolation, set
@@ -204,9 +237,9 @@ You can also run the HTTP Function host and two separate worker processes intera
 
    # Submit human approval
    curl -s -X POST http://localhost:7071/api/graphs/expense_approval/respond/<instanceId>/<interruptId> \
-     -H "x-demo-user: demo-user" \
+     -H "x-demo-user: vp-finance" \
      -H "Content-Type: application/json" \
-     -d '{"approved": true, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}'
+     -d '{"approved": true, "notes": "Approved for Q4 travel"}'
    ```
 
    **PowerShell (`Invoke-RestMethod`):**
@@ -222,18 +255,30 @@ You can also run the HTTP Function host and two separate worker processes intera
 
    Invoke-RestMethod -Method Post `
      -Uri "http://localhost:7071/api/graphs/expense_approval/respond/$($start.instanceId)/$interruptId" `
-     -Headers $identity `
+     -Headers @{"x-demo-user" = "vp-finance"} `
      -ContentType "application/json" `
-     -Body '{"approved": true, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}'
+     -Body '{"approved": true, "notes": "Approved for Q4 travel"}'
    ```
 
 ## Code Walkthrough
 
+For **single-process local development only**, set `START_EMBEDDED_WORKER=1`
+before `func start`, or run `python function_app.py --embedded-worker`.
+Do not enable this setting on Consumption/Flex. `sample.py` always disables the
+embedded worker because it intentionally demonstrates two dedicated processes.
+
 ### 1. Expose Any Durable Graph as an Azure Functions v2 App (`function_app.py`)
 
 ```python
-reg = attach_durability(build_expense_graph(_default_worker_id), name="expense_approval")
-app = create_function_app(reg, start_worker=_start_embedded)
+reg = attach_durability(
+    build_expense_graph(_default_worker_id), name="expense_approval"
+)
+app = create_function_app(
+    reg,
+    start_worker=False,
+    respond_authorizer=_authorize_expense_response,
+    **_identity_options(),
+)
 ```
 
 `create_function_app(reg)` registers the HTTP routes (`/api/graphs/expense_approval/start`, `/status/{instance_id}`, `/respond/{instance_id}`, `/respond/{instance_id}/{interrupt_id}`, and `/api/health`) and optionally manages the embedded DTS worker lifecycle alongside the Function host.
@@ -252,7 +297,7 @@ def manager_review(state: ExpenseState) -> dict[str, Any]:
         }
     )
     approved = bool(human_decision.get("approved", False))
-    reviewer = str(human_decision.get("reviewer") or "manager")
+    reviewer = str(human_decision["responder"])  # Stamped by the HTTP handler.
     notes = str(human_decision.get("notes") or "")
     trace_entry = f"manager_review:worker={worker_id}:pid={os.getpid()}"
     return {

@@ -18,12 +18,13 @@ to set the human response, and resumes seamlessly across **two separate worker p
   5. Spawns Worker 2 (`worker-2`, OS `PID 2`) and **hard-kills Worker 1 (`proc_1.kill()`)** while
      the graph is paused waiting for the human response!
   6. Sends the human approval response via HTTP `POST /api/graphs/expense_approval/respond/{instanceId}/{interruptId}`
-     (`{"approved": True, "reviewer": "vp-finance", "notes": "Approved for Q4 travel"}`).
+     (`{"approved": True, "notes": "Approved for Q4 travel"}`), authenticated as the
+     independent `vp-finance` approver; the server stamps the responder identity.
   7. Polls `GET /api/graphs/expense_approval/status/{instanceId}` until `runtimeStatus == "COMPLETED"`
      and verifies that pre-interrupt steps ran on `worker-1 (PID 1)` and post-resume steps
      (`manager_review` and `process_payout`) ran on `worker-2 (PID 2)` (`PID 1 != PID 2`).
   8. Starts a second instance (`EXP-502`), pauses at `interrupt()`, and POSTs a rejection response
-     (`{"approved": False, "reviewer": "vp-finance", "notes": "Missing receipt"}`) to
+     (`{"approved": False, "notes": "Missing receipt"}`) as `vp-finance` to
      `POST /api/graphs/expense_approval/respond/{instanceId}` to verify the rejection branch.
 """
 
@@ -50,7 +51,9 @@ FUNC_APP_PATH = _HERE / "function_app.py"
 
 
 def _load_function_app_module() -> Any:
-    spec = importlib.util.spec_from_file_location("azure_functions_hitl_app", FUNC_APP_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "azure_functions_hitl_app", FUNC_APP_PATH
+    )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
@@ -59,16 +62,28 @@ def _load_function_app_module() -> Any:
 
 
 def _resolve_endpoint() -> str | None:
-    return (
-        os.environ.get("DTS_ENDPOINT")
+    endpoint = (
+        os.environ.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+        or os.environ.get("DTS_CONNECTION_STRING")
+        or os.environ.get("DTS_ENDPOINT")
         or os.environ.get("DTS_EMULATOR")
-        or os.environ.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+    )
+    return (
+        "127.0.0.1:8080"
+        if endpoint and endpoint.strip().lower() in ("1", "true", "yes")
+        else endpoint
     )
 
 
-def _http_json(method: str, url: str, body: Any = None) -> tuple[int, dict[str, Any]]:
+def _http_json(
+    method: str,
+    url: str,
+    body: Any = None,
+    *,
+    caller: str = "demo-user",
+) -> tuple[int, dict[str, Any]]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"x-demo-user": "demo-user"}
+    headers = {"x-demo-user": caller}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -86,29 +101,49 @@ def _spawn_worker_subprocess(
     graph_name: str,
     *,
     endpoint: str,
+    taskhub: str | None = None,
     readiness_timeout: float = 30.0,
 ) -> tuple[subprocess.Popen[str], int]:
     """Spawn a separate OS process running `function_app.py --worker <worker_id>`."""
     child_env = os.environ.copy()
     src_dir = next(
-        (str(p / "libs" / "azure-compute") for p in Path(__file__).resolve().parents if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()),
+        (
+            str(p / "libs" / "azure-compute")
+            for p in Path(__file__).resolve().parents
+            if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()
+        ),
         str(Path(__file__).resolve().parent.parent / "src"),
     )
     existing_pp = child_env.get("PYTHONPATH", "")
-    child_env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else src_dir
+    child_env["PYTHONPATH"] = (
+        f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else src_dir
+    )
     child_env["START_EMBEDDED_WORKER"] = "0"
-    if not (
-        child_env.get("DTS_ENDPOINT")
-        or child_env.get("DTS_EMULATOR")
-        or child_env.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+    resolved = sdk_options(endpoint, taskhub=taskhub)
+    for key in (
+        "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
+        "DTS_CONNECTION_STRING",
+        "DTS_ENDPOINT",
+        "DTS_EMULATOR",
+        "DTS_TASKHUB",
+        "TASKHUB_NAME",
     ):
-        if "endpoint=" in endpoint.lower():
-            child_env["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"] = endpoint
-        else:
-            child_env["DTS_ENDPOINT"] = endpoint
+        child_env.pop(key, None)
+    if "endpoint=" in endpoint.lower():
+        child_env["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"] = endpoint
+    else:
+        child_env["DTS_ENDPOINT"] = endpoint
+    child_env["DTS_TASKHUB"] = resolved["taskhub"]
 
     proc = subprocess.Popen(
-        [sys.executable, str(FUNC_APP_PATH), "--worker", worker_id, "--name", graph_name],
+        [
+            sys.executable,
+            str(FUNC_APP_PATH),
+            "--worker",
+            worker_id,
+            "--name",
+            graph_name,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -155,7 +190,10 @@ def _spawn_worker_subprocess(
                 if worker_pid is not None:
                     break
         if worker_pid is None:
-            detail = f"Worker subprocess {worker_id!r} failed to start. Output:\n" + "\n".join(captured)
+            detail = (
+                f"Worker subprocess {worker_id!r} failed to start. Output:\n"
+                + "\n".join(captured)
+            )
             if eof:
                 raise RuntimeError(detail)
             raise TimeoutError(detail)
@@ -180,7 +218,9 @@ def _poll_until_interrupt(status_url: str, *, timeout: float = 60.0) -> dict[str
         if payload.get("pendingInterrupts"):
             return payload
         if payload.get("runtimeStatus") in ("FAILED", "TERMINATED", "COMPLETED"):
-            raise AssertionError(f"Run reached {payload.get('runtimeStatus')} before interrupt: {payload}")
+            raise AssertionError(
+                f"Run reached {payload.get('runtimeStatus')} before interrupt: {payload}"
+            )
         time.sleep(delay)
         delay = min(0.25, delay * 1.3)
     raise TimeoutError(f"Timed out waiting for pendingInterrupts at {status_url}")
@@ -208,6 +248,9 @@ def run_azure_functions_two_worker_demo(
     graph_name: str = "expense_approval",
 ) -> dict[str, Any]:
     """Run the end-to-end Azure Functions HITL two-worker verification and return the summary."""
+    os.environ["START_EMBEDDED_WORKER"] = (
+        "0"  # This demo always uses dedicated workers.
+    )
     func_mod = _load_function_app_module()
     dts_opts = sdk_options(endpoint)
     func_app = func_mod.build_expense_function_app(
@@ -225,11 +268,23 @@ def run_azure_functions_two_worker_demo(
         try:
             # Verify /api/health
             h_code, h_body = _http_json("GET", f"{api_base}/health")
-            assert h_code == 200 and h_body["status"] == "healthy" and graph_name in h_body["graphs"]
-            print(f"[1/7] Azure Functions HTTP host listening at {api_base} (health={h_body['status']})", flush=True)
+            assert (
+                h_code == 200
+                and h_body["status"] == "healthy"
+                and graph_name in h_body["graphs"]
+            )
+            print(
+                f"[1/7] Azure Functions HTTP host listening at {api_base} (health={h_body['status']})",
+                flush=True,
+            )
 
             # Spawn Worker 1 (OS Process 1)
-            proc_1, pid_1 = _spawn_worker_subprocess("worker-1", graph_name, endpoint=endpoint)
+            proc_1, pid_1 = _spawn_worker_subprocess(
+                "worker-1",
+                graph_name,
+                endpoint=endpoint,
+                taskhub=dts_opts["taskhub"],
+            )
             print(f"[2/7] Spawned Worker 1 (worker-1) -> OS PID={pid_1}", flush=True)
 
             # Start Expense EXP-501 via POST /api/graphs/{graph_name}/start
@@ -243,7 +298,9 @@ def run_azure_functions_two_worker_demo(
                     "category": "conference",
                 },
             )
-            assert start_code == 202, f"Expected 202 Accepted, got {start_code}: {start_1}"
+            assert start_code == 202, (
+                f"Expected 202 Accepted, got {start_code}: {start_1}"
+            )
             iid_1 = start_1["instanceId"]
             status_url_1 = start_1["statusQueryGetUri"]
 
@@ -266,8 +323,15 @@ def run_azure_functions_two_worker_demo(
             )
 
             # Spawn Worker 2 (OS Process 2) and hard-kill Worker 1 while the workflow is paused at interrupt()!
-            proc_2, pid_2 = _spawn_worker_subprocess("worker-2", graph_name, endpoint=endpoint)
-            assert pid_1 != pid_2, f"Expected distinct worker PIDs, got pid_1={pid_1} == pid_2={pid_2}"
+            proc_2, pid_2 = _spawn_worker_subprocess(
+                "worker-2",
+                graph_name,
+                endpoint=endpoint,
+                taskhub=dts_opts["taskhub"],
+            )
+            assert pid_1 != pid_2, (
+                f"Expected distinct worker PIDs, got pid_1={pid_1} == pid_2={pid_2}"
+            )
             proc_1.kill()
             proc_1.wait(timeout=10)
             proc_1 = None
@@ -283,9 +347,9 @@ def run_azure_functions_two_worker_demo(
                 respond_url_1,
                 {
                     "approved": True,
-                    "reviewer": "vp-finance",
                     "notes": "Approved for Q4 travel",
                 },
+                caller="vp-finance",
             )
             assert resp_code_1 == 200 and resp_body_1["resumed"] is True
             print(
@@ -334,16 +398,19 @@ def run_azure_functions_two_worker_demo(
             iid_2 = start_2["instanceId"]
             status_url_2 = start_2["statusQueryGetUri"]
             paused_2 = _poll_until_interrupt(status_url_2, timeout=60.0)
-            assert paused_2["pendingInterrupts"][0]["value"]["policy_status"] == "WITHIN_STANDARD_LIMIT"
+            assert (
+                paused_2["pendingInterrupts"][0]["value"]["policy_status"]
+                == "WITHIN_STANDARD_LIMIT"
+            )
 
             resp_code_2, resp_body_2 = _http_json(
                 "POST",
                 f"{api_base}/graphs/{graph_name}/respond/{iid_2}",
                 {
                     "approved": False,
-                    "reviewer": "vp-finance",
                     "notes": "Missing itemized receipt",
                 },
+                caller="vp-finance",
             )
             assert resp_code_2 == 200 and resp_body_2["resumed"] is True
             done_2 = _poll_until_completed(status_url_2, timeout=60.0)
@@ -356,6 +423,7 @@ def run_azure_functions_two_worker_demo(
 
             assert out_2["expense_id"] == "EXP-502"
             assert out_2["approved"] is False
+            assert out_2["reviewer"] == "vp-finance"
             assert out_2["final_status"] == "REJECTED"
             assert out_2["payout_reference"] == "NONE"
             assert out_2["review_notes"] == "Missing itemized receipt"
@@ -386,8 +454,12 @@ def main() -> None:
             except OSError:
                 pass
     if not endpoint:
-        print("Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run.")
-        print("Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest")
+        print(
+            "Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run."
+        )
+        print(
+            "Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest"
+        )
         sys.exit(0)
 
     summary = run_azure_functions_two_worker_demo(endpoint)

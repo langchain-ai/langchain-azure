@@ -14,6 +14,7 @@ from typing import Annotated, TypedDict
 
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_azure_compute.graph import attach_durability, sdk_options
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -21,8 +22,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from langgraph.store.sqlite import SqliteStore
-
-from langchain_azure_compute.graph import attach_durability, sdk_options
 
 
 @dataclass
@@ -35,20 +34,25 @@ class ChatState(TypedDict):
     user_id: str
 
 
-def assistant_node(state: ChatState, config: RunnableConfig, runtime: Runtime[AppContext]) -> dict:
+def assistant_node(
+    state: ChatState, config: RunnableConfig, runtime: Runtime[AppContext]
+) -> dict:
     uid = state["user_id"]
     tenant = runtime.context.tenant_id if runtime.context else "default"
     channel = (config.get("configurable") or {}).get("channel", "web")
-    last_user_msg = state["messages"][-1].content
+    human = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    if not human.id:
+        raise ValueError("Each input HumanMessage needs a stable checkpointed ID")
+    last_user_msg = human.content
     ns = ("memories", tenant, uid)
-
-    existing = runtime.store.get(ns, "history")
-    facts = list(existing.value.get("facts", [])) if existing and existing.value else []
-    facts.append(str(last_user_msg))
+    assert runtime.store is not None
+    fact_ns = (*ns, "facts")
+    runtime.store.put(fact_ns, human.id, {"fact": str(last_user_msg)})
+    facts = [item.value["fact"] for item in runtime.store.search(fact_ns, limit=1000)]
     runtime.store.put(ns, "history", {"facts": facts, "channel": channel})
 
     reply = f"[{tenant}/{channel}] Turn #{len(facts)} recorded for {uid}: remembered {len(facts)} fact(s)."
-    return {"messages": [AIMessage(content=reply)]}
+    return {"messages": [AIMessage(content=reply, id=f"reply-{human.id}")]}
 
 
 def main() -> None:
@@ -68,13 +72,19 @@ def main() -> None:
             except OSError:
                 pass
     if not endpoint:
-        print("Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run.")
-        print("Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest")
+        print(
+            "Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run."
+        )
+        print(
+            "Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest"
+        )
         sys.exit(0)
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmp:
         cp_conn = sqlite3.connect(Path(tmp) / "checkpoints.db", check_same_thread=False)
-        store_conn = sqlite3.connect(Path(tmp) / "store.db", check_same_thread=False, isolation_level=None)
+        store_conn = sqlite3.connect(
+            Path(tmp) / "store.db", check_same_thread=False, isolation_level=None
+        )
         saver = SqliteSaver(cp_conn)
         store = SqliteStore(store_conn)
         store.setup()
@@ -98,7 +108,12 @@ def main() -> None:
 
             # Turn 1 on shared_thread
             run1 = client.start(
-                {"messages": [HumanMessage(content="I prefer window seats.")], "user_id": "user-42"},
+                {
+                    "messages": [
+                        HumanMessage(content="I prefer window seats.", id="turn-1")
+                    ],
+                    "user_id": "user-42",
+                },
                 thread_id=shared_thread,
                 config=cfg,
                 context=ctx,
@@ -108,7 +123,14 @@ def main() -> None:
 
             # Turn 2 on the same shared_thread (accumulates messages in SqliteSaver + facts in SqliteStore)
             run2 = client.start(
-                {"messages": [HumanMessage(content="I also like boutique hotels.")], "user_id": "user-42"},
+                {
+                    "messages": [
+                        HumanMessage(
+                            content="I also like boutique hotels.", id="turn-2"
+                        )
+                    ],
+                    "user_id": "user-42",
+                },
                 thread_id=shared_thread,
                 config=cfg,
                 context=ctx,
@@ -116,7 +138,10 @@ def main() -> None:
             out2 = run2.wait_result(timeout=30)
             print("Turn 2 reply:", out2["messages"][-1].content)
             print("Total messages in thread:", len(out2["messages"]))
-            print("SqliteStore facts:", store.get(("memories", "acme-corp", "user-42"), "history").value)
+            print(
+                "SqliteStore facts:",
+                store.get(("memories", "acme-corp", "user-42"), "history").value,
+            )
         finally:
             worker.stop()
             sdk.close()

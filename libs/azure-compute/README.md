@@ -228,7 +228,8 @@ builder.add_node("approve", manager_gate)
 builder.add_node("tools", ToolNode([refund_order]))
 builder.add_edge(START, "approve")
 builder.add_conditional_edges(
-    "approve", lambda s: "tools" if s.get("approved") else END,
+    "approve",
+    lambda s: "tools" if s.get("approved") else END,
     {"tools": "tools", END: END},
 )
 builder.add_edge("tools", END)
@@ -272,12 +273,74 @@ Key capabilities include:
   `/status/{instanceId}`, and `/respond/{instanceId}/{interruptId}` routes on Azure
   Functions Python v2.
 
-  Non-anonymous Function apps require verified per-instance identity through Azure
+  Function apps require verified per-instance identity through Azure
   EasyAuth or an `identity_provider` token-validation callback. A Function key alone
-  does not identify a user. `require_instance_owner=False` explicitly selects shared,
+  does not identify a user. This also applies to `AuthLevel.ANONYMOUS` behind
+  EasyAuth: gateway authentication does not disable instance ownership checks.
+  ANONYMOUS with no identity source requires explicit `require_instance_owner=False`;
+  omission raises `ValueError`. False explicitly selects shared,
   platform-key-authorized access without user isolation. See the
   [Functions sample identity contract](../../samples/langgraph-durabletask/10_azure_functions_hitl/README.md#identity-and-ownership-contract)
   for deployment requirements and the opt-in loopback demo.
+
+#### Supported Functions and Worker Topologies
+
+- **Topology A (recommended):** Azure Functions, ACA, or App Service serves thin
+  HTTP control routes with `start_worker=False` (the default on every helper).
+  Dedicated `DurableTaskSchedulerWorker` replicas run on ACA or AKS, scaled by
+  the `azure-durabletask-scheduler` KEDA scaler, or on a Dedicated App Service plan
+  with Always On. The HTTP host and all workers must use the same scheduler and hub.
+- **Topology B (local development / Dedicated Always-On only):**
+  explicitly set `start_worker=True` for single-process `func start`, local Python
+  testing, or a Dedicated plan with Always On enabled.
+
+An embedded worker is **not supported on Consumption or Flex**. It is not an
+Azure Functions trigger: the scale controller cannot see DTS activities, may kill
+the host mid-activity on scale-in, and can scale to zero after `/respond` returns,
+leaving queued work stalled. A successful HTTP response means the event was queued,
+not that a graph worker is alive.
+
+By default `/respond` is owner-only. Supply
+`respond_authorizer(caller, instance_id, owner)` (two-argument callbacks are also
+supported) to require an independently authenticated approver, for example a
+configured manager principal distinct from the starter. Ownership lookups always
+consult DTS and fail closed. The server overwrites dict resume fields `responder`
+and `reviewer` with the verified caller; the expense sample uses this identity,
+not a body-supplied reviewer.
+
+Authenticated default thread IDs are owner-namespaced. Checkpoints record
+`durable_owner` alongside `durable_instance_id`; sync/async starts and worker
+steps reject checkpoints belonging to another principal even after DTS purge.
+Explicit `thread_id` remains supported by the Python API, not by HTTP `/start`.
+HTTP bodies are limited to 1,000,000 bytes, instance IDs to
+`[A-Za-z0-9_.:@-]{1,128}`, and internal resume envelope keys are rejected.
+Ordinary user fields such as `{"approved": true, "version": 2}` remain valid
+interrupt response data.
+
+### Execution Guarantees, Streaming, Tracing & Data Retention
+
+- **At-least-once activities:** Durable tools and nodes may execute more than
+  once, including after a worker crashes between an external mutation and its
+  completion acknowledgement. Completed history avoids ordinary replay of
+  completed siblings, but does not provide exactly-once external effects.
+  Tools receive a deterministic `runtime.config["metadata"]["durable_call_id"]`
+  for use as an external idempotency key. Persist deduplication at the mutation
+  boundary (provider API or a database unique constraint), not just in RAM.
+- **Streaming and tracing:** `stream_writer` inside a durable tool activity is
+  a no-op. This adapter does not expose a continuous token stream over DTS.
+  LangSmith traces are scoped to individual supersteps/activities rather than
+  one uninterrupted graph invocation.
+- **DTS retention:** Tool/node activity inputs and outputs are recorded in DTS
+  history. Zero-config `InMemorySaver` checkpoints and final graph state also
+  travel in DTS payloads. Interrupt payloads whose serialized custom-status
+  representation fits the 16 KB limit may be inlined; larger values use checkpoint
+  references. Review sensitive data, DTS
+  retention and purge policies, and checkpoint-store retention independently.
+- **Deployed Azure auth:** Prefer `Authentication=ManagedIdentity`, with
+  `ClientID=<user-assigned-client-id>` when using a user-assigned identity.
+  Grant that identity the **Durable Task Data Contributor** RBAC role on the
+  intended scheduler/task hub. Developer `AzureCli` credentials are not a
+  production authentication strategy.
 
 ### Connecting to Hosted Azure DTS (Entra ID / Managed Identity) vs. Local Emulator
 
@@ -318,11 +381,54 @@ sdk = DurableTaskSchedulerClient(**hosted_opts)
 | **Tier 1: Shared Checkpointer** *(Pointer-Only)* | `builder.compile(checkpointer=SqliteSaver(...))` (compatible with `SqliteSaver`, `AsyncSqliteSaver`, or any `BaseCheckpointSaver`) | `inline_checkpoints=False` (default). DTS carries only `< 1 KB` checkpoint IDs and small control envelopes. Full graph state stays in your external database. | Multi-turn conversations across stateless API pods, large state payloads, long-lived threads. |
 | **Tier 2: Zero-Config** *(Inline Checkpoint Bundle)* | `builder.compile()` (no checkpointer or `InMemorySaver()`) | `inline_checkpoints=True` (default). After each step, the latest checkpoint slice (up to the 900 KB bundle guard) is exported into `checkpoint_bundle` and hydrated into the next worker's `InMemorySaver`. | Single-turn runs or getting started immediately with zero database setup while still surviving worker crashes and multi-worker routing. |
 
+Final inline results carry the checkpoint bundle once, without a duplicate state
+blob; `wait_result()` reads the projected output from the hydrated checkpoint.
+Every complete activity input/result, orchestration input/output, and
+`continue_as_new` input must fit the 950,000-byte serialized payload guard. The
+900 KB bundle guard is a separate limit on the encoded bundle, not raw graph state.
+Oversized payloads fail without activity retries. Use a persistent checkpointer
+for large state and configure `sdk_options(payload_store=...)` for external SDK
+payload storage; the integration still enforces its conservative wire-size guard.
+
+Caller-supplied checkpointer serializers are preserved, including custom or
+encrypted `InMemorySaver` serializers. For custom state types used in activity
+payloads, register explicitly trusted types with
+`attach_durability(..., allowed_msgpack_modules=[("myapp.models", "MyState")])`.
+This allowlist is process-wide; configure it on both clients and workers.
+`allowed_msgpack_modules=True` permits arbitrary types and should only be used
+with trusted payloads.
+
+Async checkpointers retain their caller-owned event loop and lock.
+`Limits(async_timeout_seconds=300.0)` controls bridged async operation timeouts;
+use `None` to disable the timeout. Async clients read state directly on their
+current event loop.
+
+Concurrent starts from the same checkpoint are fenced by the recorded run ID and
+input signature. A different run or input raises `RunError` instead of silently
+replaying another turn. Default run IDs are deterministic for the graph name,
+thread, base checkpoint, and input; sequential turns with new checkpoints get
+distinct IDs. Wait for an active turn to finish before submitting another turn.
+Pending interrupt status is explicitly cleared after a response and on completion;
+terminal runs never return pending receipts. Owner identity stays in the durable
+orchestration input, not public custom status or output.
+
+`sdk_options()` resolves task hubs from explicit arguments, connection strings,
+`DTS_TASKHUB`, then `TASKHUB_NAME`. Credentials cannot be sent to a non-loopback
+host with `secure_channel=False`. `max_message_bytes` is optional and does not
+change the SDK's gRPC defaults unless supplied.
+
 ### Configuring Tool Durability, Retries, and Concurrency
 
 By default (`durable_tools=True`), every tool inside a `ToolNode` executes as an
 isolated `langgraph.<name>.tool` activity. You can customize retries or opt out
 pure in-memory helpers either via `@durable_tool` or centrally on `attach_durability()`:
+
+Durable tool dispatch follows the actual scheduled LangGraph tasks, including
+`Send()` routing: HITL-rejected or human-responded calls are not executed.
+Invalid tool arguments handled by `ToolNode` produce an error `ToolMessage`
+immediately, allowing the model to self-correct without activity retries.
+Other tool errors retain retries; when exhausted, custom error policies are
+evaluated against the original exception type before crossing the DTS boundary.
 
 ```python
 from langchain_core.tools import tool

@@ -13,7 +13,8 @@ How it works under the hood:
   into a compact `checkpoint_bundle` carried in the DTS orchestration state. When a
   new worker process (`Pod B`) picks up the next step, it automatically hydrates its own
   fresh `InMemorySaver` from that `checkpoint_bundle` before invoking LangGraph - with
-  zero data loss and no external database required.
+  no external checkpoint database required. Redelivery is at least once;
+  external mutations must be idempotent.
 
 What this script does:
   1. Spawns Worker Process 1 (`pod-A`, OS PID 1) via `subprocess.Popen` with a
@@ -29,6 +30,11 @@ What this script does:
      completely empty `InMemorySaver`.
   6. Verifies all 3 workflows complete on `pod-B` (`pid_a != pid_b`) with 100% of their
      pre-crash state (`items_reserved=True`, `order_id`, and `pid_trace`) preserved.
+
+The hard kill happens after interrupt status is visible, potentially while its
+last orchestration turn is still being acknowledged. A replacement worker may
+need to wait for the abandoned DTS work-item lease to expire. Recovery is not
+instantaneous, and the demo's bounded timeout can expire before lease recovery.
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ from typing import Annotated, Any, NotRequired, TypedDict
 
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
@@ -53,8 +60,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command, interrupt
-
-from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
 
 GRAPH_NAME = "order_crash_recovery"
 
@@ -140,9 +145,13 @@ def build_order_graph(pod_name: str = "client"):
 
     def ship_order(state: OrderState) -> dict:
         if not state.get("items_reserved"):
-            raise RuntimeError(f"Cannot ship {state['order_id']}: items_reserved state was lost!")
+            raise RuntimeError(
+                f"Cannot ship {state['order_id']}: items_reserved state was lost!"
+            )
         if not state.get("approved_by"):
-            raise RuntimeError(f"Cannot ship {state['order_id']}: approved_by state was lost!")
+            raise RuntimeError(
+                f"Cannot ship {state['order_id']}: approved_by state was lost!"
+            )
         step_entry = f"ship_order:pid={os.getpid()}:pod={pod_name}"
         return {
             "shipped": True,
@@ -166,10 +175,16 @@ def build_order_graph(pod_name: str = "client"):
 
 
 def _resolve_endpoint() -> str | None:
-    return (
-        os.environ.get("DTS_ENDPOINT")
+    endpoint = (
+        os.environ.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+        or os.environ.get("DTS_CONNECTION_STRING")
+        or os.environ.get("DTS_ENDPOINT")
         or os.environ.get("DTS_EMULATOR")
-        or os.environ.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+    )
+    return (
+        "127.0.0.1:8080"
+        if endpoint and endpoint.strip().lower() in ("1", "true", "yes")
+        else endpoint
     )
 
 
@@ -177,10 +192,14 @@ def _run_worker_process(pod_name: str, graph_name: str) -> None:
     """Entry point for child worker OS process (`--worker pod-A` or `--worker pod-B`)."""
     endpoint = _resolve_endpoint()
     if not endpoint:
-        raise RuntimeError("DTS_EMULATOR, DTS_ENDPOINT, or DURABLE_TASK_SCHEDULER_CONNECTION_STRING is required")
+        raise RuntimeError(
+            "DTS_EMULATOR, DTS_ENDPOINT, or DURABLE_TASK_SCHEDULER_CONNECTION_STRING is required"
+        )
 
     reg = attach_durability(build_order_graph(pod_name), name=graph_name)
-    worker = DurableTaskSchedulerWorker(**sdk_options(endpoint))
+    worker = DurableTaskSchedulerWorker(
+        **sdk_options(endpoint, taskhub=os.environ.get("DTS_TASKHUB"))
+    )
     reg.register(worker)
     worker.start()
     print(f"WORKER_READY pod={pod_name} pid={os.getpid()}", flush=True)
@@ -198,22 +217,41 @@ def _spawn_worker_subprocess(
     graph_name: str = GRAPH_NAME,
     *,
     endpoint: str | None = None,
+    taskhub: str | None = None,
     readiness_timeout: float = 30.0,
 ) -> tuple[subprocess.Popen[str], int]:
     """Spawn a separate OS process running a DTS worker and wait for its `WORKER_READY` banner."""
     child_env = os.environ.copy()
     src_dir = next(
-        (str(p / "libs" / "azure-compute") for p in Path(__file__).resolve().parents if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()),
+        (
+            str(p / "libs" / "azure-compute")
+            for p in Path(__file__).resolve().parents
+            if (p / "libs" / "azure-compute" / "langchain_azure_compute").is_dir()
+        ),
         str(Path(__file__).resolve().parent.parent / "src"),
     )
     existing_pp = child_env.get("PYTHONPATH", "")
-    child_env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else src_dir
-    if endpoint and not (
-        child_env.get("DTS_ENDPOINT")
-        or child_env.get("DTS_EMULATOR")
-        or child_env.get("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+    child_env["PYTHONPATH"] = (
+        f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else src_dir
+    )
+    endpoint = endpoint or _resolve_endpoint()
+    if not endpoint:
+        raise ValueError("A resolved scheduler endpoint is required")
+    resolved = sdk_options(endpoint, taskhub=taskhub)
+    for key in (
+        "DURABLE_TASK_SCHEDULER_CONNECTION_STRING",
+        "DTS_CONNECTION_STRING",
+        "DTS_ENDPOINT",
+        "DTS_EMULATOR",
+        "DTS_TASKHUB",
+        "TASKHUB_NAME",
     ):
+        child_env.pop(key, None)
+    if "endpoint=" in endpoint.lower():
+        child_env["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"] = endpoint
+    else:
         child_env["DTS_ENDPOINT"] = endpoint
+    child_env["DTS_TASKHUB"] = resolved["taskhub"]
 
     proc = subprocess.Popen(
         [sys.executable, __file__, "--worker", pod_name, "--name", graph_name],
@@ -263,7 +301,10 @@ def _spawn_worker_subprocess(
                 if worker_pid is not None:
                     break
         if worker_pid is None:
-            detail = f"Worker subprocess {pod_name!r} failed to start. Output:\n" + "\n".join(captured)
+            detail = (
+                f"Worker subprocess {pod_name!r} failed to start. Output:\n"
+                + "\n".join(captured)
+            )
             if eof:
                 raise RuntimeError(detail)
             raise TimeoutError(detail)
@@ -287,15 +328,24 @@ def run_two_process_crash_demo(
 ) -> dict[str, Any]:
     """Run the two-process crash recovery demonstration and return a structured verification summary."""
     reg = attach_durability(build_order_graph("client"), name=graph_name)
-    sdk = DurableTaskSchedulerClient(**sdk_options(endpoint))
+    dts_opts = sdk_options(endpoint)
+    sdk = DurableTaskSchedulerClient(**dts_opts)
     client = reg.client(sdk)
 
     proc_a: subprocess.Popen[str] | None = None
     proc_b: subprocess.Popen[str] | None = None
     try:
         # 1. Spawn Process 1 (Pod A)
-        proc_a, pid_a = _spawn_worker_subprocess("pod-A", graph_name=graph_name, endpoint=endpoint)
-        print(f"[1/6] Spawned Worker Process 1 (pod-A) -> OS PID={pid_a} (fresh InMemorySaver)", flush=True)
+        proc_a, pid_a = _spawn_worker_subprocess(
+            "pod-A",
+            graph_name=graph_name,
+            endpoint=endpoint,
+            taskhub=dts_opts["taskhub"],
+        )
+        print(
+            f"[1/6] Spawned Worker Process 1 (pod-A) -> OS PID={pid_a} (fresh InMemorySaver)",
+            flush=True,
+        )
 
         # 2. Start concurrent order instances and wait until all pause at manager_approval on Pod A
         runs = {oid: client.start({"order_id": oid}) for oid in order_ids}
@@ -330,12 +380,19 @@ def run_two_process_crash_demo(
         )
 
         # 5. Spawn Process 2 (Pod B) - brand-new OS process with an empty InMemorySaver
-        proc_b, pid_b = _spawn_worker_subprocess("pod-B", graph_name=graph_name, endpoint=endpoint)
+        proc_b, pid_b = _spawn_worker_subprocess(
+            "pod-B",
+            graph_name=graph_name,
+            endpoint=endpoint,
+            taskhub=dts_opts["taskhub"],
+        )
         print(
             f"[5/6] Spawned Worker Process 2 (pod-B) -> OS PID={pid_b} (brand-new empty InMemorySaver)",
             flush=True,
         )
-        assert pid_a != pid_b, f"Expected two distinct OS processes, got pid_a={pid_a} == pid_b={pid_b}"
+        assert pid_a != pid_b, (
+            f"Expected two distinct OS processes, got pid_a={pid_a} == pid_b={pid_b}"
+        )
 
         # 6. Wait for all concurrent instances to hydrate their InMemorySaver from DTS and finish on Pod B
         results: dict[str, OrderOutput] = {}
@@ -376,9 +433,18 @@ def run_two_process_crash_demo(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Two-process InMemorySaver crash recovery demo.")
-    parser.add_argument("--worker", type=str, default=None, help="Internal flag: run as named worker subprocess.")
-    parser.add_argument("--name", type=str, default=GRAPH_NAME, help="Durable graph registration name.")
+    parser = argparse.ArgumentParser(
+        description="Two-process InMemorySaver crash recovery demo."
+    )
+    parser.add_argument(
+        "--worker",
+        type=str,
+        default=None,
+        help="Internal flag: run as named worker subprocess.",
+    )
+    parser.add_argument(
+        "--name", type=str, default=GRAPH_NAME, help="Durable graph registration name."
+    )
     args = parser.parse_args()
 
     if args.worker:
@@ -397,8 +463,12 @@ def main() -> None:
             except OSError:
                 pass
     if not endpoint:
-        print("Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run.")
-        print("Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest")
+        print(
+            "Set DTS_EMULATOR=127.0.0.1:8080 (or DURABLE_TASK_SCHEDULER_CONNECTION_STRING) to run."
+        )
+        print(
+            "Start one with: docker run -d -p 8080:8080 -p 8082:8082 mcr.microsoft.com/dts/dts-emulator:latest"
+        )
         sys.exit(0)
 
     summary = run_two_process_crash_demo(endpoint, graph_name=args.name)

@@ -22,6 +22,11 @@ import time
 from typing import Annotated, Any, NotRequired, TypedDict
 
 from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
+from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
+from langchain_azure_compute.graph.azure_functions import (
+    FunctionAppHttpServer,
+    LangGraphFunctionApp,
+)
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
@@ -30,24 +35,33 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command, interrupt
 
-from langchain_azure_compute.graph import attach_durability, durable_tool, sdk_options
-from langchain_azure_compute.graph.azure_functions import (
-    FunctionAppHttpServer,
-    LangGraphFunctionApp,
-)
-
 GRAPH_NAME = "expense_approval"
 
 
 def _local_demo_identity(req: Any) -> str | None:
     """Opt-in, insecure identity stub for loopback demos only; never deploy enabled."""
-    return "demo-user" if req.headers.get("x-demo-user") == "demo-user" else None
+    principal = req.headers.get("x-demo-user")
+    return principal if principal in ("demo-user", "vp-finance") else None
 
 
 def _identity_options() -> dict[str, Any]:
     if os.environ.get("LOCAL_DEMO_IDENTITY") == "1":
         return {"identity_provider": _local_demo_identity}
     return {}
+
+
+def _authorize_expense_response(
+    caller: str, instance_id: str, owner: str | None
+) -> bool:
+    """Require a configured approver distinct from the verified expense starter."""
+    approvers = {
+        principal.strip()
+        for principal in os.environ.get("APPROVER_PRINCIPAL_IDS", "").split(",")
+        if principal.strip()
+    }
+    if os.environ.get("LOCAL_DEMO_IDENTITY") == "1":
+        approvers = {"vp-finance"}
+    return owner is not None and caller != owner and caller in approvers
 
 
 class ExpenseInput(TypedDict):
@@ -98,7 +112,9 @@ def build_expense_graph(worker_id: str = "func-host"):
     ) -> Command:
         """Run corporate expense policy verification as an isolated DTS tool activity."""
         trace_entry = f"policy_check:worker={worker_id}:pid={os.getpid()}"
-        policy_result = "REQUIRES_VP_APPROVAL" if amount >= 1000.0 else "WITHIN_STANDARD_LIMIT"
+        policy_result = (
+            "REQUIRES_VP_APPROVAL" if amount >= 1000.0 else "WITHIN_STANDARD_LIMIT"
+        )
         return Command(
             update={
                 "policy_status": policy_result,
@@ -156,13 +172,15 @@ def build_expense_graph(worker_id: str = "func-host"):
             }
         )
         if isinstance(human_decision, dict):
-            approved = bool(human_decision.get("approved", False))
-            reviewer = str(human_decision.get("reviewer") or "manager")
+            approved = human_decision.get("approved", False)
+            if not isinstance(approved, bool):
+                raise ValueError("approved must be a JSON boolean")
+            reviewer = str(human_decision.get("responder") or "")
             notes = str(human_decision.get("notes") or "")
         else:
-            approved = bool(human_decision)
-            reviewer = "manager"
-            notes = str(human_decision)
+            raise ValueError("Approval requires a server-verified responder")
+        if not reviewer:
+            raise ValueError("Approval requires a server-verified responder")
 
         trace_entry = f"manager_review:worker={worker_id}:pid={os.getpid()}"
         return {
@@ -191,7 +209,9 @@ def build_expense_graph(worker_id: str = "func-host"):
             "worker_trace": [trace_entry],
         }
 
-    builder = StateGraph(ExpenseState, input_schema=ExpenseInput, output_schema=ExpenseOutput)
+    builder = StateGraph(
+        ExpenseState, input_schema=ExpenseInput, output_schema=ExpenseOutput
+    )
     builder.add_node("submit_expense", submit_expense)
     builder.add_node("tools", ToolNode([policy_check]))
     builder.add_node("manager_review", manager_review)
@@ -217,7 +237,7 @@ def build_expense_function_app(
     graph_name: str = GRAPH_NAME,
     worker_id: str = "func-host",
     dts_options: Any = None,
-    start_worker: bool = True,
+    start_worker: bool = False,
 ):
     """Build an `azure.functions.FunctionApp` for the expense approval workflow."""
     return LangGraphFunctionApp(
@@ -225,17 +245,23 @@ def build_expense_function_app(
         name=graph_name,
         dts_options=dts_options,
         start_worker=start_worker,
+        respond_authorizer=_authorize_expense_response,
         **_identity_options(),
     )
 
 
 # Default Azure Functions v2 entry point discovered by `func start` (one-line, like MAF's AgentFunctionApp!)
 _default_worker_id = os.environ.get("WORKER_ID", "func-host")
-_start_embedded = os.environ.get("START_EMBEDDED_WORKER", "1").strip().lower() not in ("0", "false", "no")
+_start_embedded = os.environ.get("START_EMBEDDED_WORKER", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 app = LangGraphFunctionApp(
     graph=build_expense_graph(_default_worker_id),
     name=GRAPH_NAME,
     start_worker=_start_embedded,
+    respond_authorizer=_authorize_expense_response,
     **_identity_options(),
 )
 
@@ -243,7 +269,9 @@ app = LangGraphFunctionApp(
 def _run_standalone_worker(worker_id: str, graph_name: str) -> None:
     """Run a dedicated DTS worker process (`python function_app.py --worker worker-1`)."""
     worker_reg = attach_durability(build_expense_graph(worker_id), name=graph_name)
-    worker = DurableTaskSchedulerWorker(**sdk_options())
+    worker = DurableTaskSchedulerWorker(
+        **sdk_options(taskhub=os.environ.get("DTS_TASKHUB"))
+    )
     worker_reg.register(worker)
     worker.start()
     print(f"WORKER_READY worker={worker_id} pid={os.getpid()}", flush=True)
@@ -257,11 +285,28 @@ def _run_standalone_worker(worker_id: str, graph_name: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Azure Functions HITL Expense Approval App / Worker")
-    parser.add_argument("--worker", type=str, default=None, help="Run as a standalone DTS worker with this worker_id.")
-    parser.add_argument("--name", type=str, default=GRAPH_NAME, help="Durable graph registration name.")
+    parser = argparse.ArgumentParser(
+        description="Azure Functions HITL Expense Approval App / Worker"
+    )
     parser.add_argument(
-        "--port", type=int, default=7071, help="HTTP port when running the Function App server directly."
+        "--worker",
+        type=str,
+        default=None,
+        help="Run as a standalone DTS worker with this worker_id.",
+    )
+    parser.add_argument(
+        "--name", type=str, default=GRAPH_NAME, help="Durable graph registration name."
+    )
+    parser.add_argument(
+        "--embedded-worker",
+        action="store_true",
+        help="Opt in to an embedded DTS worker for local development or Dedicated Always-On only.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=7071,
+        help="HTTP port when running the Function App server directly.",
     )
     parser.add_argument(
         "--no-embedded-worker",
@@ -277,10 +322,14 @@ def main() -> None:
     func_app = build_expense_function_app(
         graph_name=args.name,
         worker_id=os.environ.get("WORKER_ID", "func-host"),
-        start_worker=not args.no_embedded_worker,
+        start_worker=(args.embedded_worker or _start_embedded)
+        and not args.no_embedded_worker,
     )
     with FunctionAppHttpServer(func_app, host="127.0.0.1", port=args.port) as server:
-        print(f"FUNCTION_APP_READY url={server.base_url}/api pid={os.getpid()}", flush=True)
+        print(
+            f"FUNCTION_APP_READY url={server.base_url}/api pid={os.getpid()}",
+            flush=True,
+        )
         try:
             while True:
                 time.sleep(0.5)

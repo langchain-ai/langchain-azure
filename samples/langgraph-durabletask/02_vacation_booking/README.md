@@ -1,12 +1,12 @@
 # 02 - Vacation Booking (Per-Tool Durable Activities & Idempotent Retries)
 
-This sample builds a multi-tool vacation booking workflow (`plan_trip -> ToolNode([book_flight, book_hotel, book_car]) -> review -> confirm`) to demonstrate **why a LangGraph checkpointer alone is not enough when side-effecting tools run in parallel**, and how `@durable_tool` + `instance_id` solve double-booking.
+This sample builds a multi-tool vacation booking workflow (`plan_trip -> ToolNode([book_flight, book_hotel, book_car]) -> review -> confirm`) to demonstrate per-tool retry isolation and **at-least-once activity execution with external idempotency keys**.
 
 ## Key Concepts Demonstrated
 
 - **Per-Tool Activity Isolation (`@durable_tool(retries=3)`)**: Wrapping LangChain `@tool` functions so each tool invocation inside a `ToolNode` batch runs as its own isolated DTS activity (`langgraph.<name>.tool`) with its own retry policy.
 - **Parallel Tool Fan-Out (`when_all`)**: When `plan_trip` emits 3 tool calls (`book_flight`, `book_hotel`, `book_car`) in one `AIMessage`, the DTS orchestrator schedules all 3 tool activities concurrently in a single batch.
-- **Mid-Superstep Failure Without Double-Booking**: `book_car` raises a simulated transient error on attempt 1. Because `book_flight` and `book_hotel` already recorded their `TaskCompletedEvent` in the DTS history log, DTS retries **only `book_car`** - whereas replaying a LangGraph `ToolNode` superstep from `SqliteSaver`/`PostgresSaver` alone re-runs the entire `ToolNode` and books a second flight and hotel.
+- **Isolated Retry, Not Exactly-Once Execution**: `book_car` raises a transient error on attempt 1. Completed siblings are recovered from DTS history rather than ordinarily repeated with the failed tool. A worker crash can still redeliver any activity: the external booking API must deduplicate by the durable call ID.
 - **Idempotent Client Retries (`client.start(..., instance_id=...)`)**: Calling `client.start` a second time with the same `instance_id` attaches to the already-completed orchestration instead of starting a duplicate workflow.
 
 ## Workflow Architecture
@@ -117,34 +117,43 @@ python samples\langgraph-durabletask\02_vacation_booking\sample.py
 
 ### 1. Decorate Side-Effecting Tools with `@durable_tool`
 
-Stack `@durable_tool(retries=3)` above (or below) LangChain's `@tool`. Here `book_car` simulates an external API outage on its first attempt, while every completed booking appends a line to an external ledger file (`bookings.log`):
+Stack `@durable_tool(retries=3)` above (or below) LangChain's `@tool`. Tools receive the server-derived durable call ID through `ToolRuntime.config`; it is stable across activity retries and distinct across invocations. The sample JSON-lines ledger looks up this key before appending a booking:
 
 ```python
+from langgraph.prebuilt.tool_node import ToolRuntime
+
 @durable_tool(retries=3)
 @tool
-def book_flight(destination: str) -> str:
+def book_flight(destination: str, runtime: ToolRuntime) -> str:
     """Book a flight to the destination."""
-    return record_booking("FLIGHT", destination)
+    key = runtime.config["metadata"]["durable_call_id"]
+    return record_booking("FLIGHT", destination, key)
 
 
 @durable_tool(retries=3)
 @tool
-def book_hotel(destination: str) -> str:
+def book_hotel(destination: str, runtime: ToolRuntime) -> str:
     """Book a hotel at the destination."""
-    return record_booking("HOTEL", destination)
+    key = runtime.config["metadata"]["durable_call_id"]
+    return record_booking("HOTEL", destination, key)
 
 
 @durable_tool(retries=3)
 @tool
-def book_car(destination: str) -> str:
+def book_car(destination: str, runtime: ToolRuntime) -> str:
     """Book a rental car at the destination (simulates a transient failure on attempt 1)."""
     with log_lock:
         seq["car_attempts"] += 1
         attempt = seq["car_attempts"]
     if fail_car_once and attempt == 1:
         raise RuntimeError("Transient rental car API outage on attempt 1")
-    return record_booking("CAR", destination)
+    key = runtime.config["metadata"]["durable_call_id"]
+    return record_booking("CAR", destination, key)
 ```
+
+The ledger is a single-process teaching example, not distributed transactional
+storage. In production pass the same key to the booking provider's idempotency
+API or atomically enforce a database uniqueness constraint.
 
 ### 2. Wire Up a Standard LangGraph `ToolNode`
 
@@ -185,8 +194,8 @@ result2 = run2.wait_result(timeout=60)
 Confirmations: ['FLIGHT-1001', 'HOTEL-1002', 'CAR-1003']
 Idempotent retry matched: True
 
-External booking ledger (exactly 3 bookings despite book_car failing once):
-FLIGHT BOOKED (Kyoto): FLIGHT-1001
-HOTEL BOOKED (Kyoto): HOTEL-1002
-CAR BOOKED (Kyoto): CAR-1003
+Idempotent booking ledger (3 unique call IDs in this demonstration):
+{"call_id": "...", "kind": "FLIGHT", "destination": "Kyoto", "confirmation": "FLIGHT-1001"}
+{"call_id": "...", "kind": "HOTEL", "destination": "Kyoto", "confirmation": "HOTEL-1002"}
+{"call_id": "...", "kind": "CAR", "destination": "Kyoto", "confirmation": "CAR-1003"}
 ```

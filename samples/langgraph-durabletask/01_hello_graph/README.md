@@ -33,7 +33,7 @@ Durable Task Scheduler (DTS) Entities Registered:
 
 Requires **Python 3.11+**.
 
-From the repository root (editable install with test extras):
+From the repository root (editable install with the durabletask extra):
 
 ```bash
 pip install -e "libs/azure-compute[durabletask]"

@@ -1,7 +1,7 @@
 [project]
 name = "langchain-azure-compute"
 version = "0.1.1"
-description = "LangChain integrations for Azure Container Apps"
+description = "LangChain and LangGraph integrations for Azure Container Apps and Durable Task Scheduler"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
 ]
@@ -47,8 +47,12 @@ sandboxes = [
     "azure-containerapps-sandbox>=0.1.0b4,<0.2",
     "deepagents>=0.7.1,<0.8",
 ]
+# Upper bounds are capped at the current minor series because the graph
+# runner integrates with LangGraph Pregel/checkpoint/ToolNode internals.
 durabletask = [
-    "langgraph>=1.0.2,<1.3",
+    "langgraph>=1.2.0,<1.3",
+    "langgraph-checkpoint>=4.1.0,<5.0",
+    "langgraph-prebuilt>=1.1.0,<1.2",
     "durabletask>=1.13.0,<1.14",
     "durabletask-azuremanaged>=1.13.0,<1.14",
 ]
@@ -82,8 +86,8 @@ show_missing = true
 [tool.mypy]
 disallow_untyped_defs = true
 
-# deepagents ships no type stubs, so treat it and the related contract tests as
-# untyped rather than failing on missing imports.
+# deepagents and azure.functions ship no type stubs. Following durabletask's
+# annotations triggers a mypy internal crash in durabletask/task.py:674.
 [[tool.mypy.overrides]]
 module = [
     "deepagents.*",
@@ -113,7 +117,6 @@ select = ["E", "F", "I", "D"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
-"langchain_azure_compute/graph/runner.py" = ["F401"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -42,6 +42,7 @@ Internal modules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -59,6 +60,11 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from langchain_azure_compute.graph._checkpoints import _aget_state, _project_output
+from langchain_azure_compute.graph._config import (
+    _check_payload,
+    _configure_msgpack_modules,
+)
 from langchain_azure_compute.graph._inline_saver import _get_cached_inline_bundle
 from langchain_azure_compute.graph.azure_functions import (
     FunctionAppHttpServer,
@@ -199,10 +205,22 @@ _BETA_MESSAGE = (
 )
 
 
+def _status_name(meta: Any) -> str:
+    status = getattr(meta, "runtime_status", None)
+    return str(getattr(status, "name", status))
+
+
+def _default_instance_id(name: str, thread: str, expect: str | None, input: Any) -> str:
+    digest = hashlib.sha256(
+        json.dumps([name, thread, expect, input], sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return "r-" + digest[:32]
+
+
 def _extract_hostname(host: str) -> str:
     h = host.strip().lower()
-    if h.startswith("[") and "]" in h:  # pragma: no cover
-        return h[1 : h.index("]")]  # pragma: no cover
+    if h.startswith("[") and "]" in h:
+        return h[1 : h.index("]")]
     if ":" in h:
         return h.split(":", 1)[0]
     return h
@@ -213,7 +231,7 @@ def _is_loopback_host(host: str) -> bool:
         "localhost",
         "127.0.0.1",
         "::1",
-    )  # pragma: no cover
+    )
 
 
 def _strip_scheme(endpoint: str) -> tuple[str, bool | None]:
@@ -250,10 +268,8 @@ def sdk_options(
     `DefaultAzureCredential`
     or a `DURABLE_TASK_SCHEDULER_CONNECTION_STRING` of the form
     `Endpoint=...;TaskHub=...;Authentication=...`).
-    Raises the gRPC receive/send message limits (the default 4 MiB limit silently stalls
-    large
-    work items) and optionally wires the Durable Task SDK's `PayloadStore` /
-    `BlobPayloadStore`.
+    Optionally raises gRPC receive/send message limits via `max_message_bytes` and
+    wires the Durable Task SDK's `PayloadStore` / `BlobPayloadStore`.
 
     Args:
         endpoint: Emulator or hosted scheduler endpoint; defaults to DTS environment
@@ -265,7 +281,7 @@ def sdk_options(
         secure_channel: Whether to use TLS; inferred from the endpoint when omitted.
         connection_string: Scheduler connection string, optionally read from the
         environment.
-        max_message_bytes: Maximum gRPC message size in bytes.
+        max_message_bytes: Optional maximum gRPC message size; None keeps SDK defaults.
         payload_store: Optional external storage for large payloads.
         log_handler: Optional logging handler passed to the SDK.
 
@@ -287,15 +303,15 @@ def sdk_options(
             "DURABLE_TASK_SCHEDULER_CONNECTION_STRING"
         ) or os.environ.get("DTS_CONNECTION_STRING")
         env_ep = os.environ.get("DTS_ENDPOINT") or os.environ.get("DTS_EMULATOR")
-        if env_conn:  # pragma: no cover
+        if env_conn:
             connection_string = env_conn
-        elif env_ep:  # pragma: no cover
-            if "endpoint=" in env_ep.lower():  # pragma: no cover
-                connection_string = env_ep  # pragma: no cover
-            elif env_ep.strip().lower() in ("1", "true", "yes"):  # pragma: no cover
-                endpoint = "127.0.0.1:8080"  # pragma: no cover
+        elif env_ep:
+            if "endpoint=" in env_ep.lower():
+                connection_string = env_ep
+            elif env_ep.strip().lower() in ("1", "true", "yes"):
+                endpoint = "127.0.0.1:8080"
             else:
-                endpoint = env_ep  # pragma: no cover
+                endpoint = env_ep
 
     parsed_endpoint: str | None = None
     parsed_taskhub: str | None = None
@@ -303,8 +319,8 @@ def sdk_options(
     parsed_client_id: str | None = None
     if connection_string:
         for part in connection_string.split(";"):
-            if "=" not in part:  # pragma: no cover
-                continue  # pragma: no cover
+            if "=" not in part:
+                continue
             k, v = part.split("=", 1)
             k_low, v_clean = k.strip().lower(), v.strip()
             if k_low == "endpoint":
@@ -313,7 +329,7 @@ def sdk_options(
                 parsed_taskhub = v_clean
             elif k_low == "authentication":
                 parsed_auth = v_clean
-            elif k_low == "clientid":  # pragma: no cover
+            elif k_low == "clientid":
                 parsed_client_id = v_clean
 
     raw_endpoint = (
@@ -327,14 +343,16 @@ def sdk_options(
             else os.environ.get("DTS_EMULATOR")
         )
     )
-    if not raw_endpoint:  # pragma: no cover
-        raise ValueError(
-            "endpoint or connection_string is required"
-        )  # pragma: no cover
+    if not raw_endpoint:
+        raise ValueError("endpoint or connection_string is required")
 
     host_address, scheme_secure = _strip_scheme(raw_endpoint)
     resolved_taskhub = (
-        taskhub or parsed_taskhub or os.environ.get("DTS_TASKHUB") or "default"
+        taskhub
+        or parsed_taskhub
+        or os.environ.get("DTS_TASKHUB")
+        or os.environ.get("TASKHUB_NAME")
+        or "default"
     )
 
     resolved_cred = token_credential
@@ -343,7 +361,7 @@ def sdk_options(
         if auth_low in ("none", "anonymous", "emulator", ""):
             pass
         elif auth_low == "managedidentity":
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import ManagedIdentityCredential
 
                 resolved_cred = (
@@ -352,7 +370,7 @@ def sdk_options(
                     else ManagedIdentityCredential()
                 )
         elif auth_low == "workloadidentity":
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import WorkloadIdentityCredential
 
                 resolved_cred = (
@@ -361,17 +379,17 @@ def sdk_options(
                     else WorkloadIdentityCredential()
                 )
         elif auth_low == "environment":
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import EnvironmentCredential
 
                 resolved_cred = EnvironmentCredential()
         elif auth_low == "azurecli":
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import AzureCliCredential
 
                 resolved_cred = AzureCliCredential()
         elif auth_low == "azurepowershell":
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import AzurePowerShellCredential
 
                 resolved_cred = AzurePowerShellCredential()
@@ -382,7 +400,7 @@ def sdk_options(
             "entradefault",
             "aad",
         ):
-            if resolved_cred is None:  # pragma: no cover
+            if resolved_cred is None:
                 from azure.identity import DefaultAzureCredential
 
                 resolved_cred = (
@@ -402,18 +420,28 @@ def sdk_options(
 
         resolved_cred = DefaultAzureCredential()
 
-    if secure_channel is not None:  # pragma: no cover
-        resolved_secure = bool(secure_channel)  # pragma: no cover
+    if secure_channel is not None:
+        resolved_secure = bool(secure_channel)
     elif scheme_secure is not None:
         resolved_secure = (
             True if (scheme_secure or resolved_cred is not None) else False
         )
-    elif resolved_cred is not None:  # pragma: no cover
-        resolved_secure = True  # pragma: no cover
+    elif resolved_cred is not None:
+        resolved_secure = True
     elif _extract_hostname(host_address).endswith(".durabletask.io"):
         resolved_secure = True
     else:
         resolved_secure = False
+
+    if (
+        resolved_cred is not None
+        and not resolved_secure
+        and not _is_loopback_host(host_address)
+    ):
+        raise ValueError(
+            "Refusing to send token_credential over an insecure channel "
+            "(secure_channel=False) to a non-loopback host"
+        )
 
     ua_pair = ("grpc.primary_user_agent", "langgraph-durabletask")
     options: dict[str, Any] = dict(
@@ -468,7 +496,7 @@ class PendingInterrupt:
 
     def __repr__(self) -> str:
         """Return a compact description of the interrupt receipt."""
-        return f"PendingInterrupt({self.interrupt_id[:8]}, {self.value!r})"  # pragma: no cover  # noqa: E501
+        return f"PendingInterrupt({self.interrupt_id[:8]}, {self.value!r})"  # noqa: E501
 
 
 @beta(message=_BETA_MESSAGE)
@@ -496,10 +524,12 @@ class Registration:
         previous_versions: Mapping[str, CompiledGraph] | None = None,
         migrations: Mapping[MigrationKey, MigrationSpec] | None = None,
         upgrade_on_continue_as_new: bool = False,
+        allowed_msgpack_modules: Iterable[tuple[str, ...]] | bool | None = None,
     ) -> None:
         """Bind a compiled graph, task names, and execution policies."""
         import copy
 
+        _configure_msgpack_modules(allowed_msgpack_modules)
         name = _validate_graph_name(name)
         if not hasattr(graph, "get_state") and hasattr(graph, "compile"):
             raise ValueError(
@@ -514,13 +544,9 @@ class Registration:
                 "omit checkpointer or provide a checkpointer"
             )
         graph = copy.copy(graph)
-        if isinstance(
-            getattr(graph, "interrupt_before_nodes", None), list
-        ):  # pragma: no cover
+        if isinstance(getattr(graph, "interrupt_before_nodes", None), list):
             graph.interrupt_before_nodes = list(graph.interrupt_before_nodes)
-        if isinstance(
-            getattr(graph, "interrupt_after_nodes", None), list
-        ):  # pragma: no cover
+        if isinstance(getattr(graph, "interrupt_after_nodes", None), list):
             graph.interrupt_after_nodes = list(graph.interrupt_after_nodes)
         if checkpointer is not None:
             graph.checkpointer = checkpointer
@@ -557,10 +583,8 @@ class Registration:
         self.upgrade_on_continue_as_new = bool(upgrade_on_continue_as_new)
 
         for ver_key, prev_g in self.previous_versions.items():
-            if not hasattr(prev_g, "get_state") and hasattr(
-                prev_g, "compile"
-            ):  # pragma: no cover
-                raise ValueError(  # pragma: no cover
+            if not hasattr(prev_g, "get_state") and hasattr(prev_g, "compile"):
+                raise ValueError(
                     f"previous_versions[{ver_key!r}] is an uncompiled "
                     "StateGraph builder; call .compile()"
                 )
@@ -599,23 +623,20 @@ class Registration:
         *,
         overwrite_config: bool = True,
     ) -> None:
-        if overwrite_config or not hasattr(
-            g, "_durable_tool_config"
-        ):  # pragma: no cover
+        if overwrite_config or not hasattr(g, "_durable_tool_config"):
             setattr(g, "_durable_tool_config", tool_config)
-        if overwrite_config or not hasattr(
-            g, "_durable_node_config"
-        ):  # pragma: no cover
+        if overwrite_config or not hasattr(g, "_durable_node_config"):
             setattr(g, "_durable_node_config", node_config)
         setattr(g, "_durable_inline_checkpoints", self.inline_checkpoints)
-        if not hasattr(g, "_durable_orig_interrupt_before"):  # pragma: no cover
+        setattr(g, "_durable_async_timeout", self.limits.async_timeout_seconds)
+        if not hasattr(g, "_durable_orig_interrupt_before"):
             ub = getattr(g, "interrupt_before_nodes", None)
             setattr(
                 g,
                 "_durable_orig_interrupt_before",
                 "*" if ub == "*" else tuple(ub or ()),
             )
-        if not hasattr(g, "_durable_orig_interrupt_after"):  # pragma: no cover
+        if not hasattr(g, "_durable_orig_interrupt_after"):
             ua = getattr(g, "interrupt_after_nodes", None)
             setattr(
                 g,
@@ -660,38 +681,47 @@ class Registration:
                 str(request.get("thread", "")) if isinstance(request, Mapping) else ""
             )
             inst = _inst_id(ctx)
+            request = dict(request)
+            if kind == "start":
+                request.setdefault("instance_id", inst)
             target_g = _resolve_graph(self.graph, req_ver)
             tcfg = getattr(target_g, "_durable_tool_config", self.tool_config)
             ncfg = getattr(target_g, "_durable_node_config", self.node_config)
             pre_next: tuple[str, ...] = ()
-            if (
-                worker_logger is not None and thread and kind in ("step", "resume")
-            ):  # pragma: no cover
-                try:  # pragma: no cover
+            if worker_logger is not None and thread and kind in ("step", "resume"):
+                try:
                     if (
                         isinstance(request, Mapping)
                         and "checkpoint_bundle" in request
                         and isinstance(
                             getattr(target_g, "checkpointer", None), InMemorySaver
                         )
-                    ):  # pragma: no cover
-                        _hydrate_checkpoint_bundle(  # pragma: no cover
+                    ):
+                        _hydrate_checkpoint_bundle(
                             target_g,
                             thread,
                             request["checkpoint_bundle"],
                             only_if_missing_cfg=_config(thread),
                         )
-                    pre_next = tuple(  # pragma: no cover
+                    pre_next = tuple(
                         getattr(_get_state(target_g, _config(thread)), "next", ()) or ()
                     )
-                except Exception:  # pragma: no cover
-                    pre_next = ()  # pragma: no cover
+                except Exception:
+                    pre_next = ()
             try:
                 rep = run_step(
                     self.graph, self.limits, request, tool_config=tcfg, node_config=ncfg
                 )
+            except RunError as exc:
+                # Returning a failure envelope avoids SDK activity retries for
+                # deterministic conflicts and payload-limit violations.
+                if worker_logger is not None:
+                    worker_logger.warning(
+                        f"{inst}: Activity {self.step_name} (kind={kind}) failed: {exc}"
+                    )
+                return {"status": StepStatus.ERROR, "error": str(exc)}
             except Exception as exc:
-                if worker_logger is not None:  # pragma: no cover
+                if worker_logger is not None:
                     worker_logger.warning(
                         f"{inst}: Activity {self.step_name} (kind={kind}) "
                         f"failed: {type(exc).__name__}: {exc}"
@@ -701,7 +731,7 @@ class Registration:
                 st = rep.get("status", "unknown")
                 post_next: list[str] = []
                 ran_nodes: list[str] = list(pre_next)
-                if thread:  # pragma: no cover
+                if thread:
                     try:
                         post_snap = _get_state(target_g, _config(thread))
                         post_next = [
@@ -723,17 +753,17 @@ class Registration:
                             ran_nodes = [
                                 str(k) for k in vseen if not str(k).startswith("__")
                             ]
-                    except Exception:  # pragma: no cover
-                        pass  # pragma: no cover
+                    except Exception:
+                        pass
                 ran_info = ""
                 if kind == "tools":
                     ran_info = f", committed={request.get('node') or 'tools'!r}"
                 elif kind == "nodes":
                     ran_info = ", committed='nodes'"
-                elif len(ran_nodes) == 1:  # pragma: no cover
+                elif len(ran_nodes) == 1:
                     ran_info = f", node={ran_nodes[0]!r}"
-                elif ran_nodes:  # pragma: no cover
-                    ran_info = f", nodes={ran_nodes}"  # pragma: no cover
+                elif ran_nodes:
+                    ran_info = f", nodes={ran_nodes}"
                 extra = ""
                 if st == "tools":
                     names = [tc.get("name", "?") for tc in rep.get("tool_calls", ())]
@@ -741,8 +771,8 @@ class Registration:
                 elif st == "nodes":
                     names = [nt.get("name", "?") for nt in rep.get("node_tasks", ())]
                     extra = f", next={names}"
-                elif post_next:  # pragma: no cover
-                    extra = (  # pragma: no cover
+                elif post_next:
+                    extra = (
                         f", next={post_next[0]!r}"
                         if len(post_next) == 1
                         else f", next={post_next}"
@@ -758,21 +788,29 @@ class Registration:
         ) -> dict[str, Any]:
             inst = _inst_id(ctx)
             t_name = "?"
-            if isinstance(request, Mapping) and "call" in request:  # pragma: no cover
+            if isinstance(request, Mapping) and "call" in request:
                 try:
                     t_name = unpack(request["call"]).get("name", "?")
-                except Exception:  # pragma: no cover
-                    t_name = "?"  # pragma: no cover
+                except Exception:
+                    t_name = "?"
             try:
                 rep = run_tool(self.graph, request)
+            except RunError as exc:
+                return {"status": StepStatus.ERROR, "error": str(exc)}
             except Exception as exc:
-                if worker_logger is not None:  # pragma: no cover
+                if worker_logger is not None:
                     worker_logger.warning(
                         f"{inst}: Activity {self.tool_name} (tool={t_name!r}) "
                         f"failed: {type(exc).__name__}: {exc}"
                     )
+                if getattr(exc, "_durable_tool_error_info", None) is not None:
+                    from langchain_azure_compute.graph.runner import (
+                        _extract_failure_info,
+                    )
+
+                    raise RuntimeError(_extract_failure_info(exc)["message"]) from exc
                 raise
-            if worker_logger is not None:  # pragma: no cover
+            if worker_logger is not None:
                 worker_logger.info(
                     f"{inst}: Activity {self.tool_name} (tool={t_name!r}) "
                     f"completed -> status={rep.get('status', 'ok')}"
@@ -786,14 +824,16 @@ class Registration:
             n_name = request.get("name", "?") if isinstance(request, Mapping) else "?"
             try:
                 rep = run_node(self.graph, request)
+            except RunError as exc:
+                return {"status": StepStatus.ERROR, "error": str(exc)}
             except Exception as exc:
-                if worker_logger is not None:  # pragma: no cover
+                if worker_logger is not None:
                     worker_logger.warning(
                         f"{inst}: Activity {self.node_name} (node={n_name!r}) "
                         f"failed: {type(exc).__name__}: {exc}"
                     )
                 raise
-            if worker_logger is not None:  # pragma: no cover
+            if worker_logger is not None:
                 worker_logger.info(
                     f"{inst}: Activity {self.node_name} (node={n_name!r}) "
                     f"completed -> status={rep.get('status', 'ok')}"
@@ -814,7 +854,7 @@ class Registration:
         if self.version is not None:
             supported_versions.append(self.version)
         for prev_v in self.previous_versions:
-            if prev_v not in supported_versions:  # pragma: no cover
+            if prev_v not in supported_versions:
                 supported_versions.append(prev_v)
         for ver in supported_versions:
 
@@ -831,13 +871,13 @@ class Registration:
                     ctx: task.ActivityContext,
                     request: ToolRequest | dict[str, Any],
                 ) -> dict[str, Any]:
-                    return tool_activity(ctx, request)  # pragma: no cover
+                    return tool_activity(ctx, request)
 
                 def v_node(
                     ctx: task.ActivityContext,
                     request: NodeRequest | dict[str, Any],
                 ) -> dict[str, Any]:
-                    return node_activity(ctx, request)  # pragma: no cover
+                    return node_activity(ctx, request)
 
                 v_step.__name__ = _versioned_activity_name(self.step_name, v)
                 v_tool.__name__ = _versioned_activity_name(self.tool_name, v)
@@ -855,8 +895,8 @@ class Registration:
         ):
             try:
                 worker.use_work_item_filters()
-            except Exception:  # pragma: no cover
-                pass  # pragma: no cover
+            except Exception:
+                pass
 
     def client(self, sdk: ClientProtocol) -> RunClient:
         """Create a `RunClient` bound to this registration and the given DTS client.
@@ -877,6 +917,7 @@ class Registration:
         start_worker: bool = False,
         identity_provider: Callable[[Any], str | None] | None = None,
         require_instance_owner: bool | None = None,
+        respond_authorizer: Callable[..., bool] | None = None,
     ) -> Any:
         """Register Azure Functions v2 HTTP routes for this graph.
 
@@ -886,6 +927,7 @@ class Registration:
             start_worker: Whether to start an embedded worker.
             identity_provider: Callback validating tokens and returning principal IDs.
             require_instance_owner: Enforce per-user ownership; see create_function_app.
+            respond_authorizer: Optional verified responder policy (caller, ID, owner).
 
         Returns:
             The supplied function app with graph routes registered.
@@ -897,7 +939,59 @@ class Registration:
             start_worker=start_worker,
             identity_provider=identity_provider,
             require_instance_owner=require_instance_owner,
+            respond_authorizer=respond_authorizer,
         )
+
+    def create_function_app(
+        self,
+        dts_options: Any = None,
+        *,
+        auth_level: Any = None,
+        start_worker: bool = False,
+        identity_provider: Callable[[Any], str | None] | None = None,
+        require_instance_owner: bool | None = None,
+        respond_authorizer: Callable[..., bool] | None = None,
+    ) -> Any:
+        """Create thin HTTP routes; embedded workers require local/Always-On hosting."""
+        return create_function_app(
+            self,
+            dts_options,
+            auth_level=auth_level,
+            start_worker=start_worker,
+            identity_provider=identity_provider,
+            require_instance_owner=require_instance_owner,
+            respond_authorizer=respond_authorizer,
+        )
+
+
+def _existing_run_input(existing: Any, owner: str | None) -> dict[str, Any]:
+    """Read durable routing metadata and fail closed on owner mismatch."""
+    try:
+        payload = json.loads(getattr(existing, "serialized_input", None) or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    if owner is not None and payload.get("owner") != owner:
+        raise PermissionError("Existing orchestration belongs to another owner")
+    return payload
+
+
+def _default_thread(instance_id: str | None, owner: str | None) -> str:
+    """Keep owner-scoped checkpoint keys distinct even after DTS instance purge."""
+    thread = instance_id or "t-" + uuid.uuid4().hex
+    if owner is not None:
+        owner_hash = hashlib.sha256(owner.encode("utf-8")).hexdigest()
+        return f"owner:{owner_hash}:{thread}"
+    return thread
+
+
+def _check_checkpoint_owner(snapshot: Any, owner: str | None) -> None:
+    """Reject retained checkpoints belonging to a different principal."""
+    metadata = getattr(snapshot, "metadata", None) or {}
+    checkpoint_owner = metadata.get("durable_owner")
+    if checkpoint_owner is not None and checkpoint_owner != owner:
+        raise PermissionError("Checkpoint thread belongs to another owner")
 
 
 @beta(message=_BETA_MESSAGE)
@@ -929,6 +1023,7 @@ def attach_durability(
     previous_versions: Mapping[str, CompiledGraph] | None = None,
     migrations: Mapping[MigrationKey, MigrationSpec] | None = None,
     upgrade_on_continue_as_new: bool = False,
+    allowed_msgpack_modules: Iterable[tuple[str, ...]] | bool | None = None,
 ) -> Registration:
     """Attach a compiled LangGraph `graph` to Durable Task under namespace `name`.
 
@@ -987,6 +1082,9 @@ def attach_durability(
         upgrade_on_continue_as_new: When `True`, runs on an older version automatically
         migrate to `version`
             when rolling over via `continue_as_new`.
+        allowed_msgpack_modules: Explicitly trusted msgpack modules or types registered
+            process-wide for custom state values. True permits all types; use only
+            with trusted payloads. None keeps the restricted defaults.
 
     Returns:
         Registration for worker handlers and client run management.
@@ -1019,6 +1117,7 @@ def attach_durability(
         previous_versions=previous_versions,
         migrations=migrations,
         upgrade_on_continue_as_new=upgrade_on_continue_as_new,
+        allowed_msgpack_modules=allowed_msgpack_modules,
     )
 
 
@@ -1050,7 +1149,8 @@ class RunClient:
             input: Initial graph input, or None to continue an existing thread.
             thread_id: Checkpointer conversation identifier. Without an instance ID,
                 each turn gets a fresh orchestration ID.
-            instance_id: Execution identifier; also the default thread identifier.
+            instance_id: Execution identifier; default thread ID is owner-namespaced
+                when owner is supplied.
             reuse_existing: Attach rather than schedule again when the instance is
                 RUNNING, PENDING, SUSPENDED, or COMPLETED.
             max_concurrency: Tool fan-out limit; None uses the registration default.
@@ -1073,26 +1173,22 @@ class RunClient:
             if isinstance(cfg_dict.get("configurable"), Mapping)
             else {}
         )
-        if (
-            max_concurrency is None and cfg_dict.get("max_concurrency") is not None
-        ):  # pragma: no cover
-            max_concurrency = int(cfg_dict["max_concurrency"])  # pragma: no cover
+        if max_concurrency is None and cfg_dict.get("max_concurrency") is not None:
+            max_concurrency = int(cfg_dict["max_concurrency"])
         eff_mc = (
             reg.tool_config.max_concurrency
             if max_concurrency is None
             else int(max_concurrency)
         )
-        if eff_mc is not None and eff_mc < 1:  # pragma: no cover
-            raise ValueError("max_concurrency must be >= 1 or None")  # pragma: no cover
+        if eff_mc is not None and eff_mc < 1:
+            raise ValueError("max_concurrency must be >= 1 or None")
         eff_nmc = (
             reg.node_config.max_concurrency
             if node_max_concurrency is None
             else int(node_max_concurrency)
         )
-        if eff_nmc is not None and eff_nmc < 1:  # pragma: no cover
-            raise ValueError(
-                "node_max_concurrency must be >= 1 or None"
-            )  # pragma: no cover
+        if eff_nmc is not None and eff_nmc < 1:
+            raise ValueError("node_max_concurrency must be >= 1 or None")
         eff_ver = str(version) if version is not None else reg.version
         target_graph = _resolve_graph(reg.graph, eff_ver)
         explicit_thread = thread_id or (
@@ -1113,25 +1209,18 @@ class RunClient:
             )
             status_name = getattr(status_obj, "name", status_obj)
             if status_name in _REUSABLE_STATUSES:
-                thread = explicit_thread
-                if thread is None:
-                    raw_inp = getattr(existing, "serialized_input", None)
-                    if not raw_inp:  # pragma: no cover
-                        full = self.sdk.get_orchestration_state(  # pragma: no cover
-                            instance_id, fetch_payloads=True
-                        )
-                        raw_inp = (  # pragma: no cover
-                            getattr(full, "serialized_input", None)
-                            if full is not None
-                            else None
-                        )
-                    if raw_inp:  # pragma: no cover
-                        try:
-                            thread = (json.loads(raw_inp) or {}).get("thread")
-                        except Exception:  # pragma: no cover
-                            thread = None  # pragma: no cover
+                if not getattr(existing, "serialized_input", None):
+                    existing = self.sdk.get_orchestration_state(
+                        instance_id, fetch_payloads=True
+                    )
+                existing_input = _existing_run_input(existing, owner)
+                thread = existing_input.get("thread") or explicit_thread
+                if thread:
+                    _check_checkpoint_owner(
+                        _get_state(target_graph, _config(thread)), owner
+                    )
                 return Run(reg, self.sdk, instance_id, thread or instance_id)
-        thread = explicit_thread or instance_id or "t-" + uuid.uuid4().hex
+        thread = explicit_thread or _default_thread(instance_id, owner)
         if (
             explicit_thread is not None
             and instance_id is None
@@ -1148,22 +1237,24 @@ class RunClient:
                 else None
             )
             prev_st = getattr(prev_st_obj, "name", prev_st_obj)
-            if prev_st in ("RUNNING", "PENDING", "SUSPENDED"):  # pragma: no cover
+            if prev_st in ("RUNNING", "PENDING", "SUSPENDED"):
                 raise RunError(
                     f"thread {thread!r} already has an active run ({prev_iid!r}, "
                     f"status={prev_st}); wait for completion or pass an explicit instance_id"  # noqa: E501
                 )
         norm_cfg = _normalize_run_config(cfg_dict)
-        expect = _checkpoint_id(
-            _get_state(target_graph, _config(thread, run_config=norm_cfg))
-        )
+        snapshot = _get_state(target_graph, _config(thread, run_config=norm_cfg))
+        _check_checkpoint_owner(snapshot, owner)
+        expect = _checkpoint_id(snapshot)
         if reg.inline_checkpoints and expect is None and input is None:
             cached = _get_cached_inline_bundle(target_graph, thread)
             if cached is not None:
                 _hydrate_checkpoint_bundle(target_graph, thread, cached)
-                expect = _checkpoint_id(
-                    _get_state(target_graph, _config(thread, run_config=norm_cfg))
+                snapshot = _get_state(
+                    target_graph, _config(thread, run_config=norm_cfg)
                 )
+                _check_checkpoint_owner(snapshot, owner)
+                expect = _checkpoint_id(snapshot)
         if input is None and expect is None:
             raise ValueError("cannot start an empty thread without checkpoint state")
         request: dict[str, Any] = {
@@ -1172,6 +1263,12 @@ class RunClient:
             "expect": expect,
             "input": pack(input),
         }
+        iid = instance_id or _default_instance_id(
+            reg.name, thread, expect, request["input"]
+        )
+        request["instance_id"] = iid
+        if owner is not None:
+            request["owner"] = owner
         if eff_ver is not None:
             request["version"] = eff_ver
         if eff_mc is not None:
@@ -1182,10 +1279,10 @@ class RunClient:
             request["run_config"] = pack(norm_cfg)
         if context is not None:
             request["context"] = _pack_context(context)
-        if reg.inline_checkpoints and expect is not None:  # pragma: no cover
-            bundle = _export_checkpoint_bundle(target_graph, thread)  # pragma: no cover
-            if bundle is not None:  # pragma: no cover
-                request["checkpoint_bundle"] = bundle  # pragma: no cover
+        if reg.inline_checkpoints and expect is not None:
+            bundle = _export_checkpoint_bundle(target_graph, thread)
+            if bundle is not None:
+                request["checkpoint_bundle"] = bundle
         payload: dict[str, Any] = {
             "proto": 1,
             "thread": thread,
@@ -1203,13 +1300,14 @@ class RunClient:
                 "retries": reg.limits.retries,
                 "tool_retries": reg.limits.tool_retries,
                 "node_retries": reg.limits.node_retries,
+                "async_timeout_seconds": reg.limits.async_timeout_seconds,
             },
         }
         if eff_ver is not None:
             payload["version"] = eff_ver
         if reg.upgrade_on_continue_as_new:
             payload["upgrade_on_can"] = True
-            if reg.version is not None:  # pragma: no cover
+            if reg.version is not None:
                 payload["target_version"] = reg.version
         if eff_mc is not None:
             payload["max_concurrency"] = eff_mc
@@ -1221,14 +1319,14 @@ class RunClient:
             payload["context"] = request["context"]
         if owner is not None:
             payload["owner"] = str(owner)
-        iid = instance_id or "r-" + uuid.uuid4().hex
+        _check_payload(payload, "orchestrator input")
         self.sdk.schedule_new_orchestration(
             reg.orchestrator_name, input=payload, instance_id=iid
         )
-        if len(reg._active_thread_instances) >= 256:  # pragma: no cover
+        if len(reg._active_thread_instances) >= 256:
             reg._active_thread_instances.pop(
                 next(iter(reg._active_thread_instances)), None
-            )  # pragma: no cover
+            )
         reg._active_thread_instances[thread] = iid
         return Run(reg, self.sdk, iid, thread)
 
@@ -1245,18 +1343,16 @@ class RunClient:
                 for raw_field in (
                     "serialized_input",
                     "serialized_output",
-                ):  # pragma: no cover
+                ):
                     raw_val = getattr(existing, raw_field, None)
-                    if raw_val:  # pragma: no cover
+                    if raw_val:
                         try:
                             parsed = json.loads(raw_val)
-                            if isinstance(parsed, Mapping) and parsed.get(
-                                "thread"
-                            ):  # pragma: no cover
+                            if isinstance(parsed, Mapping) and parsed.get("thread"):
                                 thread_id = str(parsed["thread"])
                                 break
-                        except Exception:  # pragma: no cover
-                            pass  # pragma: no cover
+                        except Exception:
+                            pass
         return Run(self.registration, self.sdk, instance_id, thread_id or instance_id)
 
 
@@ -1300,16 +1396,16 @@ class Run:
         large values from the checkpointer.
         """
         iid = entry["id"]
-        if "value" in entry:  # pragma: no cover
+        if "value" in entry:
             return PendingInterrupt(iid, unpack(entry["value"]), step=step, ckpt=ckpt)
-        snap = _get_state(self._reg.graph, _config(self.thread_id))  # pragma: no cover
-        for t in snap.tasks:  # pragma: no cover
-            for intr in t.interrupts:  # pragma: no cover
-                if intr.id == iid:  # pragma: no cover
-                    return PendingInterrupt(  # pragma: no cover
+        snap = _get_state(self._reg.graph, _config(self.thread_id))
+        for t in snap.tasks:
+            for intr in t.interrupts:
+                if intr.id == iid:
+                    return PendingInterrupt(
                         iid, intr.value, step=step, ckpt=ckpt or _checkpoint_id(snap)
                     )
-        return PendingInterrupt(iid, None, step=step, ckpt=ckpt)  # pragma: no cover
+        return PendingInterrupt(iid, None, step=step, ckpt=ckpt)
 
     def pending_interrupt(self) -> PendingInterrupt | None:
         """Return the primary active `PendingInterrupt` if the orchestration is.
@@ -1317,12 +1413,16 @@ class Run:
         currently waiting on one, else `None`.
         """
         state = self._sdk.get_orchestration_state(self.instance_id, fetch_payloads=True)
-        if state is None or not state.serialized_custom_status:
+        if (
+            state is None
+            or _status_name(state) in _TERMINAL
+            or not state.serialized_custom_status
+        ):
             return None
         status_obj = json.loads(state.serialized_custom_status) or {}
         pending = status_obj.get("pending")
-        if not pending:  # pragma: no cover
-            return None  # pragma: no cover
+        if not pending:
+            return None
         return self._resolve_interrupt(
             pending, step=status_obj.get("step"), ckpt=status_obj.get("ckpt")
         )
@@ -1333,13 +1433,17 @@ class Run:
         branch interrupts).
         """
         state = self._sdk.get_orchestration_state(self.instance_id, fetch_payloads=True)
-        if state is None or not state.serialized_custom_status:
+        if (
+            state is None
+            or _status_name(state) in _TERMINAL
+            or not state.serialized_custom_status
+        ):
             return []
         status_obj = json.loads(state.serialized_custom_status) or {}
         items = status_obj.get("interrupts")
-        if not items:  # pragma: no cover
-            pending = status_obj.get("pending")  # pragma: no cover
-            items = [pending] if pending else []  # pragma: no cover
+        if not items:
+            pending = status_obj.get("pending")
+            items = [pending] if pending else []
         step, ckpt = status_obj.get("step"), status_obj.get("ckpt")
         return [self._resolve_interrupt(entry, step=step, ckpt=ckpt) for entry in items]
 
@@ -1354,16 +1458,16 @@ class Run:
         values: Any = _MISSING,
     ) -> dict[str, Any]:
         data: dict[str, Any] = {"value": pack(val)}
-        if ckpt is not None:  # pragma: no cover
+        if ckpt is not None:
             data["ckpt"] = str(ckpt)
-        if step is not None:  # pragma: no cover
+        if step is not None:
             data["step"] = int(step)
-        if version is not None:  # pragma: no cover
-            data["version"] = str(version)  # pragma: no cover
-        if as_node is not None:  # pragma: no cover
-            data["as_node"] = str(as_node)  # pragma: no cover
-        if values is not _MISSING:  # pragma: no cover
-            data["migrate_values"] = pack(values)  # pragma: no cover
+        if version is not None:
+            data["version"] = str(version)
+        if as_node is not None:
+            data["as_node"] = str(as_node)
+        if values is not _MISSING:
+            data["migrate_values"] = pack(values)
         return data
 
     def resume(
@@ -1404,16 +1508,16 @@ class Run:
         pending_ids = set(pending_by_id.keys())
 
         if receipt is _MISSING or receipt is None:
-            if not targets:  # pragma: no cover
+            if not targets:
                 raise RunError("no pending interrupt to resume")
-            if len(targets) > 1:  # pragma: no cover
-                raise ValueError(  # pragma: no cover
+            if len(targets) > 1:
+                raise ValueError(
                     "multiple interrupts are pending; pass a PendingInterrupt, "
                     "interrupt_id, or {interrupt_id: value} mapping"
                 )
-            actual_val = None if value is _MISSING else value  # pragma: no cover
-            t0 = targets[0]  # pragma: no cover
-            self._sdk.raise_orchestration_event(  # pragma: no cover
+            actual_val = None if value is _MISSING else value
+            t0 = targets[0]
+            self._sdk.raise_orchestration_event(
                 self.instance_id,
                 RESUME_EVENT_PREFIX + t0.interrupt_id,
                 data=self._build_event_data(
@@ -1425,11 +1529,11 @@ class Run:
                     values=values,
                 ),
             )
-            return  # pragma: no cover
+            return
 
         if isinstance(receipt, Command):
-            if not targets:  # pragma: no cover
-                raise RunError("no pending interrupt to resume")  # pragma: no cover
+            if not targets:
+                raise RunError("no pending interrupt to resume")
             res = receipt.resume
             if (
                 isinstance(res, Mapping)
@@ -1438,39 +1542,33 @@ class Run:
                     isinstance(k, PendingInterrupt) or str(k) in pending_ids
                     for k in res
                 )
-            ):  # pragma: no cover
-                for k in res:  # pragma: no cover
-                    iid = (
-                        k.interrupt_id if isinstance(k, PendingInterrupt) else str(k)
-                    )  # pragma: no cover
-                    if iid not in pending_ids:  # pragma: no cover
-                        raise ValueError(
-                            f"unknown interrupt_id {iid!r}"
-                        )  # pragma: no cover
-                for k, v in res.items():  # pragma: no cover
-                    iid = (
-                        k.interrupt_id if isinstance(k, PendingInterrupt) else str(k)
-                    )  # pragma: no cover
-                    matched = pending_by_id.get(iid)  # pragma: no cover
+            ):
+                for k in res:
+                    iid = k.interrupt_id if isinstance(k, PendingInterrupt) else str(k)
+                    if iid not in pending_ids:
+                        raise ValueError(f"unknown interrupt_id {iid!r}")
+                for k, v in res.items():
+                    iid = k.interrupt_id if isinstance(k, PendingInterrupt) else str(k)
+                    matched = pending_by_id.get(iid)
                     if (
                         isinstance(k, PendingInterrupt)
                         and k.ckpt is not None
                         and matched is not None
                         and matched.ckpt is not None
                         and k.ckpt != matched.ckpt
-                    ):  # pragma: no cover
-                        continue  # pragma: no cover
-                    eff_ckpt = (  # pragma: no cover
+                    ):
+                        continue
+                    eff_ckpt = (
                         k.ckpt
                         if isinstance(k, PendingInterrupt) and k.ckpt is not None
                         else (matched.ckpt if matched is not None else None)
                     )
-                    eff_step = (  # pragma: no cover
+                    eff_step = (
                         k.step
                         if isinstance(k, PendingInterrupt) and k.step is not None
                         else (matched.step if matched is not None else None)
                     )
-                    self._sdk.raise_orchestration_event(  # pragma: no cover
+                    self._sdk.raise_orchestration_event(
                         self.instance_id,
                         RESUME_EVENT_PREFIX + iid,
                         data=self._build_event_data(
@@ -1482,9 +1580,9 @@ class Run:
                             values=values,
                         ),
                     )
-                return  # pragma: no cover
-            if len(targets) > 1:  # pragma: no cover
-                raise ValueError(  # pragma: no cover
+                return
+            if len(targets) > 1:
+                raise ValueError(
                     "multiple interrupts are pending; pass a PendingInterrupt, "
                     "interrupt_id, or {interrupt_id: value} mapping "
                     "whose keys match pending interrupt_ids"
@@ -1563,8 +1661,8 @@ class Run:
                         and matched is not None
                         and matched.ckpt is not None
                         and k.ckpt != matched.ckpt
-                    ):  # pragma: no cover
-                        continue  # pragma: no cover
+                    ):
+                        continue
                     eff_ckpt = (
                         k.ckpt
                         if isinstance(k, PendingInterrupt) and k.ckpt is not None
@@ -1590,13 +1688,11 @@ class Run:
                 return
             if isinstance(receipt, str) and (
                 receipt in pending_ids or receipt.startswith(STATIC_INTERRUPT_PREFIX)
-            ):  # pragma: no cover
-                if pending_ids and receipt not in pending_ids:  # pragma: no cover
-                    raise ValueError(
-                        f"unknown interrupt_id {receipt!r}"
-                    )  # pragma: no cover
-                matched = pending_by_id.get(receipt)  # pragma: no cover
-                self._sdk.raise_orchestration_event(  # pragma: no cover
+            ):
+                if pending_ids and receipt not in pending_ids:
+                    raise ValueError(f"unknown interrupt_id {receipt!r}")
+                matched = pending_by_id.get(receipt)
+                self._sdk.raise_orchestration_event(
                     self.instance_id,
                     RESUME_EVENT_PREFIX + receipt,
                     data=self._build_event_data(
@@ -1608,7 +1704,7 @@ class Run:
                         values=values,
                     ),
                 )
-                return  # pragma: no cover
+                return
             if len(targets) > 1:
                 raise ValueError(
                     "multiple interrupts are pending; pass a PendingInterrupt, "
@@ -1662,9 +1758,7 @@ class Run:
 
         remapping `as_node`, and passing a `resume` value).
         """
-        self.resume(
-            receipt, resume, version=version, as_node=as_node, values=values
-        )  # pragma: no cover
+        self.resume(receipt, resume, version=version, as_node=as_node, values=values)
 
     def wait_pending(
         self, previous: PendingInterrupt | None = None, timeout: float = 60.0
@@ -1681,9 +1775,9 @@ class Run:
         """
         deadline = time.monotonic() + timeout
         delay = 0.02
-        while time.monotonic() < deadline:  # pragma: no cover
+        while time.monotonic() < deadline:
             receipt = self.pending_interrupt()
-            if receipt is not None:  # pragma: no cover
+            if receipt is not None:
                 if previous is None or (
                     receipt.interrupt_id != previous.interrupt_id
                     or (
@@ -1696,16 +1790,16 @@ class Run:
                         and previous.ckpt is not None
                         and receipt.ckpt != previous.ckpt
                     )
-                ):  # pragma: no cover
-                    return receipt  # pragma: no cover
+                ):
+                    return receipt
             st = self.status()
             if st in ("FAILED", "TERMINATED"):
                 self.wait_result(timeout=1)
-            if st == "COMPLETED":  # pragma: no cover
+            if st == "COMPLETED":
                 return None
-            time.sleep(delay)  # pragma: no cover
-            delay = min(0.2, delay * 1.5)  # pragma: no cover
-        raise TimeoutError("no pending interrupt observed")  # pragma: no cover
+            time.sleep(delay)
+            delay = min(0.2, delay * 1.5)
+        raise TimeoutError("no pending interrupt observed")
 
     def wait_result(self, timeout: float = 60.0) -> Any:
         """Block until the orchestration completes and return the final projected.
@@ -1737,10 +1831,10 @@ class Run:
                 else None,
                 preserve_newer=True,
             )
-        if "output" in output:
+        if output.get("output") is not None:
             return unpack(output["output"])
-        if "result" in output:  # pragma: no cover
-            return unpack(output["result"])  # pragma: no cover
+        if "result" in output:
+            return unpack(output["result"])
         return read_output(target_g, self.thread_id, output.get("ckpt"))
 
 
@@ -1774,26 +1868,22 @@ class AsyncRunClient:
             if isinstance(cfg_dict.get("configurable"), Mapping)
             else {}
         )
-        if (
-            max_concurrency is None and cfg_dict.get("max_concurrency") is not None
-        ):  # pragma: no cover
-            max_concurrency = int(cfg_dict["max_concurrency"])  # pragma: no cover
+        if max_concurrency is None and cfg_dict.get("max_concurrency") is not None:
+            max_concurrency = int(cfg_dict["max_concurrency"])
         eff_mc = (
             reg.tool_config.max_concurrency
             if max_concurrency is None
             else int(max_concurrency)
         )
-        if eff_mc is not None and eff_mc < 1:  # pragma: no cover
-            raise ValueError("max_concurrency must be >= 1 or None")  # pragma: no cover
+        if eff_mc is not None and eff_mc < 1:
+            raise ValueError("max_concurrency must be >= 1 or None")
         eff_nmc = (
             reg.node_config.max_concurrency
             if node_max_concurrency is None
             else int(node_max_concurrency)
         )
-        if eff_nmc is not None and eff_nmc < 1:  # pragma: no cover
-            raise ValueError(
-                "node_max_concurrency must be >= 1 or None"
-            )  # pragma: no cover
+        if eff_nmc is not None and eff_nmc < 1:
+            raise ValueError("node_max_concurrency must be >= 1 or None")
         eff_ver = str(version) if version is not None else reg.version
         target_graph = _resolve_graph(reg.graph, eff_ver)
         explicit_thread = thread_id or (
@@ -1803,32 +1893,41 @@ class AsyncRunClient:
             instance_id is not None
             and reuse_existing
             and hasattr(self.sdk, "get_orchestration_state")
-        ):  # pragma: no cover
-            existing = await self.sdk.get_orchestration_state(  # pragma: no cover
+        ):
+            existing = await self.sdk.get_orchestration_state(
                 instance_id, fetch_payloads=False
             )
-            status_obj = (  # pragma: no cover
+            status_obj = (
                 getattr(existing, "runtime_status", None)
                 if existing is not None
                 else None
             )
-            status_name = getattr(status_obj, "name", status_obj)  # pragma: no cover
-            if status_name in _REUSABLE_STATUSES:  # pragma: no cover
-                return AsyncRun(
-                    reg, self.sdk, instance_id, explicit_thread or instance_id
-                )  # pragma: no cover
-        thread = explicit_thread or instance_id or "t-" + uuid.uuid4().hex
+            status_name = getattr(status_obj, "name", status_obj)
+            if status_name in _REUSABLE_STATUSES:
+                if not getattr(existing, "serialized_input", None):
+                    existing = await self.sdk.get_orchestration_state(
+                        instance_id, fetch_payloads=True
+                    )
+                existing_input = _existing_run_input(existing, owner)
+                thread = existing_input.get("thread") or explicit_thread or instance_id
+                _check_checkpoint_owner(
+                    await _aget_state(target_graph, _config(thread)), owner
+                )
+                return AsyncRun(reg, self.sdk, instance_id, thread)
+        thread = explicit_thread or _default_thread(instance_id, owner)
         norm_cfg = _normalize_run_config(cfg_dict)
-        expect = _checkpoint_id(
-            _get_state(target_graph, _config(thread, run_config=norm_cfg))
-        )
+        snapshot = await _aget_state(target_graph, _config(thread, run_config=norm_cfg))
+        _check_checkpoint_owner(snapshot, owner)
+        expect = _checkpoint_id(snapshot)
         if reg.inline_checkpoints and expect is None and input is None:
             cached = _get_cached_inline_bundle(target_graph, thread)
             if cached is not None:
                 _hydrate_checkpoint_bundle(target_graph, thread, cached)
-                expect = _checkpoint_id(
-                    _get_state(target_graph, _config(thread, run_config=norm_cfg))
+                snapshot = await _aget_state(
+                    target_graph, _config(thread, run_config=norm_cfg)
                 )
+                _check_checkpoint_owner(snapshot, owner)
+                expect = _checkpoint_id(snapshot)
         if input is None and expect is None:
             raise ValueError("cannot start an empty thread without checkpoint state")
         request: dict[str, Any] = {
@@ -1837,20 +1936,26 @@ class AsyncRunClient:
             "expect": expect,
             "input": pack(input),
         }
-        if eff_ver is not None:  # pragma: no cover
-            request["version"] = eff_ver  # pragma: no cover
-        if eff_mc is not None:  # pragma: no cover
-            request["max_concurrency"] = eff_mc  # pragma: no cover
-        if eff_nmc is not None:  # pragma: no cover
-            request["node_max_concurrency"] = eff_nmc  # pragma: no cover
-        if norm_cfg is not None:  # pragma: no cover
-            request["run_config"] = pack(norm_cfg)  # pragma: no cover
-        if context is not None:  # pragma: no cover
-            request["context"] = _pack_context(context)  # pragma: no cover
-        if reg.inline_checkpoints and expect is not None:  # pragma: no cover
-            bundle = _export_checkpoint_bundle(target_graph, thread)  # pragma: no cover
-            if bundle is not None:  # pragma: no cover
-                request["checkpoint_bundle"] = bundle  # pragma: no cover
+        iid = instance_id or _default_instance_id(
+            reg.name, thread, expect, request["input"]
+        )
+        request["instance_id"] = iid
+        if owner is not None:
+            request["owner"] = owner
+        if eff_ver is not None:
+            request["version"] = eff_ver
+        if eff_mc is not None:
+            request["max_concurrency"] = eff_mc
+        if eff_nmc is not None:
+            request["node_max_concurrency"] = eff_nmc
+        if norm_cfg is not None:
+            request["run_config"] = pack(norm_cfg)
+        if context is not None:
+            request["context"] = _pack_context(context)
+        if reg.inline_checkpoints and expect is not None:
+            bundle = _export_checkpoint_bundle(target_graph, thread)
+            if bundle is not None:
+                request["checkpoint_bundle"] = bundle
         payload: dict[str, Any] = {
             "proto": 1,
             "thread": thread,
@@ -1868,25 +1973,26 @@ class AsyncRunClient:
                 "retries": reg.limits.retries,
                 "tool_retries": reg.limits.tool_retries,
                 "node_retries": reg.limits.node_retries,
+                "async_timeout_seconds": reg.limits.async_timeout_seconds,
             },
         }
-        if eff_ver is not None:  # pragma: no cover
-            payload["version"] = eff_ver  # pragma: no cover
-        if reg.upgrade_on_continue_as_new:  # pragma: no cover
-            payload["upgrade_on_can"] = True  # pragma: no cover
-            if reg.version is not None:  # pragma: no cover
-                payload["target_version"] = reg.version  # pragma: no cover
-        if eff_mc is not None:  # pragma: no cover
-            payload["max_concurrency"] = eff_mc  # pragma: no cover
-        if eff_nmc is not None:  # pragma: no cover
-            payload["node_max_concurrency"] = eff_nmc  # pragma: no cover
-        if "run_config" in request:  # pragma: no cover
-            payload["run_config"] = request["run_config"]  # pragma: no cover
-        if "context" in request:  # pragma: no cover
-            payload["context"] = request["context"]  # pragma: no cover
-        if owner is not None:  # pragma: no cover
-            payload["owner"] = str(owner)  # pragma: no cover
-        iid = instance_id or "r-" + uuid.uuid4().hex
+        if eff_ver is not None:
+            payload["version"] = eff_ver
+        if reg.upgrade_on_continue_as_new:
+            payload["upgrade_on_can"] = True
+            if reg.version is not None:
+                payload["target_version"] = reg.version
+        if eff_mc is not None:
+            payload["max_concurrency"] = eff_mc
+        if eff_nmc is not None:
+            payload["node_max_concurrency"] = eff_nmc
+        if "run_config" in request:
+            payload["run_config"] = request["run_config"]
+        if "context" in request:
+            payload["context"] = request["context"]
+        if owner is not None:
+            payload["owner"] = str(owner)
+        _check_payload(payload, "orchestrator input")
         await self.sdk.schedule_new_orchestration(
             reg.orchestrator_name, input=payload, instance_id=iid
         )
@@ -1920,11 +2026,15 @@ class AsyncRun:
         state = await self._sdk.get_orchestration_state(
             self.instance_id, fetch_payloads=True
         )
-        if state is None or not state.serialized_custom_status:  # pragma: no cover
-            return []  # pragma: no cover
+        if (
+            state is None
+            or _status_name(state) in _TERMINAL
+            or not state.serialized_custom_status
+        ):
+            return []
         cs = json.loads(state.serialized_custom_status)
-        if not cs:  # pragma: no cover
-            return []  # pragma: no cover
+        if not cs:
+            return []
         raw_items = cs.get("interrupts") or (
             [cs["pending"]] if cs.get("pending") else []
         )
@@ -1955,9 +2065,9 @@ class AsyncRun:
 
         deadline = time.monotonic() + timeout
         delay = 0.02
-        while time.monotonic() < deadline:  # pragma: no cover
+        while time.monotonic() < deadline:
             receipt = await self.pending_interrupt()
-            if receipt is not None:  # pragma: no cover
+            if receipt is not None:
                 if previous is None or (
                     receipt.interrupt_id != previous.interrupt_id
                     or (
@@ -1970,16 +2080,16 @@ class AsyncRun:
                         and previous.ckpt is not None
                         and receipt.ckpt != previous.ckpt
                     )
-                ):  # pragma: no cover
+                ):
                     return receipt
-            st = await self.status()  # pragma: no cover
-            if st in ("FAILED", "TERMINATED"):  # pragma: no cover
-                await self.wait_result(timeout=1)  # pragma: no cover
-            if st == "COMPLETED":  # pragma: no cover
-                return None  # pragma: no cover
-            await _aio.sleep(delay)  # pragma: no cover
-            delay = min(0.2, delay * 1.5)  # pragma: no cover
-        raise TimeoutError("no pending interrupt observed")  # pragma: no cover
+            st = await self.status()
+            if st in ("FAILED", "TERMINATED"):
+                await self.wait_result(timeout=1)
+            if st == "COMPLETED":
+                return None
+            await _aio.sleep(delay)
+            delay = min(0.2, delay * 1.5)
+        raise TimeoutError("no pending interrupt observed")
 
     async def resume(
         self,
@@ -1997,39 +2107,39 @@ class AsyncRun:
     ) -> None:
         """Deliver a resume event asynchronously to the paused orchestration."""
         targets = await self.pending_interrupts()
-        if isinstance(receipt, PendingInterrupt):  # pragma: no cover
+        if isinstance(receipt, PendingInterrupt):
             actual_val = None if value is _MISSING else value
             payload: dict[str, Any] = {"value": pack(actual_val)}
-            if receipt.ckpt is not None:  # pragma: no cover
+            if receipt.ckpt is not None:
                 payload["ckpt"] = receipt.ckpt
-            if receipt.step is not None:  # pragma: no cover
+            if receipt.step is not None:
                 payload["step"] = receipt.step
-            if version is not None:  # pragma: no cover
-                payload["version"] = str(version)  # pragma: no cover
-            if as_node is not None:  # pragma: no cover
-                payload["as_node"] = str(as_node)  # pragma: no cover
-            if values is not _MISSING:  # pragma: no cover
-                payload["migrate_values"] = pack(values)  # pragma: no cover
+            if version is not None:
+                payload["version"] = str(version)
+            if as_node is not None:
+                payload["as_node"] = str(as_node)
+            if values is not _MISSING:
+                payload["migrate_values"] = pack(values)
             await self._sdk.raise_orchestration_event(
                 self.instance_id,
                 RESUME_EVENT_PREFIX + receipt.interrupt_id,
                 data=payload,
             )
             return
-        if not targets:  # pragma: no cover
-            raise RunError("no pending interrupt to resume")  # pragma: no cover
-        t0 = targets[0]  # pragma: no cover
-        actual_val = (  # pragma: no cover
+        if not targets:
+            raise RunError("no pending interrupt to resume")
+        t0 = targets[0]
+        actual_val = (
             None
             if (receipt is _MISSING and value is _MISSING)
             else (receipt if value is _MISSING else value)
         )
-        payload = {"value": pack(actual_val)}  # pragma: no cover
-        if t0.ckpt is not None:  # pragma: no cover
-            payload["ckpt"] = t0.ckpt  # pragma: no cover
-        if t0.step is not None:  # pragma: no cover
-            payload["step"] = t0.step  # pragma: no cover
-        await self._sdk.raise_orchestration_event(  # pragma: no cover
+        payload = {"value": pack(actual_val)}
+        if t0.ckpt is not None:
+            payload["ckpt"] = t0.ckpt
+        if t0.step is not None:
+            payload["step"] = t0.step
+        await self._sdk.raise_orchestration_event(
             self.instance_id,
             RESUME_EVENT_PREFIX + t0.interrupt_id,
             data=payload,
@@ -2040,15 +2150,13 @@ class AsyncRun:
         state = await self._sdk.wait_for_orchestration_completion(
             self.instance_id, timeout=max(1, math.ceil(timeout)), fetch_payloads=True
         )
-        if (
-            state is None or state.runtime_status.name != "COMPLETED"
-        ):  # pragma: no cover
-            detail = (  # pragma: no cover
+        if state is None or state.runtime_status.name != "COMPLETED":
+            detail = (
                 state.failure_details.message
                 if state is not None and state.failure_details
                 else "no terminal state"
             )
-            raise RunError(detail)  # pragma: no cover
+            raise RunError(detail)
         output = json.loads(state.serialized_output)
         self.generations, self.steps = output["gen"] + 1, output["steps"]
         self.version = output.get("version")
@@ -2064,10 +2172,11 @@ class AsyncRun:
                 else None,
                 preserve_newer=True,
             )
-        if "output" in output:  # pragma: no cover
+        if output.get("output") is not None:
             return unpack(output["output"])
-        if "result" in output:  # pragma: no cover
-            return unpack(output["result"])  # pragma: no cover
-        return read_output(
-            target_g, self.thread_id, output.get("ckpt")
-        )  # pragma: no cover
+        if "result" in output:
+            return unpack(output["result"])
+        snapshot = await _aget_state(
+            target_g, _config(self.thread_id, output.get("ckpt"))
+        )
+        return _project_output(target_g, snapshot.values)

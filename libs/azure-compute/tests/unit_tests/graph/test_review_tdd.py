@@ -37,10 +37,19 @@ from langchain_azure_compute.graph.azure_functions import (
 from langchain_azure_compute.graph.runner import (
     make_orchestrator,
     pack,
+    read_output,
     run_step,
     run_tool,
     unpack,
 )
+
+
+def _repo_file(path: Path) -> Path:
+    if not path.exists():
+        pytest.skip(
+            "Repo-root README/samples not present in isolated release-tests layout"
+        )
+    return path
 
 
 def _review_chat_registration():
@@ -71,7 +80,6 @@ def _review_completed_turn(reg, thread, text, expect=None):
         "steps": 1,
         "ckpt": report["ckpt"],
         "checkpoint_bundle": report["checkpoint_bundle"],
-        "output": report["output"],
     }
 
 
@@ -228,7 +236,7 @@ def test_review_missing_protected_instance_fails_closed(monkeypatch):
     )
 
 
-def test_review_owner_is_reported_while_interrupted_and_after_resume():
+def test_review_owner_is_private_while_interrupted_and_after_resume():
     inp = {
         "thread": "t",
         "req": {"thread": "t", "kind": "start", "expect": None},
@@ -262,9 +270,9 @@ def test_review_owner_is_reported_while_interrupted_and_after_resume():
         )
         == "resume:i"
     )
-    assert ctx.statuses[-1]["owner"] == "alice"
+    assert "owner" not in ctx.statuses[-1]
     gen.send({"value": pack(True), "ckpt": "c"})
-    assert ctx.statuses[-1] == {"owner": "alice"}
+    assert ctx.statuses[-1] == {"state": "running"}
     gen.close()
 
 
@@ -319,7 +327,9 @@ async def test_review_old_result_preserves_newer_turn(
         _get_cached_inline_bundle(reg.graph, "history") == second["checkpoint_bundle"]
     )
     third = _review_completed_turn(reg, "history", "three", second["ckpt"])
-    assert [m.content for m in unpack(third["output"])["messages"]] == [
+    assert [
+        m.content for m in read_output(reg.graph, "history", third["ckpt"])["messages"]
+    ] == [
         "one",
         "reply",
         "two",
@@ -454,7 +464,11 @@ def test_review_identity_provider_and_key_only_contract(monkeypatch):
             self.payload = input
 
         def get_orchestration_state(self, *a, **k):
-            return None
+            return (
+                SimpleNamespace(serialized_input=json.dumps(self.payload))
+                if hasattr(self, "payload")
+                else None
+            )
 
     sdk = Sdk()
     app = create_function_app(reg, sdk, identity_provider=lambda req: "verified")
@@ -492,11 +506,14 @@ def test_review_owner_survives_continue_as_new_and_output(owner):
         def call_activity(self, name, **kwargs):
             return kwargs
 
+        def set_custom_status(self, value):
+            pass
+
     gen = make_orchestrator(Limits())(Ctx(), inp)
     next(gen)
     with pytest.raises(StopIteration) as completed:
         gen.send({"status": "done", "ckpt": "c"})
-    assert completed.value.value.get("owner") == expected
+    assert "owner" not in completed.value.value
 
 
 @pytest.mark.parametrize("approved", [False, True])
@@ -508,7 +525,7 @@ def test_review_readme_refund_gate(approved):
 
     from langchain_azure_compute.graph import durable_tool
 
-    text = (Path(__file__).resolve().parents[3] / "README.md").read_text(
+    text = _repo_file(Path(__file__).resolve().parents[3] / "README.md").read_text(
         encoding="utf-8"
     )
     snippet = text.split("class SupportState(TypedDict):", 1)[1].split(
@@ -552,7 +569,7 @@ def test_review_readme_refund_gate(approved):
 )
 def test_review_sample_root_install_includes_requirements(sample):
     root = Path(__file__).resolve().parents[5]
-    text = (
+    text = _repo_file(
         root / "samples" / "langgraph-durabletask" / sample / "README.md"
     ).read_text(
         encoding="utf-8",
@@ -573,7 +590,7 @@ def test_review_worker_readiness_timeout_reaps_silent_child(
     monkeypatch,
 ):
     root = Path(__file__).resolve().parents[5]
-    path = root / "samples" / "langgraph-durabletask" / sample / "sample.py"
+    path = _repo_file(root / "samples" / "langgraph-durabletask" / sample / "sample.py")
     spec = importlib.util.spec_from_file_location(f"readiness_{sample}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -624,7 +641,7 @@ def test_review_worker_readiness_success_and_failure_cleanup(
     sample, outcome, monkeypatch
 ):
     root = Path(__file__).resolve().parents[5]
-    path = root / "samples" / "langgraph-durabletask" / sample / "sample.py"
+    path = _repo_file(root / "samples" / "langgraph-durabletask" / sample / "sample.py")
     spec = importlib.util.spec_from_file_location(f"readiness_{sample}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -653,10 +670,10 @@ def test_review_worker_readiness_success_and_failure_cleanup(
                 "worker",
                 "review",
                 endpoint="127.0.0.1:8080",
-                readiness_timeout=2,
+                readiness_timeout=10,
             )
             assert pid == proc.pid
-            proc.wait(timeout=5)
+            proc.wait(timeout=10)
         else:
             with pytest.raises(
                 ValueError if outcome == "invalid_pid" else RuntimeError
@@ -665,7 +682,7 @@ def test_review_worker_readiness_success_and_failure_cleanup(
                     "worker",
                     "review",
                     endpoint="127.0.0.1:8080",
-                    readiness_timeout=2,
+                    readiness_timeout=10,
                 )
             assert children[0].poll() is not None
     finally:
@@ -678,7 +695,7 @@ def test_review_worker_readiness_success_and_failure_cleanup(
 
 def test_review_sample_local_identity_requires_explicit_opt_in(monkeypatch):
     root = Path(__file__).resolve().parents[5]
-    path = (
+    path = _repo_file(
         root
         / "samples"
         / "langgraph-durabletask"
@@ -820,8 +837,9 @@ def test_p0_2_azure_functions_cross_host_auth_and_hardening(monkeypatch) -> None
     resp_start = dispatch_function_request(app_host_a, alice_start)
     assert resp_start.status_code == 202
     start_payload = json.loads(resp_start.get_body())
-    # Thread ID must be derived from instance_id on the server ("inst-1"), ignoring caller's "victim-thread"!  # noqa: E501
-    assert start_payload["threadId"] == "inst-1"
+    # The server ignores caller thread overrides and namespaces by verified owner.
+    assert start_payload["threadId"].startswith("owner:")
+    assert start_payload["threadId"].endswith(":inst-1")
     # max_concurrency must be capped to registration's limit (2), not 99!
     sched_inp = json.loads(orch_states["inst-1"].serialized_input)
     assert sched_inp.get("max_concurrency") == 2
@@ -864,7 +882,7 @@ def test_p0_2_azure_functions_cross_host_auth_and_hardening(monkeypatch) -> None
     )
     resp_alice_b = dispatch_function_request(app_host_b, alice_status_b)
     assert resp_alice_b.status_code == 200
-    assert json.loads(resp_alice_b.get_body())["threadId"] == "inst-1"
+    assert json.loads(resp_alice_b.get_body())["threadId"] == start_payload["threadId"]
 
     # 4. /respond rejects state-mutation / migration keys (values, as_node, version) -> 400!  # noqa: E501
     bad_respond = func.HttpRequest(
@@ -1061,12 +1079,12 @@ def test_p1_1_zero_config_cross_process_start_with_expect_none_never_returns_sta
         tool_config=reg.tool_config,
         node_config=reg.node_config,
     )
-    assert unpack(r1["output"]) == {"text": "echo:turn1"}
+    assert read_output(reg.graph, "shared-t", r1["ckpt"]) == {"text": "echo:turn1"}
 
     # Now Client B (a separate process with no local bundle cache) sends Turn 2 with expect=None  # noqa: E501
     # and a different input {"text": "turn2"} to Worker 1.
     # It must NOT silently return {"text": "echo:turn1"} as replayed=True!
-    with pytest.raises(Exception, match="expect=None|already has state"):
+    with pytest.raises(Exception, match="Concurrent turn conflict"):
         r2 = run_step(
             reg.graph,
             Limits(),
@@ -1079,7 +1097,7 @@ def test_p1_1_zero_config_cross_process_start_with_expect_none_never_returns_sta
             tool_config=reg.tool_config,
             node_config=reg.node_config,
         )
-        assert unpack(r2["output"]) != {"text": "echo:turn1"}
+        assert read_output(reg.graph, "shared-t", r2["ckpt"]) != {"text": "echo:turn1"}
 
 
 def test_p1_2_bundle_single_ckpt_size_guard_and_sdk_options_default_channel() -> None:
@@ -1216,7 +1234,7 @@ def test_p1_3_invoke_does_not_catch_user_type_error_or_double_store_async_input(
         tool_config=reg2.tool_config,
         node_config=reg2.node_config,
     )
-    out = unpack(rep["output"])
+    out = read_output(reg2.graph, "t-async", rep["ckpt"])
     human_msgs = [m for m in out["messages"] if isinstance(m, HumanMessage)]
     assert len(human_msgs) == 1, f"Expected 1 HumanMessage, got {len(human_msgs)}!"
 
@@ -2161,7 +2179,7 @@ def test_p1_9_registration_register_worker_logging_and_async_client_edges(
     from langchain_core.tools import tool
     from langgraph.prebuilt import ToolNode
 
-    from langchain_azure_compute.graph import RunError, durable_node, durable_tool
+    from langchain_azure_compute.graph import durable_node, durable_tool
 
     @tool
     @durable_tool
@@ -2339,8 +2357,11 @@ def test_p1_9_registration_register_worker_logging_and_async_client_edges(
     )
     assert r3["status"] == "done"
     # 5. Step failure logging
-    with pytest.raises(RunError):
-        step_fn(ctx, {"thread": "t-wlog", "kind": "bogus_kind", "expect": r3["ckpt"]})
+    failure = step_fn(
+        ctx, {"thread": "t-wlog", "kind": "bogus_kind", "expect": r3["ckpt"]}
+    )
+    assert failure["status"] == "error"
+    assert "unknown step kind" in failure["error"]
 
     assert len(info_logs) >= 4
     assert len(warn_logs) >= 3
@@ -2375,7 +2396,7 @@ def test_p1_9_registration_register_worker_logging_and_async_client_edges(
 
 def test_p1_7_and_p1_8_pyproject_bounds_curated_beta_surface_and_no_leftovers() -> None:
     """P1-7 & P1-8:
-    - pyproject.toml sets langgraph>=1.0.2,<1.3 and <1.14 ceilings on
+    - pyproject.toml sets langgraph>=1.2.0,<1.3 and <1.14 ceilings on
     durabletask packages,  # noqa: E501
       and does not skip langgraph.* in mypy overrides.
     - langchain_azure_compute.graph.__all__ exports a small curated @beta
@@ -2386,7 +2407,9 @@ def test_p1_7_and_p1_8_pyproject_bounds_curated_beta_surface_and_no_leftovers() 
 
     pkg_root = Path(__file__).resolve().parents[3]
     pyproject_text = (pkg_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"langgraph>=1.0.2,<1.3"' in pyproject_text
+    assert '"langgraph>=1.2.0,<1.3"' in pyproject_text
+    assert '"langgraph-checkpoint>=4.1.0,<5.0"' in pyproject_text
+    assert '"langgraph-prebuilt>=1.1.0,<1.2"' in pyproject_text
     assert '"durabletask>=1.13.0,<1.14"' in pyproject_text
     assert '"durabletask-azuremanaged>=1.13.0,<1.14"' in pyproject_text
     assert '"langgraph.*"' not in pyproject_text

@@ -7,6 +7,11 @@ This sample demonstrates how to run **multi-turn stateful conversations** across
 
 ## Key Concepts Demonstrated
 
+Memory facts are keyed by each input `HumanMessage.id`, which is preserved in
+the checkpoint. Retrying a step overwrites the same fact instead of inflating
+the fact count or `Turn #`. Supply a stable, distinct message ID for every
+logical turn, including turns with identical text.
+
 - **Shared `thread_id` Across Separate Runs**: Starting Turn 1 and Turn 2 as two distinct DTS orchestrations that share `thread_id="conversation-user-42"`, automatically accumulating conversation history (`messages`) in `SqliteSaver`.
 - **Pointer-Only Checkpoint Mode**: When a graph is compiled with a persistent checkpointer (`builder.compile(checkpointer=saver, store=store)`), the DTS orchestration history carries only lightweight checkpoint pointers while full state lives in SQLite.
 - **`BaseStore` (`SqliteStore`) Long-Term Memory**: Reading and writing structured user facts (`runtime.store.get` / `runtime.store.put`) namespaced by `("memories", tenant_id, user_id)`.

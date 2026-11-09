@@ -178,6 +178,6 @@ out_exp = run_exp.wait_result(timeout=60)
 
 ```text
 1. Auto-upgrade on continue_as_new (final version='v2'): {'total': 1060, 'log': ['v1:step1', 'migrated:v1->v2', 'v2:step2', 'v2:step3_audit']}
-2. Paused on v1 interrupt: InterruptReceipt(id='...', value='Approve order on v1?', ckpt='...')
+2. Paused on v1 interrupt: PendingInterrupt(interrupt_id='...', value='Approve order on v1?', ckpt='...')
    Explicit upgrade on resume (final version='v2'): {'total': 50, 'log': ['v1:prep', 'v2:upgraded_approval:approved-by-manager', 'v2:finish', 'v2:audit']}
 ```

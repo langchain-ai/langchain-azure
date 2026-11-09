@@ -14,15 +14,25 @@ runs:
   - `POST /api/graphs/{name}/respond/{instance_id}`
   - `POST /api/graphs/{name}/respond/{instance_id}/{interrupt_id}`
   - `GET  /api/health`
+
+Production topology A (recommended): thin HTTP routes with start_worker=False on
+Functions, ACA, or App Service, plus standalone DurableTaskSchedulerWorker replicas
+on ACA/AKS using the azure-durabletask-scheduler KEDA scaler, or a Dedicated App
+Service plan with Always On. Topology B: start_worker=True only for local development
+(func start) or a Dedicated Always-On plan. Embedded workers are not supported on
+Consumption/Flex: HTTP scaling does not track DTS work or keep workers alive.
 """
 
 from __future__ import annotations
 
 import atexit
+import inspect
 import json
 import os
+import re
 import threading
 import urllib.parse
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +45,82 @@ if TYPE_CHECKING:
     from langchain_azure_compute.graph._api import ClientProtocol, Registration
 
 _MISSING = object()
+MAX_HTTP_BODY_BYTES = 1_000_000
+_INSTANCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{1,128}$")
+_RESERVED_RESUME_KEYS = frozenset(("__packed__", "__resume_map__", "checkpoint_bundle"))
+
+
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int)):
+        text = str(value).strip().lower()
+        if text in ("1", "true", "yes"):
+            return True
+        if text in ("0", "false", "no", ""):
+            return False
+    raise ValueError("Expected a boolean (true/false, 1/0, or yes/no)")
+
+
+def _parse_int(value: Any, field: str, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"{field} must be an integer >= {minimum}")
+    try:
+        parsed = int(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{field} must be an integer >= {minimum}") from exc
+    if parsed < minimum:
+        raise ValueError(f"{field} must be an integer >= {minimum}")
+    return parsed
+
+
+def _validate_instance_id(value: Any) -> None:
+    if not isinstance(value, str) or not _INSTANCE_ID_PATTERN.fullmatch(value):
+        raise ValueError("instance_id must match [A-Za-z0-9_.:@-]{1,128}")
+
+
+def _read_json_body(req: Any) -> tuple[Any, bool]:
+    raw = req.get_body()
+    if len(raw) > MAX_HTTP_BODY_BYTES:
+        raise OverflowError("Request body exceeds 1000000 bytes")
+    if not raw:
+        return None, False
+    try:
+        return json.loads(raw.decode("utf-8")), True
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError("Invalid JSON body") from exc
+
+
+def _has_reserved_resume_keys(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return bool(_RESERVED_RESUME_KEYS.intersection(value)) or any(
+            _has_reserved_resume_keys(v) for v in value.values()
+        )
+    if isinstance(value, list):
+        return any(_has_reserved_resume_keys(v) for v in value)
+    return False
+
+
+class _BoundedCache(OrderedDict[str, str]):
+    """FIFO hints with serialized insertions; authorization reads the backend."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+
+    def __setitem__(self, key: str, value: str) -> None:
+        with self._lock:
+            super().__setitem__(key, value)
+            while len(self) > 1024:
+                self.popitem(last=False)
+
+
+def _easyauth_enabled() -> bool:
+    return os.environ.get("WEBSITE_AUTH_ENABLED", "").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 def _require_azure_functions() -> Any:
@@ -50,21 +136,21 @@ def _require_azure_functions() -> Any:
 
 
 def _json_default(obj: Any) -> Any:
-    if hasattr(obj, "model_dump") and callable(obj.model_dump):  # pragma: no cover
-        return obj.model_dump()  # pragma: no cover
-    if is_dataclass(obj) and not isinstance(obj, type):  # pragma: no cover
-        return asdict(obj)  # pragma: no cover
-    if hasattr(obj, "type") and hasattr(obj, "content"):  # pragma: no cover
-        data: dict[str, Any] = {  # pragma: no cover
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        return obj.model_dump()
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return asdict(obj)
+    if hasattr(obj, "type") and hasattr(obj, "content"):
+        data: dict[str, Any] = {
             "type": getattr(obj, "type"),
             "content": getattr(obj, "content"),
         }
-        if getattr(obj, "tool_calls", None):  # pragma: no cover
-            data["tool_calls"] = getattr(obj, "tool_calls")  # pragma: no cover
-        if getattr(obj, "tool_call_id", None):  # pragma: no cover
-            data["tool_call_id"] = getattr(obj, "tool_call_id")  # pragma: no cover
-        return data  # pragma: no cover
-    return str(obj)  # pragma: no cover
+        if getattr(obj, "tool_calls", None):
+            data["tool_calls"] = getattr(obj, "tool_calls")
+        if getattr(obj, "tool_call_id", None):
+            data["tool_call_id"] = getattr(obj, "tool_call_id")
+        return data
+    return str(obj)
 
 
 def _json_response(payload: Any, *, status_code: int = 200) -> Any:
@@ -78,31 +164,31 @@ def _json_response(payload: Any, *, status_code: int = 200) -> Any:
 
 def _extract_api_base(url: str) -> str:
     clean = url.split("?", 1)[0].rstrip("/")
-    for marker in ("/graphs/", "/workflow/"):  # pragma: no cover
-        if marker in clean:  # pragma: no cover
+    for marker in ("/graphs/", "/workflow/"):
+        if marker in clean:
             return clean.split(marker, 1)[0]
-    if clean.endswith("/health"):  # pragma: no cover
-        return clean[: -len("/health")]  # pragma: no cover
-    return clean  # pragma: no cover
+    if clean.endswith("/health"):
+        return clean[: -len("/health")]
+    return clean
 
 
 def _coerce_to_registration(item: Any, default_name: str | None = None) -> Registration:
     from langchain_azure_compute.graph import Registration as RegCls
     from langchain_azure_compute.graph import attach_durability
 
-    if isinstance(item, RegCls):  # pragma: no cover
+    if isinstance(item, RegCls):
         return item
-    inferred_name = (  # pragma: no cover
+    inferred_name = (
         default_name
         or getattr(item, "_durable_name", None)
         or getattr(item, "name", None)
     )
-    if not inferred_name or str(inferred_name) == "LangGraph":  # pragma: no cover
-        raise ValueError(  # pragma: no cover
+    if not inferred_name or str(inferred_name) == "LangGraph":
+        raise ValueError(
             "Pass a `name` (or `{name: graph}` mapping / "
             "`attach_durability(graph, name=...)`) when registering a graph"
         )
-    return attach_durability(item, name=str(inferred_name))  # pragma: no cover
+    return attach_durability(item, name=str(inferred_name))
 
 
 def _normalize_registrations(
@@ -114,26 +200,20 @@ def _normalize_registrations(
 
     if isinstance(registrations, RegCls):
         return {registrations.name: registrations}
-    if isinstance(registrations, Mapping):  # pragma: no cover
+    if isinstance(registrations, Mapping):
         out: dict[str, Registration] = {}
         for k, v in registrations.items():
             reg = _coerce_to_registration(v, default_name=str(k))
             out[str(k)] = reg
         return out
-    if hasattr(registrations, "get_state") or hasattr(
-        registrations, "invoke"
-    ):  # pragma: no cover
-        reg = _coerce_to_registration(
-            registrations, default_name=default_name
-        )  # pragma: no cover
-        return {reg.name: reg}  # pragma: no cover
-    out_iter: dict[str, Registration] = {}  # pragma: no cover
-    for item in registrations:  # pragma: no cover
-        reg = _coerce_to_registration(
-            item, default_name=default_name
-        )  # pragma: no cover
-        out_iter[reg.name] = reg  # pragma: no cover
-    return out_iter  # pragma: no cover
+    if hasattr(registrations, "get_state") or hasattr(registrations, "invoke"):
+        reg = _coerce_to_registration(registrations, default_name=default_name)
+        return {reg.name: reg}
+    out_iter: dict[str, Registration] = {}
+    for item in registrations:
+        reg = _coerce_to_registration(item, default_name=default_name)
+        out_iter[reg.name] = reg
+    return out_iter
 
 
 def _is_client_sdk(obj: Any) -> bool:
@@ -144,7 +224,7 @@ def _is_client_sdk(obj: Any) -> bool:
 
 def _extract_caller_principal(req: Any) -> str | None:
     """Extract platform-injected identity only behind configured Azure EasyAuth."""
-    if os.environ.get("WEBSITE_AUTH_ENABLED", "").lower() not in ("true", "1", "yes"):
+    if not _easyauth_enabled():
         return None
     headers = getattr(req, "headers", None)
     if not headers or not hasattr(headers, "items"):
@@ -158,17 +238,23 @@ def _extract_caller_principal(req: Any) -> str | None:
 
 
 def _resolve_durable_owner(
-    state: _FunctionAppState, sdk: Any, instance_id: str
+    state: _FunctionAppState,
+    sdk: Any,
+    instance_id: str,
+    *,
+    bypass_cache: bool = True,
 ) -> str | None:
-    """Resolve the owner principal of `instance_id` from memory or durable DTS state."""
-    cached = state.owner_by_instance.get(instance_id)
-    if cached is not None:
-        return cached
+    """Resolve ownership from DTS, never from a potentially stale host cache.
+
+    bypass_cache is retained for explicit post-start verification; all lookups
+    bypass the cache regardless of its value.
+    """
     try:
         existing = sdk.get_orchestration_state(instance_id, fetch_payloads=True)
     except Exception as exc:
         raise PermissionError("Cannot verify instance ownership") from exc
     if existing is None:
+        state.owner_by_instance.pop(instance_id, None)
         return None
     for field in ("serialized_input", "serialized_custom_status", "serialized_output"):
         raw = getattr(existing, field, None)
@@ -195,9 +281,17 @@ class _FunctionAppState:
         self, sdk_or_options: Any = None, *, start_worker: bool = False
     ) -> None:
         self.registrations: dict[str, Registration] = {}
-        self.thread_by_instance: dict[str, str] = {}
-        self.owner_by_instance: dict[str, str] = {}
-        self._sdk_or_options = sdk_or_options
+        self._route_security: (
+            tuple[Callable[[Any], str | None] | None, bool, Callable[..., bool] | None]
+            | None
+        ) = None
+        self.thread_by_instance = _BoundedCache()
+        self.owner_by_instance = _BoundedCache()
+        self._sdk_or_options = (
+            dict(sdk_or_options)
+            if isinstance(sdk_or_options, Mapping)
+            else sdk_or_options
+        )
         self._want_worker = bool(start_worker)
         self._client_sdk: Any = (
             sdk_or_options if _is_client_sdk(sdk_or_options) else None
@@ -208,13 +302,13 @@ class _FunctionAppState:
         self._lock = threading.Lock()
 
     def _resolve_options(self) -> dict[str, Any]:
-        from langchain_azure_compute.graph import sdk_options  # pragma: no cover
+        from langchain_azure_compute.graph import sdk_options
 
-        if isinstance(self._sdk_or_options, Mapping):  # pragma: no cover
-            return dict(self._sdk_or_options)  # pragma: no cover
-        if isinstance(self._sdk_or_options, str):  # pragma: no cover
-            return sdk_options(self._sdk_or_options)  # pragma: no cover
-        return sdk_options()  # pragma: no cover
+        if isinstance(self._sdk_or_options, Mapping):
+            return dict(self._sdk_or_options)
+        if isinstance(self._sdk_or_options, str):
+            return sdk_options(self._sdk_or_options)
+        return sdk_options()
 
     def add_registrations(
         self,
@@ -223,44 +317,97 @@ class _FunctionAppState:
         sdk_or_options: Any = None,
         start_worker: bool = False,
     ) -> None:
+        old_worker = None
         with self._lock:
-            if sdk_or_options is not None:  # pragma: no cover
-                self._sdk_or_options = sdk_or_options
-                if _is_client_sdk(sdk_or_options):  # pragma: no cover
-                    self._client_sdk = sdk_or_options
-                    self._owns_client = False
-            if start_worker:  # pragma: no cover
-                self._want_worker = True  # pragma: no cover
-            self.registrations.update(regs)
-            if self._worker is not None:  # pragma: no cover
-                for name, reg in self.registrations.items():  # pragma: no cover
-                    if name not in self._registered_on_worker:  # pragma: no cover
-                        reg.register(self._worker)  # pragma: no cover
-                        self._registered_on_worker.add(name)  # pragma: no cover
+            for name, reg in regs.items():
+                if name != reg.name:
+                    raise ValueError("Registration mapping keys must match graph names")
+                if name in self.registrations and self.registrations[name] is not reg:
+                    raise ValueError(f"Graph {name!r} is already registered")
+            previous = (
+                self.registrations.copy(),
+                self._sdk_or_options,
+                self._want_worker,
+                self._client_sdk,
+                self._owns_client,
+                self._worker,
+                self._registered_on_worker.copy(),
+            )
+            try:
+                if sdk_or_options is not None:
+                    if (
+                        self._worker is not None or self._client_sdk is not None
+                    ) and sdk_or_options != self._sdk_or_options:
+                        raise ValueError(
+                            "Cannot change connection options on a live app"
+                        )
+                    self._sdk_or_options = (
+                        dict(sdk_or_options)
+                        if isinstance(sdk_or_options, Mapping)
+                        else sdk_or_options
+                    )
+                    if _is_client_sdk(sdk_or_options):
+                        self._client_sdk = sdk_or_options
+                        self._owns_client = False
+                self._want_worker = self._want_worker or start_worker
+                added = set(regs).difference(self.registrations)
+                self.registrations.update(regs)
+                if self._worker is not None and added:
+                    old_worker, self._worker = self._worker, None
+                if self._want_worker and not _is_client_sdk(self._sdk_or_options):
+                    self._ensure_worker_locked(self._resolve_options())
+            except BaseException:
+                (
+                    self.registrations,
+                    self._sdk_or_options,
+                    self._want_worker,
+                    self._client_sdk,
+                    self._owns_client,
+                    self._worker,
+                    self._registered_on_worker,
+                ) = previous
+                raise
+        if old_worker is not None:
+            try:
+                old_worker.stop()
+            except Exception:
+                pass
 
     def ensure_worker(self) -> DurableTaskSchedulerWorker | None:
         with self._lock:
-            if self._want_worker and not _is_client_sdk(
-                self._sdk_or_options
-            ):  # pragma: no cover
-                opts = self._resolve_options()  # pragma: no cover
-                self._ensure_worker_locked(opts)  # pragma: no cover
+            if self._want_worker and not _is_client_sdk(self._sdk_or_options):
+                opts = self._resolve_options()
+                self._ensure_worker_locked(opts)
             return self._worker
 
     def _ensure_worker_locked(self, opts: dict[str, Any]) -> None:
-        if self._worker is None:  # pragma: no cover
-            worker = DurableTaskSchedulerWorker(**opts)  # pragma: no cover
-            for name, reg in self.registrations.items():  # pragma: no cover
-                reg.register(worker)  # pragma: no cover
-                self._registered_on_worker.add(name)  # pragma: no cover
-            worker.start()  # pragma: no cover
-            self._worker = worker  # pragma: no cover
-            atexit.register(self.stop)  # pragma: no cover
-        else:
-            for name, reg in self.registrations.items():  # pragma: no cover
-                if name not in self._registered_on_worker:  # pragma: no cover
-                    reg.register(self._worker)  # pragma: no cover
-                    self._registered_on_worker.add(name)  # pragma: no cover
+        if self._worker is not None:
+            return
+        worker = DurableTaskSchedulerWorker(**opts)
+        failures: list[BaseException] = []
+
+        def start() -> None:
+            try:
+                for reg in self.registrations.values():
+                    reg.register(worker)
+                worker.start()
+            except BaseException as exc:
+                failures.append(exc)
+
+        # SDK 1.13 creates _runLoop with no daemon argument. Starting from a
+        # daemon bootstrap makes it inherit daemon=True *before* it starts.
+        bootstrap = threading.Thread(target=start, daemon=True)
+        bootstrap.start()
+        bootstrap.join()
+        if failures:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+            raise failures[0]
+        self._worker = worker
+        self._registered_on_worker = set(self.registrations)
+        atexit.register(self.stop)
 
     def get_sdk(self) -> ClientProtocol:
         with self._lock:
@@ -268,36 +415,38 @@ class _FunctionAppState:
                 self._want_worker
                 and self._worker is None
                 and not _is_client_sdk(self._sdk_or_options)
-            ):  # pragma: no cover
-                opts = self._resolve_options()  # pragma: no cover
-                self._ensure_worker_locked(opts)  # pragma: no cover
-            if self._client_sdk is None:  # pragma: no cover
-                opts = self._resolve_options()  # pragma: no cover
-                self._client_sdk = DurableTaskSchedulerClient(
-                    **opts
-                )  # pragma: no cover
-                self._owns_client = True  # pragma: no cover
-                atexit.register(self.stop)  # pragma: no cover
+            ):
+                opts = self._resolve_options()
+                self._ensure_worker_locked(opts)
+            if self._client_sdk is None:
+                if _is_client_sdk(self._sdk_or_options):
+                    self._client_sdk = self._sdk_or_options
+                    return self._client_sdk  # type: ignore[no-any-return]
+                opts = self._resolve_options()
+                self._client_sdk = DurableTaskSchedulerClient(**opts)
+                self._owns_client = True
+                atexit.register(self.stop)
             return self._client_sdk  # type: ignore[no-any-return]
 
     def stop(self) -> None:
         with self._lock:
-            if self._worker is not None:  # pragma: no cover
-                try:  # pragma: no cover
-                    self._worker.stop()  # pragma: no cover
-                except Exception:  # pragma: no cover
-                    pass  # pragma: no cover
-                self._worker = None  # pragma: no cover
-                self._registered_on_worker.clear()  # pragma: no cover
-            if self._owns_client and self._client_sdk is not None:  # pragma: no cover
-                close_fn = getattr(self._client_sdk, "close", None)  # pragma: no cover
-                if callable(close_fn):  # pragma: no cover
-                    try:  # pragma: no cover
-                        close_fn()  # pragma: no cover
-                    except Exception:  # pragma: no cover
-                        pass  # pragma: no cover
-                self._client_sdk = None  # pragma: no cover
-                self._owns_client = False  # pragma: no cover
+            worker, self._worker = self._worker, None
+            client, self._client_sdk = self._client_sdk, None
+            owns_client, self._owns_client = self._owns_client, False
+            self._registered_on_worker.clear()
+            self._want_worker = False
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        if owns_client and client is not None:
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
 
 def register_function_routes(
@@ -308,6 +457,66 @@ def register_function_routes(
     start_worker: bool = False,
     identity_provider: Callable[[Any], str | None] | None = None,
     require_instance_owner: bool | None = None,
+    respond_authorizer: Callable[..., bool] | None = None,
+) -> Any:
+    """Atomically register thin HTTP routes with fail-closed ownership by default.
+
+    Embedded workers (start_worker=True) are for local development or Dedicated
+    Always-On plans only; use standalone ACA/AKS workers for Consumption/Flex.
+    respond_authorizer optionally accepts (caller, instance_id[, owner]) and
+    replaces the default owner-only response policy, but never authentication.
+    Incremental registrations inherit the app's security policy; changing it
+    or a live app's connection options requires a new app.
+    """
+    builders = list(getattr(app, "_function_builders", []))
+    attributes = {
+        key: getattr(app, key, _MISSING)
+        for key in ("_langgraph_state", "start_worker", "stop_worker")
+    }
+    existing_security = getattr(attributes["_langgraph_state"], "_route_security", None)
+    if existing_security is not None:
+        requested = (identity_provider, require_instance_owner, respond_authorizer)
+        if any(
+            value is not None and value != previous
+            for value, previous in zip(requested, existing_security)
+        ):
+            raise ValueError("Route security cannot change on an existing app")
+        identity_provider, require_instance_owner, respond_authorizer = (
+            existing_security
+        )
+    try:
+        return _register_function_routes(
+            app,
+            registrations,
+            sdk_or_options,
+            start_worker=start_worker,
+            identity_provider=identity_provider,
+            require_instance_owner=require_instance_owner,
+            respond_authorizer=respond_authorizer,
+        )
+    except BaseException:
+        new_state = getattr(app, "_langgraph_state", None)
+        if new_state is not None and new_state is not attributes["_langgraph_state"]:
+            new_state.stop()
+        app._function_builders[:] = builders
+        for key, value in attributes.items():
+            if value is _MISSING:
+                if hasattr(app, key):
+                    delattr(app, key)
+            else:
+                setattr(app, key, value)
+        raise
+
+
+def _register_function_routes(
+    app: Any,
+    registrations: Registration | Iterable[Registration] | Mapping[str, Registration],
+    sdk_or_options: Any = None,
+    *,
+    start_worker: bool = False,
+    identity_provider: Callable[[Any], str | None] | None = None,
+    require_instance_owner: bool | None = None,
+    respond_authorizer: Callable[..., bool] | None = None,
 ) -> Any:
     """Register Durable LangGraph HTTP trigger routes onto an Azure Functions v2.
 
@@ -321,27 +530,57 @@ def register_function_routes(
         app: Function app receiving the HTTP routes.
         registrations: Graph registrations, individually or as a collection.
         sdk_or_options: Existing DTS client or SDK connection options.
-        start_worker: Whether to start an embedded worker for these graphs.
+        start_worker: False by default; True only for local/Dedicated Always-On.
         identity_provider: Callback validating a token and returning its principal ID.
             Otherwise identity is read only behind Azure EasyAuth
             (`WEBSITE_AUTH_ENABLED=true`); raw client principal headers are untrusted.
-        require_instance_owner: Enforce verified per-instance ownership. Defaults to
-            True for non-anonymous apps. False explicitly selects shared Function-key
-            access, with no per-user isolation; the Azure host must validate keys.
+        require_instance_owner: Ownership defaults to True, including ANONYMOUS
+            behind EasyAuth or identity_provider. ANONYMOUS without an identity source
+            requires explicit False for unauthenticated local/shared-key access.
+        respond_authorizer: Optional (caller, instance_id[, owner]) policy for
+            authenticated approvers; None requires the caller to own the instance.
 
     Returns:
         The supplied function app with routes registered.
     """
-    _require_azure_functions()
+    func_mod = _require_azure_functions()
+    app_auth = getattr(app, "_auth_level", None)
+    if (
+        app_auth == func_mod.AuthLevel.ANONYMOUS
+        and require_instance_owner is None
+        and identity_provider is None
+        and not _easyauth_enabled()
+    ):
+        raise ValueError(
+            "AuthLevel.ANONYMOUS requires explicit require_instance_owner=False "
+            "or an identity_provider / WEBSITE_AUTH_ENABLED=true"
+        )
+    enforce_owner = True if require_instance_owner is None else require_instance_owner
+    respond_arity = 3
+    if respond_authorizer is not None:
+        signature = inspect.signature(respond_authorizer)
+        try:
+            signature.bind("caller", "instance", "owner")
+        except TypeError:
+            try:
+                signature.bind("caller", "instance")
+            except TypeError as exc:
+                raise ValueError(
+                    "respond_authorizer must accept 2 or 3 arguments"
+                ) from exc
+            respond_arity = 2
     regs = _normalize_registrations(registrations)
+    if not regs:
+        raise ValueError("Provide at least one graph registration")
     state: _FunctionAppState | None = getattr(app, "_langgraph_state", None)
-    if state is not None:  # pragma: no cover
-        state.add_registrations(  # pragma: no cover
+    if state is not None:
+        state.add_registrations(
             regs, sdk_or_options=sdk_or_options, start_worker=start_worker
         )
-        return app  # pragma: no cover
+        return app
 
     state = _FunctionAppState(sdk_or_options, start_worker=start_worker)
+    state._route_security = (identity_provider, enforce_owner, respond_authorizer)
     state.add_registrations(
         regs, sdk_or_options=sdk_or_options, start_worker=start_worker
     )
@@ -350,17 +589,16 @@ def register_function_routes(
     setattr(app, "stop_worker", state.stop)
 
     def _check_auth(
-        req: Any, instance_id: str | None = None, *, allow_new: bool = False
+        req: Any,
+        instance_id: str | None = None,
+        *,
+        allow_new: bool = False,
+        responding: bool = False,
     ) -> tuple[str | None, Any]:
-        func_mod = _require_azure_functions()
-        app_auth = getattr(app, "_auth_level", None)
-        enforce_owner = (
-            app_auth is not None and app_auth != func_mod.AuthLevel.ANONYMOUS
-            if require_instance_owner is None
-            else require_instance_owner
-        )
+        custom_respond = responding and respond_authorizer is not None
+        needs_identity = enforce_owner or custom_respond
         caller = None
-        if enforce_owner:
+        if needs_identity:
             try:
                 caller = (
                     identity_provider(req)
@@ -369,19 +607,32 @@ def register_function_routes(
                 )
             except Exception:
                 caller = None
-        if enforce_owner and (not isinstance(caller, str) or not caller):
+        if needs_identity and (not isinstance(caller, str) or not caller):
             return None, _json_response(
                 {"error": "Authentication required"}, status_code=401
             )
-        if enforce_owner and instance_id is not None:
-            sdk = state.get_sdk()
+        if needs_identity and instance_id is not None:
             try:
+                sdk = state.get_sdk()
                 expected_owner = _resolve_durable_owner(state, sdk, str(instance_id))
-            except PermissionError:
+            except Exception:
                 return None, _json_response(
                     {"error": "Cannot verify instance ownership"}, status_code=403
                 )
-            if (expected_owner is None and not allow_new) or (
+            if custom_respond:
+                allowed = False
+                if expected_owner is not None and respond_authorizer is not None:
+                    try:
+                        args = (caller, instance_id, expected_owner)[:respond_arity]
+                        allowed = respond_authorizer(*args) is True
+                    except Exception:
+                        allowed = False
+                if not allowed:
+                    return None, _json_response(
+                        {"error": "Caller is not authorized to respond"},
+                        status_code=403,
+                    )
+            elif (expected_owner is None and not allow_new) or (
                 expected_owner is not None and expected_owner != caller
             ):
                 return None, _json_response(
@@ -393,42 +644,39 @@ def register_function_routes(
     def _handle_start(req: Any) -> Any:
         name = req.route_params.get("name", "")
         reg = state.registrations.get(name)
-        if reg is None:  # pragma: no cover
-            return _json_response(
-                {"error": f"Unknown graph {name!r}"}, status_code=404
-            )  # pragma: no cover
+        if reg is None:
+            return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
 
-        raw_body = req.get_body()
-        if not raw_body:  # pragma: no cover
-            body: Any = None  # pragma: no cover
-        else:
-            try:
-                body = json.loads(raw_body.decode("utf-8"))
-            except Exception:  # pragma: no cover
-                return _json_response(  # pragma: no cover
-                    {"error": "Invalid JSON body"}, status_code=400
-                )
+        body, _ = _read_json_body(req)
 
         params = dict(req.params) if getattr(req, "params", None) else {}
+        controls = (
+            {**params, **body}
+            if isinstance(body, Mapping) and "input" in body
+            else params
+        )
         if isinstance(body, Mapping) and "input" in body:
             inp = body["input"]
-            instance_id = (
-                body.get("instance_id")
-                or body.get("instanceId")
-                or params.get("instance_id")
-                or params.get("instanceId")
-            )
-            version = body.get("version") or params.get("version")
-            reuse_existing = bool(body.get("reuse_existing", True))
-            max_concurrency = body.get("max_concurrency")
-            node_max_concurrency = body.get("node_max_concurrency")
         else:
             inp = body
-            instance_id = params.get("instance_id") or params.get("instanceId")
-            version = params.get("version")
-            reuse_existing = True
-            max_concurrency = None
-            node_max_concurrency = None
+        instance_id = controls.get("instance_id", controls.get("instanceId"))
+        if instance_id is not None:
+            _validate_instance_id(instance_id)
+        version = controls.get("version")
+        if version is not None:
+            from langchain_azure_compute.graph import RunError
+
+            try:
+                reg._resolve_graph(str(version))
+            except RunError as exc:
+                raise ValueError("Unknown graph version") from exc
+        reuse_existing = _parse_bool(controls.get("reuse_existing", True))
+        if "wait" in controls:
+            _parse_bool(controls["wait"])
+        if "timeout" in controls:
+            _parse_int(controls["timeout"], "timeout")
+        max_concurrency = controls.get("max_concurrency")
+        node_max_concurrency = controls.get("node_max_concurrency")
 
         caller, err_resp = _check_auth(
             req, str(instance_id) if instance_id is not None else None, allow_new=True
@@ -438,16 +686,14 @@ def register_function_routes(
 
         eff_mc: int | None = None
         if max_concurrency is not None:
-            req_mc = max(1, int(max_concurrency))
+            req_mc = _parse_int(max_concurrency, "max_concurrency")
             reg_mc = reg.tool_config.max_concurrency
             eff_mc = min(req_mc, reg_mc) if reg_mc is not None else req_mc
         eff_nmc: int | None = None
-        if node_max_concurrency is not None:  # pragma: no cover
-            req_nmc = max(1, int(node_max_concurrency))  # pragma: no cover
-            reg_nmc = reg.node_config.max_concurrency  # pragma: no cover
-            eff_nmc = (
-                min(req_nmc, reg_nmc) if reg_nmc is not None else req_nmc
-            )  # pragma: no cover
+        if node_max_concurrency is not None:
+            req_nmc = _parse_int(node_max_concurrency, "node_max_concurrency")
+            reg_nmc = reg.node_config.max_concurrency
+            eff_nmc = min(req_nmc, reg_nmc) if reg_nmc is not None else req_nmc
 
         sdk = state.get_sdk()
         client = reg.client(sdk)
@@ -462,20 +708,22 @@ def register_function_routes(
             version=str(version) if version is not None else None,
             owner=caller,
         )
+        if enforce_owner and caller is not None:
+            durable_owner = _resolve_durable_owner(
+                state, sdk, run.instance_id, bypass_cache=True
+            )
+            if durable_owner != caller:
+                raise PermissionError("Cannot verify instance ownership")
         state.thread_by_instance[run.instance_id] = run.thread_id
-        if caller is not None and run.instance_id not in state.owner_by_instance:
-            state.owner_by_instance[run.instance_id] = caller
         api_base = _extract_api_base(req.url)
+        quoted_id = urllib.parse.quote(run.instance_id, safe="")
         return _json_response(
             {
                 "instanceId": run.instance_id,
                 "threadId": run.thread_id,
-                "statusQueryGetUri": (
-                    f"{api_base}/graphs/{name}/status/{run.instance_id}"
-                ),
+                "statusQueryGetUri": (f"{api_base}/graphs/{name}/status/{quoted_id}"),
                 "respondUri": (
-                    f"{api_base}/graphs/{name}/respond/"
-                    f"{run.instance_id}/{{interruptId}}"
+                    f"{api_base}/graphs/{name}/respond/{quoted_id}/{{interruptId}}"
                 ),
             },
             status_code=202,
@@ -484,18 +732,16 @@ def register_function_routes(
     def _handle_status(req: Any) -> Any:
         name = req.route_params.get("name", "")
         instance_id = req.route_params.get("instance_id", "")
+        _validate_instance_id(instance_id)
         reg = state.registrations.get(name)
-        if reg is None:  # pragma: no cover
-            return _json_response(
-                {"error": f"Unknown graph {name!r}"}, status_code=404
-            )  # pragma: no cover
+        if reg is None:
+            return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
         _, err_resp = _check_auth(req, instance_id)
         if err_resp is not None:
             return err_resp
 
-        hint_thread = state.thread_by_instance.get(instance_id)
         sdk = state.get_sdk()
-        run = reg.client(sdk).attach_run(instance_id, hint_thread)
+        run = reg.client(sdk).attach_run(instance_id)
         runtime_status = run.status()
         if runtime_status == "NOT_FOUND":
             return _json_response(
@@ -517,7 +763,8 @@ def register_function_routes(
                 "ckpt": intr.ckpt,
                 "respondUrl": (
                     f"{api_base}/graphs/{name}/respond/"
-                    f"{instance_id}/{intr.interrupt_id}"
+                    f"{urllib.parse.quote(instance_id, safe='')}/"
+                    f"{urllib.parse.quote(intr.interrupt_id, safe='')}"
                 ),
             }
             for intr in interrupts
@@ -526,8 +773,8 @@ def register_function_routes(
         error_msg: str | None = None
         if runtime_status == "COMPLETED":
             output = run.wait_result(timeout=5)
-        elif runtime_status == "FAILED":  # pragma: no cover
-            error_msg = "Workflow execution failed"  # pragma: no cover
+        elif runtime_status == "FAILED":
+            error_msg = "Workflow execution failed"
 
         resp_body: dict[str, Any] = {
             "instanceId": run.instance_id,
@@ -536,8 +783,8 @@ def register_function_routes(
             "pendingInterrupts": pending_payload,
             "output": output,
         }
-        if error_msg is not None:  # pragma: no cover
-            resp_body["error"] = error_msg  # pragma: no cover
+        if error_msg is not None:
+            resp_body["error"] = error_msg
         return _json_response(resp_body, status_code=200)
 
     def _handle_respond(req: Any) -> Any:
@@ -545,49 +792,27 @@ def register_function_routes(
 
         name = req.route_params.get("name", "")
         instance_id = req.route_params.get("instance_id", "")
+        _validate_instance_id(instance_id)
         route_interrupt_id = req.route_params.get("interrupt_id")
         reg = state.registrations.get(name)
-        if reg is None:  # pragma: no cover
-            return _json_response(
-                {"error": f"Unknown graph {name!r}"}, status_code=404
-            )  # pragma: no cover
-        _, err_resp = _check_auth(req, instance_id)
+        if reg is None:
+            return _json_response({"error": f"Unknown graph {name!r}"}, status_code=404)
+        caller, err_resp = _check_auth(req, instance_id, responding=True)
         if err_resp is not None:
             return err_resp
 
-        raw_body = req.get_body()
-        has_body = bool(raw_body)
-        if not has_body:  # pragma: no cover
-            body: Any = None  # pragma: no cover
-        else:
-            try:
-                body = json.loads(raw_body.decode("utf-8"))
-            except Exception:  # pragma: no cover
-                return _json_response(  # pragma: no cover
-                    {"error": "Invalid JSON body"}, status_code=400
-                )
+        body, has_body = _read_json_body(req)
 
         params = dict(req.params) if getattr(req, "params", None) else {}
-        if isinstance(body, Mapping) and any(
-            k in body for k in ("values", "as_node", "asNode", "version")
-        ):
+        if any(k in params for k in ("values", "as_node", "asNode", "version")):
             return _json_response(
                 {"error": "State and version overrides are not permitted on respond"},
                 status_code=400,
             )
-        if any(
-            k in params for k in ("values", "as_node", "asNode", "version")
-        ):  # pragma: no cover
-            return _json_response(  # pragma: no cover
-                {"error": "State and version overrides are not permitted on respond"},
-                status_code=400,
-            )
 
-        if isinstance(body, Mapping) and "value" in body:  # pragma: no cover
-            value = body["value"]  # pragma: no cover
-            body_interrupt_id = body.get("interrupt_id") or body.get(
-                "interruptId"
-            )  # pragma: no cover
+        if isinstance(body, Mapping) and "value" in body:
+            value = body["value"]
+            body_interrupt_id = body.get("interrupt_id") or body.get("interruptId")
         else:
             value = body
             body_interrupt_id = None
@@ -598,12 +823,31 @@ def register_function_routes(
             or params.get("interrupt_id")
             or params.get("interruptId")
         )
+        if (
+            _has_reserved_resume_keys(value)
+            or (
+                isinstance(body, Mapping)
+                and "value" in body
+                and any(
+                    k in body
+                    for k in ("kind", "values", "as_node", "asNode", "version")
+                )
+            )
+            or (
+                eff_interrupt_id is None
+                and isinstance(body, Mapping)
+                and "value" not in body
+                and any(k in body for k in ("kind", "values", "as_node", "asNode"))
+            )
+        ):
+            raise ValueError("Internal orchestration envelopes are not permitted")
+        if caller is not None and isinstance(value, dict):
+            value = {**value, "responder": caller, "reviewer": caller}
 
         sdk = state.get_sdk()
-        hint_thread = state.thread_by_instance.get(instance_id)
-        run = reg.client(sdk).attach_run(instance_id, hint_thread)
-        if run.status() == "NOT_FOUND":  # pragma: no cover
-            return _json_response(  # pragma: no cover
+        run = reg.client(sdk).attach_run(instance_id)
+        if run.status() == "NOT_FOUND":
+            return _json_response(
                 {
                     "instanceId": instance_id,
                     "error": f"Instance {instance_id!r} not found",
@@ -612,19 +856,19 @@ def register_function_routes(
             )
 
         try:
-            if eff_interrupt_id is not None:  # pragma: no cover
+            if eff_interrupt_id is not None:
                 run.resume(str(eff_interrupt_id), value)
-            elif has_body:  # pragma: no cover
-                run.resume(value)  # pragma: no cover
+            elif has_body:
+                run.resume(value)
             else:
-                run.resume()  # pragma: no cover
+                run.resume()
         except RunError:
             return _json_response(
                 {"instanceId": instance_id, "error": "No pending interrupt to resume"},
                 status_code=409,
             )
-        except ValueError:  # pragma: no cover
-            return _json_response(  # pragma: no cover
+        except ValueError:
+            return _json_response(
                 {
                     "instanceId": instance_id,
                     "error": "Invalid interrupt resume request",
@@ -644,41 +888,64 @@ def register_function_routes(
             status_code=200,
         )
 
+    def _safe_handler(handler: Callable[[Any], Any], req: Any) -> Any:
+        from langchain_azure_compute.graph import RunError
+
+        try:
+            return handler(req)
+        except OverflowError:
+            return _json_response({"error": "Request body too large"}, status_code=413)
+        except PermissionError:
+            return _json_response(
+                {"error": "Cannot verify instance ownership"}, status_code=403
+            )
+        except ValueError:
+            # Validation messages are generated above; SDK exceptions are not echoed.
+            return _json_response(
+                {"error": "Invalid request parameters or JSON body"}, status_code=400
+            )
+        except RunError:
+            return _json_response(
+                {"error": "Run conflicts with existing state"}, status_code=409
+            )
+        except Exception:
+            return _json_response({"error": "Internal server error"}, status_code=500)
+
     @app.route(route="graphs/{name}/start", methods=["POST"])
     def langgraph_start(req: Any) -> Any:
-        return _handle_start(req)
+        return _safe_handler(_handle_start, req)
 
     @app.route(route="workflow/{name}/run", methods=["POST"])
     def langgraph_workflow_run(req: Any) -> Any:
-        return _handle_start(req)  # pragma: no cover
+        return _safe_handler(_handle_start, req)
 
     @app.route(route="graphs/{name}/status/{instance_id}", methods=["GET"])
     def langgraph_status(req: Any) -> Any:
-        return _handle_status(req)
+        return _safe_handler(_handle_status, req)
 
     @app.route(route="workflow/{name}/status/{instance_id}", methods=["GET"])
     def langgraph_workflow_status(req: Any) -> Any:
-        return _handle_status(req)  # pragma: no cover
+        return _safe_handler(_handle_status, req)
 
     @app.route(route="graphs/{name}/respond/{instance_id}", methods=["POST"])
     def langgraph_respond(req: Any) -> Any:
-        return _handle_respond(req)  # pragma: no cover
+        return _safe_handler(_handle_respond, req)
 
     @app.route(
         route="graphs/{name}/respond/{instance_id}/{interrupt_id}", methods=["POST"]
     )
     def langgraph_respond_interrupt(req: Any) -> Any:
-        return _handle_respond(req)
+        return _safe_handler(_handle_respond, req)
 
     @app.route(route="workflow/{name}/respond/{instance_id}", methods=["POST"])
     def langgraph_workflow_respond(req: Any) -> Any:
-        return _handle_respond(req)  # pragma: no cover
+        return _safe_handler(_handle_respond, req)
 
     @app.route(
         route="workflow/{name}/respond/{instance_id}/{interrupt_id}", methods=["POST"]
     )
     def langgraph_workflow_respond_interrupt(req: Any) -> Any:
-        return _handle_respond(req)  # pragma: no cover
+        return _safe_handler(_handle_respond, req)
 
     @app.route(route="health", methods=["GET"])
     def langgraph_health(req: Any) -> Any:
@@ -701,6 +968,7 @@ def create_function_app(
     start_worker: bool = False,
     identity_provider: Callable[[Any], str | None] | None = None,
     require_instance_owner: bool | None = None,
+    respond_authorizer: Callable[..., bool] | None = None,
 ) -> Any:
     """Create an Azure Functions v2 `func.FunctionApp` wired with durable LangGraph.
 
@@ -722,13 +990,19 @@ def create_function_app(
         graphs: Named graphs or graph collection, used when registrations is omitted.
         name: Name for a single raw graph.
         auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
-        start_worker: Whether to start an embedded DTS worker.
+        start_worker: False (thin routes) by default; True only for local development
+            or Dedicated Always-On hosting, never Consumption/Flex.
         identity_provider: Verified-token callback returning a principal ID.
             Without it, ownership requires Azure EasyAuth; Function keys alone do not
             identify users. Never enable EasyAuth trust on a directly exposed host.
-        require_instance_owner: Enforce per-user isolation (default for FUNCTION auth).
+        require_instance_owner: Enforce per-user isolation, also with ANONYMOUS auth
+            behind EasyAuth/identity_provider. Anonymous local access needs explicit
+            False; omission without an identity source raises ValueError.
             Set False only for intentionally shared, platform-key-authorized access.
             The local Python server does not validate Function keys.
+        respond_authorizer: Optional (caller, instance_id[, owner]) approver policy.
+            None requires the owner. Verified callers are stamped into dict resumes
+            as responder and reviewer, replacing untrusted request fields.
 
     Returns:
         A function app with graph routes and a local serve method.
@@ -744,8 +1018,8 @@ def create_function_app(
         if registrations is not None
         else (graphs if graphs is not None else graph)
     )
-    if target is None:  # pragma: no cover
-        raise ValueError(  # pragma: no cover
+    if target is None:
+        raise ValueError(
             "Provide `registrations`, `graph`, or `graphs` to "
             "create_function_app / LangGraphFunctionApp"
         )
@@ -757,29 +1031,26 @@ def create_function_app(
         start_worker=start_worker,
         identity_provider=identity_provider,
         require_instance_owner=require_instance_owner,
+        respond_authorizer=respond_authorizer,
     )
 
     def _serve(*, host: str = "127.0.0.1", port: int = 7071) -> None:
-        state: _FunctionAppState | None = getattr(
-            app, "_langgraph_state", None
-        )  # pragma: no cover
-        if state is not None:  # pragma: no cover
-            state.ensure_worker()  # pragma: no cover
-        server = FunctionAppHttpServer(app, host=host, port=port)  # pragma: no cover
-        server.start()  # pragma: no cover
-        print(  # pragma: no cover
+        app._langgraph_state.ensure_worker()
+        server = FunctionAppHttpServer(app, host=host, port=port)
+        server.start()
+        print(
             f"LangGraphFunctionApp listening at {server.base_url}/api "
             f"(graphs={list(norm.keys())})",
             flush=True,
         )
-        try:  # pragma: no cover
-            while True:  # pragma: no cover
-                threading.Event().wait(3600)  # pragma: no cover
-        except KeyboardInterrupt:  # pragma: no cover
-            pass  # pragma: no cover
+        try:
+            while True:
+                threading.Event().wait(3600)
+        except KeyboardInterrupt:
+            pass
         finally:
-            server.stop()  # pragma: no cover
-            stop_function_app(app)  # pragma: no cover
+            server.stop()
+            stop_function_app(app)
 
     setattr(app, "serve", _serve)
     return app
@@ -796,6 +1067,7 @@ def LangGraphFunctionApp(
     start_worker: bool = False,
     identity_provider: Callable[[Any], str | None] | None = None,
     require_instance_owner: bool | None = None,
+    respond_authorizer: Callable[..., bool] | None = None,
 ) -> Any:
     """One-line Azure Functions host for durable LangGraph workflows (counterpart to.
 
@@ -808,9 +1080,11 @@ def LangGraphFunctionApp(
         graphs: Named graphs or a collection of graphs.
         name: Name for a single raw graph.
         auth_level: HTTP authorization level; defaults to `func.AuthLevel.FUNCTION`.
-        start_worker: Whether to start an embedded DTS worker.
+        start_worker: False by default; True only for local/Dedicated Always-On.
         identity_provider: Callback validating caller tokens; see create_function_app.
         require_instance_owner: Whether to enforce per-user ownership.
+        respond_authorizer: Optional authenticated approver policy; see
+            create_function_app.
 
     Returns:
         The function app created by create_function_app.
@@ -823,7 +1097,7 @@ def LangGraphFunctionApp(
         `app = LangGraphFunctionApp(graphs={"expense_approval": expense_graph, "triage":
         triage_graph})`
     """
-    return create_function_app(  # pragma: no cover
+    return create_function_app(
         registrations,
         dts_options,
         graph=graph,
@@ -833,6 +1107,7 @@ def LangGraphFunctionApp(
         start_worker=start_worker,
         identity_provider=identity_provider,
         require_instance_owner=require_instance_owner,
+        respond_authorizer=respond_authorizer,
     )
 
 
@@ -842,7 +1117,7 @@ def stop_function_app(app: Any) -> None:
     on `app`.
     """
     state: _FunctionAppState | None = getattr(app, "_langgraph_state", None)
-    if state is not None:  # pragma: no cover
+    if state is not None:
         state.stop()
 
 
@@ -856,8 +1131,8 @@ def _match_route_template(template: str, path: str) -> dict[str, str] | None:
         if t_seg.startswith("{") and t_seg.endswith("}"):
             key = t_seg[1:-1].rstrip("?")
             params[key] = urllib.parse.unquote(p_seg)
-        elif t_seg != p_seg:  # pragma: no cover
-            return None  # pragma: no cover
+        elif t_seg != p_seg:
+            return None
     return params
 
 
@@ -875,22 +1150,20 @@ def dispatch_function_request(app: Any, req: Any) -> Any:
     func = _require_azure_functions()
     parsed = urllib.parse.urlsplit(req.url)
     rel_path = parsed.path.lstrip("/")
-    if rel_path.startswith("api/"):  # pragma: no cover
+    if rel_path.startswith("api/"):
         rel_path = rel_path[len("api/") :]
-    elif rel_path == "api":  # pragma: no cover
-        rel_path = ""  # pragma: no cover
+    elif rel_path == "api":
+        rel_path = ""
 
     method = str(req.method or "GET").upper()
     builders = getattr(app, "_function_builders", [])
     auth_level = getattr(app, "auth_level", func.AuthLevel.ANONYMOUS)
 
-    for fb in builders:  # pragma: no cover
+    for fb in builders:
         fn = fb.build(auth_level)
         trigger = fn.get_trigger()
-        if (
-            trigger is None or getattr(trigger, "type", None) != "httpTrigger"
-        ):  # pragma: no cover
-            continue  # pragma: no cover
+        if trigger is None or getattr(trigger, "type", None) != "httpTrigger":
+            continue
         allowed_methods = [
             str(getattr(m, "value", m)).upper()
             for m in (getattr(trigger, "methods", None) or [])
@@ -926,7 +1199,7 @@ def dispatch_function_request(app: Any, req: Any) -> Any:
         user_fn = fn.get_user_function()
         return user_fn(bound_req)
 
-    return _json_response(  # pragma: no cover
+    return _json_response(
         {"error": f"No Azure Function route matched {method} {parsed.path}"},
         status_code=404,
     )
@@ -969,46 +1242,57 @@ class FunctionAppHttpServer:
 
         class _Handler(BaseHTTPRequestHandler):
             def _handle_all(self) -> None:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                raw_body = self.rfile.read(length) if length > 0 else b""
-                full_url = f"{server_ref.base_url}{self.path}"
-                headers_dict = {k: v for k, v in self.headers.items()}
-                az_req = func.HttpRequest(
-                    method=self.command,
-                    url=full_url,
-                    headers=headers_dict,
-                    params={},
-                    route_params={},
-                    body=raw_body,
-                )
+                az_resp = None
                 try:
-                    az_resp = dispatch_function_request(app_ref, az_req)
-                except Exception as exc:  # pragma: no cover
+                    length = _parse_int(
+                        self.headers.get("Content-Length", "0") or "0",
+                        "Content-Length",
+                        minimum=0,
+                    )
+                    if length > MAX_HTTP_BODY_BYTES:
+                        az_resp = _json_response(
+                            {"error": "Request body too large"}, status_code=413
+                        )
+                except (ValueError, TypeError):
                     az_resp = _json_response(
-                        {"error": str(exc)}, status_code=500
-                    )  # pragma: no cover
+                        {"error": "Invalid Content-Length"}, status_code=400
+                    )
+                if az_resp is None:
+                    raw_body = self.rfile.read(length) if length > 0 else b""
+                    az_req = func.HttpRequest(
+                        method=self.command,
+                        url=f"{server_ref.base_url}{self.path}",
+                        headers={k: v for k, v in self.headers.items()},
+                        params={},
+                        route_params={},
+                        body=raw_body,
+                    )
+                    try:
+                        az_resp = dispatch_function_request(app_ref, az_req)
+                    except Exception:
+                        az_resp = _json_response(
+                            {"error": "Internal server error"}, status_code=500
+                        )
 
                 body_bytes: bytes = az_resp.get_body() or b""
                 self.send_response(int(az_resp.status_code))
                 resp_headers = dict(getattr(az_resp, "headers", {}) or {})
-                if "content-type" not in {
-                    k.lower() for k in resp_headers
-                }:  # pragma: no cover
+                if "content-type" not in {k.lower() for k in resp_headers}:
                     self.send_header(
                         "Content-Type", getattr(az_resp, "mimetype", "application/json")
                     )
-                for hk, hv in resp_headers.items():  # pragma: no cover
-                    self.send_header(hk, hv)  # pragma: no cover
+                for hk, hv in resp_headers.items():
+                    self.send_header(hk, hv)
                 self.send_header("Content-Length", str(len(body_bytes)))
                 self.end_headers()
-                if body_bytes:  # pragma: no cover
+                if body_bytes:
                     self.wfile.write(body_bytes)
 
             def do_GET(self) -> None:  # noqa: N802
                 self._handle_all()
 
             def do_POST(self) -> None:  # noqa: N802
-                self._handle_all()  # pragma: no cover
+                self._handle_all()
 
             def log_message(self, format: str, *args: Any) -> None:
                 return
@@ -1022,9 +1306,9 @@ class FunctionAppHttpServer:
             This server, ready to accept requests.
         """
         state: _FunctionAppState | None = getattr(self.app, "_langgraph_state", None)
-        if state is not None:  # pragma: no cover
+        if state is not None:
             state.ensure_worker()
-        if self._thread is None:  # pragma: no cover
+        if self._thread is None:
             self._thread = threading.Thread(
                 target=self._server.serve_forever, daemon=True
             )
@@ -1033,7 +1317,7 @@ class FunctionAppHttpServer:
 
     def stop(self) -> None:
         """Stop the HTTP server and release the function app's worker and client."""
-        if self._thread is not None:  # pragma: no cover
+        if self._thread is not None:
             self._server.shutdown()
             self._server.server_close()
             self._thread.join(timeout=5)

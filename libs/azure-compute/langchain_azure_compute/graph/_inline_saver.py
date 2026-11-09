@@ -35,7 +35,6 @@ import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-import ormsgpack
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -44,7 +43,6 @@ from langchain_azure_compute.graph._config import (
     CheckpointBundle,
     Checkpointer,
     CompiledGraph,
-    _strict_msgpack_ext_hook,
 )
 
 MAX_INLINE_THREAD_BUNDLES = 256
@@ -79,31 +77,17 @@ def _encode_typed(pair: tuple[str, bytes]) -> list[str]:
     return [pair[0], base64.b64encode(pair[1]).decode("ascii")]
 
 
-def _decode_typed(item: Sequence[str]) -> tuple[str, bytes]:
-    if not isinstance(item, (list, tuple)) or len(item) != 2:  # pragma: no cover
-        raise ValueError("invalid checkpoint bundle typed entry")  # pragma: no cover
+def _decode_typed(item: Sequence[str], serde: Any = _SERDE) -> tuple[str, bytes]:
+    if not isinstance(item, (list, tuple)) or len(item) != 2:
+        raise ValueError("invalid checkpoint bundle typed entry")
     kind, b64 = item[0], item[1]
-    if not isinstance(kind, str) or kind not in (
-        "json",
-        "msgpack",
-        "null",
-        "bytes",
-        "empty",
-    ):  # pragma: no cover
-        raise ValueError(
-            f"unsupported checkpoint bundle entry type {kind!r}"
-        )  # pragma: no cover
-    if not isinstance(b64, str):  # pragma: no cover
-        raise ValueError(
-            "checkpoint bundle entry payload must be a base64 string"
-        )  # pragma: no cover
+    if not isinstance(kind, str):
+        raise ValueError(f"unsupported checkpoint bundle entry type {kind!r}")
+    if not isinstance(b64, str):
+        raise ValueError("checkpoint bundle entry payload must be a base64 string")
     raw = base64.b64decode(b64)
-    if kind == "msgpack":
-        ormsgpack.unpackb(
-            raw, ext_hook=_strict_msgpack_ext_hook, option=ormsgpack.OPT_NON_STR_KEYS
-        )
-    elif kind != "empty":
-        _SERDE.loads_typed((kind, raw))
+    if kind != "empty":
+        serde.loads_typed((kind, raw))
     return (kind, raw)
 
 
@@ -113,11 +97,9 @@ def _ensure_checkpointer(graph: CompiledGraph) -> Checkpointer:
     configured.
     """
     cp = getattr(graph, "checkpointer", None)
-    if cp is None:  # pragma: no cover
-        cp = InMemorySaver(serde=_SERDE)  # pragma: no cover
-        graph.checkpointer = cp  # pragma: no cover
-    elif isinstance(cp, InMemorySaver):
-        cp.serde = _SERDE
+    if cp is None:
+        cp = InMemorySaver(serde=_SERDE)
+        graph.checkpointer = cp
     return cp  # type: ignore[return-value]
 
 
@@ -140,15 +122,15 @@ def _export_checkpoint_bundle(
 
     Includes latest and parent checkpoints, writes, and live blobs for crash recovery.
     """
-    if not _is_inline_checkpointer(graph):  # pragma: no cover
-        return None  # pragma: no cover
+    if not _is_inline_checkpointer(graph):
+        return None
     saver = getattr(graph, "checkpointer", None)
-    if not isinstance(saver, InMemorySaver):  # pragma: no cover
-        return None  # pragma: no cover
+    if not isinstance(saver, InMemorySaver):
+        return None
     with _INLINE_SAVER_LOCK:
         ns_map = saver.storage.get(thread)
-        if not ns_map:  # pragma: no cover
-            return None  # pragma: no cover
+        if not ns_map:
+            return None
 
         out_storage: dict[str, dict[str, list[Any]]] = {}
         out_writes: list[list[Any]] = []
@@ -163,9 +145,7 @@ def _export_checkpoint_bundle(
             keep_cids: list[str] = [latest_cid]
             if has_ua:
                 _, _, parent_cid = ckpts[latest_cid]
-                if (
-                    parent_cid and parent_cid in ckpts and parent_cid not in keep_cids
-                ):  # pragma: no cover
+                if parent_cid and parent_cid in ckpts and parent_cid not in keep_cids:
                     keep_cids.append(parent_cid)
             ns_out: dict[str, list[Any]] = {}
             for cid in keep_cids:
@@ -228,12 +208,12 @@ def _hydrate_checkpoint_bundle(
 
     (`InMemorySaver`).
     """
-    if not bundle:  # pragma: no cover
-        return  # pragma: no cover
+    if not bundle:
+        return
     with _INLINE_SAVER_LOCK:
         saver = _ensure_checkpointer(graph)
-        if not isinstance(saver, InMemorySaver):  # pragma: no cover
-            return  # pragma: no cover
+        if not isinstance(saver, InMemorySaver):
+            return
         if (
             only_if_missing_cfg is not None
             and saver.get_tuple(only_if_missing_cfg) is not None
@@ -254,8 +234,8 @@ def _hydrate_checkpoint_bundle(
             ns_dict = saver.storage[thread][ns]
             for cid, entry in ckpts.items():
                 ns_dict[cid] = (
-                    _decode_typed(entry[0]),
-                    _decode_typed(entry[1]),
+                    _decode_typed(entry[0], saver.serde),
+                    _decode_typed(entry[1], saver.serde),
                     entry[2],
                 )
         for ns, cid, w_entries in bundle.get("writes") or ():
@@ -264,9 +244,9 @@ def _hydrate_checkpoint_bundle(
                 outer[(task_id, int(idx))] = (
                     task_id,
                     ch,
-                    _decode_typed(val_enc),
+                    _decode_typed(val_enc, saver.serde),
                     task_path,
                 )
         for ns, ch, ver, blob_enc in bundle.get("blobs") or ():
-            saver.blobs[(thread, ns, ch, ver)] = _decode_typed(blob_enc)
+            saver.blobs[(thread, ns, ch, ver)] = _decode_typed(blob_enc, saver.serde)
         _cache_inline_bundle(saver, thread, cast(CheckpointBundle, dict(bundle)))
