@@ -1,182 +1,111 @@
 # 🦜️🔗 LangChain Azure
 
-This repository contains the following packages with Azure integrations with LangChain:
+Python integrations for building LangGraph, LangChain, and Deep Agents applications on Azure.
+Each package is maintained independently and supports Python 3.11 through 3.14.
 
-- [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
-- [langchain-azure-compute](./libs/azure-compute)
-- [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
-- [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
-- [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
-- [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
-- [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
+## Packages
 
-**Note**: This repository will replace all Azure integrations currently present in the `langchain-community` package. Users are encouraged to migrate to this repository as soon as possible.
+Install the packages for the Azure services your application uses.
+Package names link to their documentation;
+links in the Purpose column lead to usage guides and samples.
 
-## LangGraph on Azure
+| Package | Purpose |
+| --- | --- |
+| [langchain-azure-ai](./libs/azure-ai/README.md) | Call Microsoft Foundry [chat models](#call-microsoft-foundry-models) and [embedding models](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).<br>Use [existing Foundry agents as graph nodes](./libs/azure-ai/README.md#microsoft-foundry-agent-service).<br>Access [tools, skills, MCP, memory, guardrails, tracing, and Azure AI Search](#explore-azure-integrations).<br>Host [LangGraph applications as Foundry hosted agents](#host-applications-on-microsoft-foundry). |
+| [langchain-azure-compute](./libs/azure-compute/README.md) | Run agent-generated code with [Azure Container Apps dynamic sessions](./libs/azure-compute/README.md#dynamic-sessions).<br>Provide Deep Agents compute backends with [dynamic sessions](./libs/azure-compute/README.md#deep-agents-backend) and [Azure Container Apps sandboxes](./libs/azure-compute/README.md#sandboxes-deep-agents-backend). |
+| [langchain-azure-cosmosdb](./libs/azure-cosmosdb/README.md) | Use [Azure Cosmos DB for vector search, semantic caching, and chat history](./samples/cosmosdb-nosql/README.md#langchain-integrations).<br>Persist [LangGraph checkpoints, node caches, and data shared across threads](./samples/cosmosdb-nosql/README.md#langgraph-integrations) in Azure Cosmos DB. |
+| [langchain-sqlserver](./libs/sqlserver/README.md) | Use [SQL Server and Azure SQL for vector search and chat history](https://github.com/Azure-Samples/azure-sql-langchain). |
+| [langchain-azure-postgresql](./libs/azure-postgresql/README.md) | Use [Azure Database for PostgreSQL for vector search with DiskANN indexing](./libs/azure-postgresql/README.md#usage). |
+| [langchain-azure-storage](./libs/azure-storage/README.md) | Load documents with the [Azure Blob Storage document loader](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage).<br>Persist Deep Agents files with the [Azure Blob Storage filesystem backend](./samples/deepagents-storage-backend/README.md). |
+| [langchain-azure-dynamic-sessions](./libs/azure-dynamic-sessions/README.md) | **Deprecated.** Azure Container Apps dynamic sessions integrations. [Migrate to langchain-azure-compute](./libs/azure-dynamic-sessions/README.md). |
 
-Build with Azure models using the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain), or bring an existing compiled graph to Microsoft Foundry with the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents).
-The [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) cover local runs and deployment, including [hosting an existing graph without changing its implementation](./samples/hosting/langgraph-hosted-agents/responses/09_run/README.md).
-For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
+For help choosing between `langchain-azure-ai` and `langchain-openai`,
+see the [Microsoft integrations guide](https://docs.langchain.com/oss/python/integrations/providers/microsoft#choose-a-package).
 
-## Samples
+## Call Microsoft Foundry models
 
-- [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
-- [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
-- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
+Call [Microsoft Foundry models](https://learn.microsoft.com/azure/foundry/concepts/foundry-models-overview) through LangChain's chat model interface.
+The example below shows how to authenticate and make your first model call with `langchain-azure-ai`.
 
-# Quick Start with langchain-azure-ai
+### Install langchain-azure-ai
 
-The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
-
-This package includes:
-
-* [Microsoft Agent Service](./libs/azure-ai/langchain_azure_ai/agents)
-* [Microsoft Foundry Models inference](./libs/azure-ai/langchain_azure_ai/chat_models)
-* [Microsoft Foundry Content Safety](./libs/azure-ai/langchain_azure_ai/agents/middleware)
-* [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
-* [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
-
-Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
-
-### Install langchain-azure
+Install the package and sign in to Azure with the Azure CLI.
 
 ```bash
 pip install -U langchain-azure-ai
+az login
 ```
 
-### Microsoft Foundry Models
+### Call a model
 
-Use any Foundry Model with OpenAI-compatible APIs:
-
-We recommend the [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) when your model and endpoint support it. Set `use_responses_api=True` as shown below. If you prefer Chat Completions and your model and endpoint support it, set `use_responses_api=False` instead.
+This example uses the Responses API.
+Use a Microsoft Foundry project with a model deployment that supports the Responses API.
+Your identity needs the [**Foundry User**](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-models#prerequisites) role on the project.
+Replace the project endpoint and model deployment name below.
 
 ```python
 from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIOpenAIApiChatModel(
-    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
-    credential=DefaultAzureCredential(), # requires Azure AI Developer role. If using keys, use parameter `endpoint` instead of `project_endpoint`.
-    model="gpt-5",                       # your model deployment name
+    project_endpoint=(
+        "https://{your-resource-name}.services.ai.azure.com"
+        "/api/projects/{your-project}"
+    ),
+    credential=DefaultAzureCredential(),
+    model="{your-model-deployment-name}",
     use_responses_api=True,
 )
 
-messages = [
-    SystemMessage(
-      content="Translate the following from English into Italian"
-    ),
-    HumanMessage(content="hi!"),
-]
-
-model.invoke(messages).pretty_print()
+model.invoke("Translate 'Hello!' into Italian.").pretty_print()
 ```
 
-```output
-================================== Ai Message ==================================
-Ciao!
-```
+For endpoint and authentication options, see the [model quick start](./libs/azure-ai/README.md#microsoft-foundry-models)
+and the [LangChain model guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-models).
 
-Use the `azure_ai` provider with `init_chat_model`. Choose one of the
-following authentication options.
+## Host applications on Microsoft Foundry
 
-**Option A: Project endpoint with Microsoft Entra ID**
+Deploy your LangChain, LangGraph, or Deep Agents application to Microsoft Foundry as a [hosted agent](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents).
+The `langchain-azure-ai` hosting adapter connects your application to Foundry's agent APIs.
 
-Set `AZURE_AI_PROJECT_ENDPOINT` and sign in with `az login` for local
-development:
-
-```python
-import os
-
-from langchain.chat_models import init_chat_model
-
-os.environ["AZURE_AI_PROJECT_ENDPOINT"] = "https://{your-resource-name}.services.ai.azure.com/api/projects/<project>"
-
-model = init_chat_model("azure_ai:gpt-5-mini")
-model.invoke("Hello!").pretty_print()
-```
-
-**Option B: OpenAI-compatible endpoint with an API key**
-
-Set `OPENAI_API_BASE` and `OPENAI_API_KEY`. Leave `AZURE_AI_PROJECT_ENDPOINT`
-unset when using this option:
-
-```python
-import os
-
-from langchain.chat_models import init_chat_model
-
-os.environ["OPENAI_API_BASE"] = "https://{your-resource-name}.services.ai.azure.com/openai/v1"
-os.environ["OPENAI_API_KEY"] = "{your-key}"
-
-model = init_chat_model("azure_ai:gpt-5-mini")
-model.invoke("Hello!").pretty_print()
-```
-
-### Microsoft Foundry Agent Service
-
-Use `AgentServiceFactory` to create a managed Foundry agent and add it as a
-node in a LangGraph graph.
-
-For local development, install the required extra and sign in:
+For an existing LangGraph application, point `langgraph.json` at its compiled graph.
+With the application's dependencies, credentials, and model settings configured,
+run these commands from the application directory to start a local Responses endpoint:
 
 ```bash
-pip install -U "langchain-azure-ai[opentelemetry]"
-az login
+pip install -U "langchain-azure-ai[hosting]"
+python -m langchain_azure_ai.agents.hosting.run --protocol responses
 ```
 
-Set your project endpoint and model deployment name. This creates a version
-of `my-echo-agent` in your project:
+See the [hosting quick start](./libs/azure-ai/README.md#hosting-langgraph-agents-on-microsoft-foundry)
+for configuration and examples, and the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+for Azure deployment.
 
-```python
-from azure.identity import DefaultAzureCredential
-from langchain_core.messages import HumanMessage
-from langgraph.graph import END, START, StateGraph
-from langchain_azure_ai.agents import AgentServiceAgentState, AgentServiceFactory
-from langchain_azure_ai.utils.agents import pretty_print
+## Explore Azure integrations
 
-factory = AgentServiceFactory(
-    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
-    credential=DefaultAzureCredential()
-)
+Connect your application to Azure services for search, document loading, tools, memory, and tracing.
+Browse the guides and samples by integration type or agent capability:
 
-echo_node = factory.create_prompt_agent_node(
-    name="my-echo-agent",
-    model="gpt-4.1",  # your model deployment name
-    instructions="Always reply with the opposite of what the user says.",
-)
-```
+- **Chat models**: Generate responses with models deployed in Microsoft Foundry. See the [Foundry model quick start](#call-microsoft-foundry-models).
+- **Graph nodes**: Use [an agent already running in Microsoft Foundry as a LangGraph node](./libs/azure-ai/README.md#microsoft-foundry-agent-service). Also see the [Document Intelligence sample](./samples/react-agent-docintelligence/README.md).
+- **Tools, skills and MCPs**: Load [MCP tools](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_tools) and [agent skills](https://reference.langchain.com/python/langchain-azure-ai/tools/_toolbox/AzureAIProjectToolbox/get_resources) from Foundry Toolbox. Also see the [Document Intelligence tool sample](./samples/react-agent-docintelligence/README.md).
+- **Sandbox**: Use [Azure Container Apps dynamic sessions and sandboxes](./libs/azure-compute/README.md) to run agent-generated codes.
+- **Backends**: Use [Azure Blob Storage](./samples/deepagents-storage-backend/README.md) as storage backends.
+- **Checkpointers**: Persist graph execution state with [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
+- **Stores**: Store data shared across threads in [Azure Cosmos DB](./samples/cosmosdb-nosql/README.md#langgraph-integrations).
+- **Memory**: Extract and recall long-term information across sessions with [Foundry Memory](./samples/foundry-memory/README.md).
+- **Embedding models**: Convert text into vectors for similarity search. See the [embedding model guide](https://docs.langchain.com/oss/python/integrations/providers/azure_ai#embedding-models).
+- **Vector stores**: Store vectors and retrieve relevant documents. See the [Azure AI Search sample](./samples/rag-storage-document-loaders/README.md), [Azure Cosmos DB samples](./samples/cosmosdb-nosql/README.md#langchain-integrations), [Azure SQL and SQL Server samples](https://github.com/Azure-Samples/azure-sql-langchain), and [Azure Database for PostgreSQL quick start](./libs/azure-postgresql/README.md#usage).
+- **Document loaders**: Load documents from [Azure Blob Storage](./libs/azure-storage/README.md#azure-blob-storage-document-loader-usage). Also see the [Azure AI Content Understanding loader](./libs/azure-ai/docs/content_understanding_loader_demo.ipynb).
+- **Middleware**: Apply Content Safety guardrails to agent inputs, outputs, and tool calls. See the [Content Safety middleware sample](./samples/unified-moderation/basic_usage.py).
+- **Observability**: Trace model calls and agent execution. See the [Azure Application Insights tracing sample](./samples/enable_auto_tracing_appinsights.py).
 
-Agent Service nodes run in Microsoft Foundry but can be added to any graph:
+## Samples
 
-```python
-graph = StateGraph(AgentServiceAgentState)
-graph.add_node("expert_node", echo_node)
-graph.add_edge(START, "expert_node")
-graph.add_edge("expert_node", END)
-```
+Use the [samples](./samples) to try individual integrations and build applications with Azure services.
+They cover databases, memory, storage, tools, guardrails, and tracing.
 
-Use the graph as usual:
+## Contributing
 
-```python
-agent = graph.compile()
-messages = [HumanMessage(content="I'm a genius and I love programming!")]
-response = agent.invoke({"messages": messages})
-
-pretty_print(response)
-```
-
-```output
-================================ Human Message =================================
-
-I'm a genius and I love programming!
-================================== Ai Message ==================================
-Name: my-echo-agent
-
-You're not a genius and you don't love programming!
-```
-
-# Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
+We welcome contributions!
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and pull request guidelines.
