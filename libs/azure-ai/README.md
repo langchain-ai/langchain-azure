@@ -183,6 +183,10 @@ This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits 
 
 ### Hosting LangGraph agents on Microsoft Foundry
 
+> [!TIP]
+> To choose between Responses and Invocations, see
+> [Which protocol should I use?](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents#which-protocol-should-i-use).
+
 #### Responses protocol
 
 **Already have a compiled LangGraph graph?** Keep its implementation,
