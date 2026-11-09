@@ -1,6 +1,6 @@
 [project]
 name = "langchain-azure-compute"
-version = "0.1.1"
+version = "0.2.0"
 description = "LangChain and LangGraph integrations for Azure Container Apps and Durable Task Scheduler"
 authors = [
     {name="Microsoft Corporation", email="ascl@microsoft.com"},
