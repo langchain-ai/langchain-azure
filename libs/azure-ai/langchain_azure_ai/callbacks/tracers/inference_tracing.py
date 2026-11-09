@@ -2666,15 +2666,20 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
 
         Args:
             serialized: Serialized retriever descriptor with ``name`` and
-                ``description``.
+                ``description``.  ``BaseRetriever`` passes ``None``.
             query: The retriever query string.
             run_id: Unique identifier for this retriever run.
             parent_run_id: Run ID of the parent chain, if any.
             metadata: Metadata dict with ``thread_id``, etc.
-            **kwargs: Additional LangChain callback keyword arguments.
+            **kwargs: Additional LangChain callback keyword arguments,
+                including ``name``, which ``BaseRetriever`` sets to the run
+                name or the retriever's class name.
         """
         metadata = metadata or {}
         serialized = serialized or {}
+        retriever_name = (
+            _first_non_empty(serialized.get("name"), kwargs.get("name")) or "retriever"
+        )
         resolved_parent = self._resolve_parent_id(parent_run_id)
         thread_identifier = _first_non_empty(
             metadata.get("thread_id"),
@@ -2684,7 +2689,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
         thread_key = str(thread_identifier) if thread_identifier else None
         attributes = {
             Attrs.OPERATION_NAME: "execute_tool",
-            Attrs.TOOL_NAME: serialized.get("name", "retriever"),
+            Attrs.TOOL_NAME: retriever_name,
             Attrs.TOOL_DESCRIPTION: serialized.get("description", "retriever"),
             Attrs.TOOL_TYPE: "retriever",
             Attrs.RETRIEVER_QUERY: query if self._content_recording else "[redacted]",
@@ -2698,7 +2703,7 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             attributes[Attrs.PROVIDER_NAME] = parent_provider
         self._start_span(
             run_id,
-            name=f"execute_tool {serialized.get('name', 'retriever')}",
+            name=f"execute_tool {retriever_name}",
             operation="execute_tool",
             kind=SpanKind.INTERNAL,
             parent_run_id=parent_run_id,

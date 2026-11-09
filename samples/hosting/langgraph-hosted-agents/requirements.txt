@@ -6,4 +6,4 @@ httpx
 azure-identity
 python-dotenv
 # OTLP/HTTP span exporter used by tracing_setup.py (port 4318 by default).
-opentelemetry-exporter-otlp-proto-http>=1.37
+opentelemetry-exporter-otlp-proto-http>=1.45.2

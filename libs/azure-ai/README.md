@@ -118,12 +118,23 @@ model = AzureAIOpenAIApiChatModel(
 
 ### Accessing agents on Microsoft Foundry Agent Service
 
-Compose complex graphs by using agents running in the Agent Service:
+Create a managed Foundry agent and add it as a LangGraph node.
+
+For local development, install the required extra and sign in:
+
+```bash
+pip install -U "langchain-azure-ai[opentelemetry]"
+az login
+```
+
+Set your project endpoint and model deployment name. This creates a version
+of `my-echo-agent` in your project:
 
 ```python
 from azure.identity import DefaultAzureCredential
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_azure_ai.agents import AgentServiceFactory
+from langchain_core.messages import HumanMessage
+from langgraph.graph import END, START, StateGraph
+from langchain_azure_ai.agents import AgentServiceAgentState, AgentServiceFactory
 from langchain_azure_ai.utils.agents import pretty_print
 
 factory = AgentServiceFactory(
@@ -131,13 +142,20 @@ factory = AgentServiceFactory(
     credential=DefaultAzureCredential()
 )
 
-echo_node = factory.get_agent_node(name="my-echo-agent", version="latest")
+echo_node = factory.create_prompt_agent_node(
+    name="my-echo-agent",
+    model="gpt-4.1",  # your model deployment name
+    instructions="Always reply with the opposite of what the user says.",
+)
 ```
 
 Agent Service nodes run in Microsoft Foundry but can be added to any graph:
 
 ```python
+graph = StateGraph(AgentServiceAgentState)
 graph.add_node("expert_node", echo_node)
+graph.add_edge(START, "expert_node")
+graph.add_edge("expert_node", END)
 ```
 
 Use the graph as usual:
@@ -292,9 +310,15 @@ async def main() -> None:
     await ResponsesHostServer(graph).run_async()
 ```
 
-`FoundryCheckpointSaver` is intended for a Foundry-hosted agent using container
-protocol `2.0.0`, which supplies the request context required by the state-store
-API. Use an in-memory or database-backed LangGraph saver for local development.
+Locally, `FoundryCheckpointSaver` uses files under
+`~/.agentserver/state_stores`. Set `AGENTSERVER_STATE_ROOT` to choose another
+state root. Reuse that directory and the same conversation/thread ID across
+local restarts. These files stay on the local machine.
+
+Foundry-hosted agents use **Foundry State Store** with container protocol
+`2.0.0`, which supplies the hosted request context. See
+[storage choices](docs/hosting/responses.md#storage-choices) for the separate
+roles of graph checkpoints, conversation references, and response storage.
 
 For an end-to-end example that selects an in-memory saver locally and
 `FoundryCheckpointSaver` when hosted, see the

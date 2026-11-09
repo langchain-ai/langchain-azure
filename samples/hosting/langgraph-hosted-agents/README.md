@@ -16,13 +16,18 @@ Completions and your model and endpoint support it, set
 the model configuration. This choice is independent of the host
 protocol: both Responses and Invocations hosts can use either model API.
 
-Each sample is a self-contained folder with its own `main.py`,
-`README.md`, `requirements.txt`, `Dockerfile`, `agent.manifest.yaml`,
-and `agent.yaml` so it can be run locally with the command in its README
-or deployed to Foundry with `azd`.
+Each sample has its own code, dependencies, and README for local runs.
 
-The [Deep Agents sample](responses/12_deep_agents/SETUP.md#deploying-the-agent-to-foundry)
-uses a unified `azure.yaml` instead of separate agent manifests.
+## Setup paths
+
+Choose its `azd` setup path before running or deploying:
+
+| Sample configuration | Setup path |
+| --- | --- |
+| `agent.manifest.yaml` and `agent.yaml` | Follow [Using azd](#using-azd) below. |
+| `azure.yaml` in [Responses Resilient](responses/10_resilient/README.md#deploying-the-agent-to-foundry) or [Invocations Resilient](invocations/04_resilient/README.md#deploying-the-agent-to-foundry) | Initialize the independent azd project using that sample's deployment steps. |
+| `azure.yaml` in [Deep Agents](responses/12_deep_agents/SETUP.md) | Complete its resource setup and deployment steps. |
+| Both formats in [Branching](responses/13_branching/README.md#run-with-azd) | Follow the sample's existing-project setup. |
 
 ## Start here
 
@@ -87,6 +92,10 @@ Foundry-hosted runtime), or directly with `python main.py` (faster
 iteration, uses your local Python).
 
 ### Using `azd`
+
+The initialization steps below apply to samples with `agent.manifest.yaml`.
+For `azure.yaml` projects, use the [setup paths](#setup-paths)
+above after installing the prerequisites.
 
 #### Prerequisites
 
@@ -229,6 +238,8 @@ curl -X POST http://127.0.0.1:8088/responses \
 ## Deploying the Agent to Foundry
 
 Once you've tested locally, deploy to Microsoft Foundry.
+The steps below use `agent.manifest.yaml`. For `azure.yaml` projects,
+follow the sample-specific [setup paths](#setup-paths).
 
 ### With an existing Foundry project
 

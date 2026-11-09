@@ -73,6 +73,10 @@ AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
 
 ### Start the host
 
+First complete [deployment configuration](#deploying-the-agent-to-foundry)
+through importing `.env` into an `azd` environment. This initializes the
+project used by the local host; deploying it is a separate step.
+
 From this directory, start the host:
 
 ```bash
