@@ -214,6 +214,8 @@ if __name__ == "__main__":
 
 `ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint.
 The graph's input state must include a `messages` field.
+It supports JSON and streaming responses, background execution, conversation
+steering, and human-in-the-loop interrupts.
 
 For current feature support and configuration combinations, see the
 [Responses hosting overview](docs/hosting/responses.md).
@@ -249,8 +251,16 @@ if __name__ == "__main__":
 ```
 
 To launch with `langgraph.json`, use `--protocol invocations`.
-See the [Invocations hosting overview](docs/hosting/invocations.md) for supported
-features and configuration, and the
+
+`InvocationsHostServer` also supports background execution, conversation steering,
+and human-in-the-loop interrupts. Enable `resilient_background=True` for durable
+background turns, or `steerable_conversations=True` to let a new turn supersede an
+active turn in the same `agent_session_id`. Resilient background execution requires
+a LangGraph checkpointer; use a durable checkpointer for hosted production
+deployments.
+
+See the [Invocations hosting overview](docs/hosting/invocations.md) for
+configuration, request formats, polling, cancellation, and interrupt handling, and the
 [Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md)
 for setup and deployment.
 
