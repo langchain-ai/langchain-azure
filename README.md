@@ -107,5 +107,5 @@ They cover databases, memory, storage, tools, guardrails, and tracing.
 
 ## Contributing
 
-Contribute bug fixes, integrations, samples, or documentation improvements.
+We welcome contributions!
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and pull request guidelines.
