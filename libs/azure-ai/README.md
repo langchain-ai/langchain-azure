@@ -11,7 +11,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | Build and deploy my first hosted agent | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
 | Access agents on Microsoft Foundry Agent Service | [Agent Service quick start](#accessing-agents-on-microsoft-foundry-agent-service) |
-| Add guardrails or Azure tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [tools](#using-azure-tools) |
+| Apply guardrails or use Foundry tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [Microsoft Foundry Tools](#using-microsoft-foundry-tools) |
 | Trace graph, model, and tool calls | [Application Insights tracing](#tracing-with-azure-application-insights) |
 | Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#persisting-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
 | Store long-term memory across threads | [Azure Cosmos DB store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory) |
@@ -57,7 +57,7 @@ This package includes:
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
-* **Using Azure tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
+* **Using Microsoft Foundry Tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
 * **Searching documents (vector store):** index and search documents with [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores).
 
 For more details and tutorials, see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
@@ -189,47 +189,49 @@ in the [Responses run-entrypoint sample](https://github.com/langchain-ai/langcha
 then launch it from the directory containing that configuration:
 
 ```bash
+pip install -U "langchain-azure-ai[hosting]"
 python -m langchain_azure_ai.agents.hosting.run --protocol responses
 ```
 
-The graph's input state must include a `messages` field.
-You can also start a Responses host from Python with your compiled `graph`:
+For prerequisites, local requests, and Azure deployment, follow the
+[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
+or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
+
+For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
+
+You can also host the graph directly from Python, as shown below:
 
 ```python
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 
-ResponsesHostServer(graph).run()
+graph = build_my_graph()  # returns a compiled LangGraph graph
+
+if __name__ == "__main__":
+    ResponsesHostServer(graph).run()
 ```
 
-For credentials, graph configuration, and deployment, follow the
-[hosted-agent setup guide](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
-See [Responses hosting](docs/hosting/responses.md) for supported features
-and configuration requirements.
+`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint.
+The graph's input state must include a `messages` field.
 
-#### Samples
+For current feature support and configuration combinations, see the
+[Responses hosting overview](docs/hosting/responses.md).
 
-Use these samples for complete setup, request flows, and deployment steps.
-Response branching and recovery are experimental; their samples describe the
-required options and storage configuration.
+The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
-| Scenario | Sample |
-| --- | --- |
-| Basic chat, streaming, and conversation history | [Basic](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/01_basic/README.md) |
-| Local tools and tool-call output | [Tools](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/02_tools/README.md) |
-| Remote MCP tools | [MCP](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/03_mcp/README.md) |
-| Managed Foundry tools | [Foundry Toolbox](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox/README.md) |
-| Custom multi-node graphs and checkpoints | [Workflows](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/05_workflows/README.md) |
-| Image and file attachments | [Files](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/06_files/README.md) |
-| Application Insights tracing | [Observability](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/07_observability/README.md) |
-| Tool approval and interrupt resume | [Human approval](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/08_hitl/README.md) |
-| Host an exported graph with langgraph.json | [Run entrypoint](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
-| Background execution and restart recovery | [Resilient](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/10_resilient/README.md) |
-| Native LangChain middleware | [Middleware](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/11_middleware/README.md) |
-| Research agents and report downloads | [Deep Agents](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/README.md) |
-| Branch, rewind, and regenerate a completed response | [Branching](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
+| Graph configuration | Conversation source | Graph input on later turns |
+|---|---|---|
+| Graph compiled with a checkpointer | LangGraph checkpoint state keyed by the conversation/thread ID and, when available, the platform-provided user partition key | Current request input only |
+| Graph without a checkpointer | Responses transcript history from the underlying response provider | Prior Responses history plus current input |
 
-For the underlying HTTP protocol, see the
-[Agent Server Responses protocol reference](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
+Checkpointed multi-turn conversations use an explicit `conversation.id`
+or run with `steerable_conversations=True`. Both modes are linear and preserve
+the latest LangGraph checkpoint for subsequent turns.
+
+**[Experimental] Response branching:** Enable `enable_response_branching=True`
+with a history-preserving checkpointer to branch from a completed response
+using `previous_response_id`. See the
+[branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md)
+for branching, rewind, regeneration, and setup requirements.
 
 The Invocations protocol is also supported; see the
 [Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md).
@@ -301,7 +303,7 @@ For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights
 
 <a id="microsoft-foundry-tools"></a>
 
-### Using Azure tools
+### Using Microsoft Foundry Tools
 
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
 
