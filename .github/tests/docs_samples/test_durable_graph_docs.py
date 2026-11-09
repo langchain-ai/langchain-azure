@@ -33,6 +33,54 @@ test_readiness_cleanup = module.test_review_worker_readiness_success_and_failure
 test_local_identity = module.test_review_sample_local_identity_requires_explicit_opt_in
 
 
+def test_root_readme_durable_execution_quickstart():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    overview = text.split("## LangGraph on Azure\n", 1)[1].split("## Samples\n", 1)[0]
+    assert len([line for line in overview.splitlines() if line.startswith("- **")]) == 3
+    assert "**Durable Execution (Azure Durable Task Scheduler):**" in overview
+    samples = text.split("## Samples\n", 1)[1].split("# Quick Start", 1)[0]
+    assert "[Durable Task Scheduler (DTS) LangGraph samples]" in samples
+
+    section = text.split(
+        "### Durable Execution with Azure Durable Task Scheduler\n", 1
+    )[1].split("# Contributing", 1)[0]
+    assert 'pip install -U "langchain-azure-compute[durabletask]"' in section
+    source = section.split("```python\n", 1)[1].split("```", 1)[0]
+    tree = ast.parse(source)
+    compile(tree, "<root-readme-durable-execution>", "exec")
+    calls = {
+        node.func.id: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "create_agent",
+        "sdk_options",
+        "DurableTaskSchedulerWorker",
+        "DurableTaskSchedulerClient",
+    } <= calls.keys()
+    registration = calls["attach_durability"]
+    assert isinstance(registration.args[0], ast.Name)
+    assert registration.args[0].id == "agent"
+    assert any(
+        keyword.arg == "name"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value == "support_agent"
+        for keyword in registration.keywords
+    )
+    assert any(
+        keyword.arg == "retries"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value == 3
+        for keyword in calls["durable_tool"].keywords
+    )
+    for parts in (
+        ("libs", "azure-compute", "README.md"),
+        ("samples", "langgraph-durabletask", "README.md"),
+    ):
+        assert ROOT.joinpath(*parts).is_file()
+
+
 @pytest.mark.parametrize(
     "relative",
     [
