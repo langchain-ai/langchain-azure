@@ -44,9 +44,10 @@ Unsupported host configurations raise `ValueError` during initialization. Use
 an async saver such as `AsyncSqliteSaver` for SQLite, and a durable saver when
 state must survive a restart.
 
-A response can be `completed` while its graph is paused for a tool result or
-approval. Use [ordinary continuation](responses.md#human-in-the-loop) to answer
-those pauses.
+> [!IMPORTANT]
+> Branching from a paused graph is currently unsupported, even when the response
+> status is `completed`. To submit tool results or approval decisions, use
+> [ordinary continuation](responses.md#human-in-the-loop) with branching disabled.
 
 Eligible parents can come from ordinary continuation or an existing
 conversation, including responses created before branching was enabled.
