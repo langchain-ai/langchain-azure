@@ -16,7 +16,7 @@ This repository contains the following packages with Azure integrations with Lan
 
 - **Models & Hosted Agents (Microsoft Foundry):** Build with Azure models using the [LangChain and LangGraph development guide](https://aka.ms/azureai/langchain), or bring an existing compiled graph to Microsoft Foundry with the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and the [hosted-agent samples](./samples/hosting/langgraph-hosted-agents/README.md#start-here) (including [hosting an existing graph without changing its implementation](./samples/hosting/langgraph-hosted-agents/responses/09_run/README.md)).
 - **Checkpointers & Long-Term Memory:** For durable graph state, use [FoundryCheckpointSaver backed by Foundry State Store](./libs/azure-ai/README.md#durable-graph-state) in Foundry-hosted agents, or the [Azure Cosmos DB checkpointer](./libs/azure-cosmosdb/README.md#langgraph-checkpointer). Cosmos DB also provides a [long-term memory store](./libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory).
-- **Durable Execution (Azure Durable Task Scheduler):** Run any compiled LangGraph `StateGraph`, LangChain `create_agent`, or Deep Agent as a fault-tolerant durable workflow using [`langchain_azure_compute.graph` backed by the Azure Durable Task Scheduler](./libs/azure-compute/README.md#durable-langgraph-execution-durable-task-scheduler) — with per-step and per-tool fault isolation (`@durable_tool`, `@durable_node`), automatic worker crash failover, and zero-compute human-in-the-loop `interrupt()` / `resume()` waits. Explore the [10 runnable Durable Task LangGraph samples](./samples/langgraph-durabletask/README.md).
+- **Durable Execution (Azure Durable Task Scheduler):** Run any compiled LangGraph `StateGraph`, LangChain `create_agent`, or Deep Agent as a fault-tolerant durable workflow using [`langchain_azure_compute.graph`](./libs/azure-compute/README.md#durable-langgraph-execution-durable-task-scheduler) backed by the [Azure Durable Task Scheduler](https://learn.microsoft.com/azure/durable-task/scheduler/durable-task-scheduler) — with per-step and per-tool fault isolation (`@durable_tool`, `@durable_node`), automatic worker crash failover, and zero-compute human-in-the-loop `interrupt()` / `resume()` waits. Explore the [10 runnable Durable Task LangGraph samples](./samples/langgraph-durabletask/README.md).
 
 ## Samples
 
@@ -180,7 +180,7 @@ You're not a genius and you don't love programming!
 
 ### Durable Execution with Azure Durable Task Scheduler
 
-Install the durable execution extra alongside `langchain-azure-ai` from the quick start above:
+To run workflows on the [Azure Durable Task Scheduler](https://learn.microsoft.com/azure/durable-task/scheduler/durable-task-scheduler), install the durable execution extra alongside `langchain-azure-ai` from the quick start above:
 
 ```bash
 pip install -U "langchain-azure-compute[durabletask]"
