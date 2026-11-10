@@ -929,3 +929,47 @@ async def test_from_embeddings_accepts_constructor_kwargs(use_async: bool) -> No
 
     assert vector_store.search_type == "similarity"
     assert add_embeddings.call_args.kwargs == {"keys": ["doc-1"]}
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_add_texts_accepts_one_shot_iterable(use_async: bool) -> None:
+    """Texts from a generator must not be lost after they are embedded."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    uploaded: List[Dict[str, Any]] = []
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    texts = ["page zero", "page one"]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        if use_async:
+            ids = await vector_store.aadd_texts(text for text in texts)
+        else:
+            ids = vector_store.add_texts(text for text in texts)
+
+    assert [doc["content"] for doc in uploaded] == texts
+    assert len(ids) == len(texts)
