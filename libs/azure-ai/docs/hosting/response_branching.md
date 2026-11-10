@@ -1,4 +1,4 @@
-# Response branching
+# Response branching (Responses API)
 
 Response branching lets a new response start from an earlier response's saved
 LangGraph state. Set `enable_response_branching=True` on `ResponsesHostServer`
