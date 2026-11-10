@@ -55,40 +55,11 @@ $testQuery = "Research when to use asyncio.TaskGroup versus asyncio.gather in Py
 azd ai agent invoke deep-research-foundry --new-session --new-conversation --timeout 600 $testQuery
 ```
 
-Check the final response status, expected tool calls, and application outputs. For the Deep Research example, verify the actual search calls and report contents. If the application depends on sandbox files, the client needs to retain the hosted session as described in [Manage hosted agent sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions).
+Check the final response status, expected tool calls, and application outputs. For the Deep Research example, verify the actual search calls and report contents.
 
-Record the agent version, response ID, session and conversation identifiers, and terminal status. An HTTP 200 response or an echo of the request is not successful research. Require a completed response, successful search results, a saved report that meets the requested length and source-link constraints, and full report readback through the application's file tool. Inspect tool results, not just tool names or the agent's claim that it saved the report. Keep failed and unverified checks distinct from passing checks.
+For Python clients, use `project.get_openai_client(agent_name="deep-research-foundry")` to target the hosted agent. Follow the [hosted agent SDK example](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=python#invoke-an-agent-and-let-the-platform-create-the-session) for client setup and invocation.
 
-### Invoke from a Python client
-
-When using the project SDK, select the hosted agent endpoint with `agent_name`, rather than the project-level model endpoint returned by `get_openai_client()` without an agent name. The following example uses `azure-ai-projects==2.9.0`, which requires `allow_preview=True` on `AIProjectClient` for this operation. Check the installed SDK's API contract when using another version.
-
-```python
-import os
-
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
-
-with (
-    DefaultAzureCredential() as credential,
-    AIProjectClient(
-        endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-        credential=credential,
-        allow_preview=True,
-    ) as project,
-    project.get_openai_client(agent_name="deep-research-foundry") as client,
-):
-    response = client.responses.create(
-        input=(
-            "Research HTTP 429 versus 503 with source links. "
-            "Save and read back /reports/http-errors.md."
-        ),
-    )
-    print(response.id, response.status)
-    print(response.output_text)
-```
-
-This client is already bound to the named agent. For follow-up turns that depend on the same hosted filesystem, retain the returned `agent_session_id` and pass it in the request body as described in [Manage hosted agent sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions). `previous_response_id` alone does not select the same filesystem session. Session continuity is separate from durable graph checkpoints.
+When chaining turns with `previous_response_id`, also pass the returned `agent_session_id` if later turns need the same hosted filesystem. A `conversation` ID automatically associates turns with a session. See [sessions versus conversations](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions#sessions-versus-conversations).
 
 ## Next steps
 

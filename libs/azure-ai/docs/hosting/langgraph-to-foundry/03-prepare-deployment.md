@@ -44,16 +44,6 @@ azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 
 
 During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. The agent service's `project` field should be `.` so the upload starts from the application root directory.
 
-Confirm that the selected azd environment points to that existing project. If initialization did not populate its project context, set it explicitly:
-
-```powershell
-azd env set AZURE_AI_PROJECT_ENDPOINT "https://<resource>.services.ai.azure.com/api/projects/<project>"
-azd env set AZURE_AI_PROJECT_ID "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource>/projects/<project>"
-azd env set AZURE_TENANT_ID "<tenant-id>"
-```
-
-These values configure deployment tooling; `FOUNDRY_PROJECT_ENDPOINT` configures the application at runtime. If azd reports a missing project endpoint, repair the selected environment's context rather than provisioning replacement resources for an existing-project deployment.
-
 The following agent service configuration starts the hosting runner with the graph configuration tested in [Host and test the agent locally](02-run-locally.md):
 
 ```yaml
@@ -91,8 +81,6 @@ markdownify>=1.2.2
 
 If you keep the original Anthropic model, also include `langchain-anthropic>=1.5.4,<2.0.0` in `requirements.txt`. Keep deployment dependencies consistent with the final application code.
 
-If you explicitly choose Foundry Toolbox instead of Tavily, declare compatible versions of `langchain-mcp-adapters`, `httpx`, and `mcp` for that integration. Do not change the search provider merely to enable hosting.
-
 Check that these requirements install in a fresh Python 3.13 environment outside the project:
 
 ```powershell
@@ -104,7 +92,7 @@ uv pip check --python "$checkEnv\Scripts\python.exe"
 
 Both installation and the dependency check must succeed before deployment. This verifies dependency compatibility, not application startup.
 
-Use the fresh environment's interpreter to run `main.py` with the required environment variables, then invoke a representative request. Exercise delegated research tools as well as graph startup: tool-specific imports may not run until the tool is called. A successful `uv pip check` or graph import alone does not establish that the uploaded application can execute its tools.
+Start `main.py` with the fresh environment's interpreter and the required environment variables, then send a representative request that exercises the research tools.
 
 ### Configure upload exclusions
 

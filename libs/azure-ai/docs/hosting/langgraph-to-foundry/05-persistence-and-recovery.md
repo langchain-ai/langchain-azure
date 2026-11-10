@@ -10,7 +10,7 @@ Complete [Deploy and verify the agent](04-deploy-and-verify.md). Keep the deploy
 
 If your application needs state across turns, configure a durable checkpointer. In the Deep Research example, this state includes messages, reports, and task progress.
 
-Keep an existing application checkpointer unless a change is required and approved. Decide separately what must survive a completed turn, a different compute session, session deletion, or an interrupted response. Responses history does not replace graph checkpoints, and checkpointed virtual files are not automatically exposed as hosted filesystem files. Add the saver below only if the existing storage does not meet the required lifetime.
+Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
 
 Choose a storage service based on what the agent needs to retain:
 
@@ -55,17 +55,7 @@ azd deploy deep-research-foundry
 
 Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, the client needs to retain the conversation identity and authenticated user across turns. Test continuation in the same session, then in a different session with the same conversation. The [session management guide](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions) explains sessions and conversations.
 
-Use separate checks for each boundary:
-
-| Check | Evidence to retain |
-| --- | --- |
-| Saved state | Record the original request, completed response, successful search results, and full saved report content or hash. In a later read-only turn, retrieve the original request and complete report through the application's tools; a filename or summary is insufficient. |
-| Revision | Compare the revised report with the saved original. Check the requested content changes and source links against the original acceptance criteria, not just whether a write tool ran. |
-| Cross-session continuation | Record the first session's stopped state and a distinct second session on the same agent version. Keep the same authenticated caller and conversation; verify the original request and full report content or hash. |
-| Conversation isolation | With the same caller but a new conversation, use the file tool to verify that the prior report is absent and a unique marker from the original report is not exposed. This does not test isolation between users. |
-| User isolation | Repeat with a genuinely different authorized identity and token. Changing a user label, conversation ID, or arbitrary header is not a second-user test. |
-
-Mark a boundary unverified if the required identity, lifecycle, or content evidence is unavailable. Continuation after a completed response does not establish unfinished-request recovery.
+Verify that conversation-specific state stays isolated from other conversations.
 
 > **Tip:** Measure latency with representative conversation histories and state sizes, including continuation in a new session. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
 
@@ -99,7 +89,7 @@ Keep `entryPoint: main.py` in `azure.yaml` and redeploy the updated launcher wit
 
 The client must set `background` and `store` to `true` to make the request recoverable. The following PowerShell example uses the [hosted Responses endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=rest#invoke-an-agent-and-let-the-platform-create-the-session):
 
-The example uses `stream=false` to poll the stored response; this is not an additional recovery prerequisite. For streaming background requests, retain the response ID and use the supported retrieval or replay contract after a disconnect. Replaying a stream does not by itself verify recovery from a host failure.
+The example uses `stream=false` for polling; recovery does not require disabling streaming.
 
 > **Note:** Sign in with `az login` using an account with the invocation access described in [Verify the deployed agent](04-deploy-and-verify.md#verify-the-deployed-agent).
 
