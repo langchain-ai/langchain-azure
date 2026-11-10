@@ -99,9 +99,13 @@ during execution or recovery, so applications should make replayed work safe.
 
 ## 2. Internal data structures and flow
 
-### Storage
+Branching changes checkpoint selection, parent validation, and conversation-chain
+updates. It shares storage, graph execution, output conversion, and recovery
+from saved progress with ordinary checkpointed continuation.
 
-The response provider and graph saver retain different parts of a response:
+### Shared storage
+
+Both paths use the response provider and graph saver for the same data:
 
 | Data | Storage | Configuration |
 | --- | --- | --- |
@@ -119,9 +123,10 @@ Response deletion leaves graph checkpoints intact.
 ### Checkpoint references
 
 A checkpoint reference identifies a thread and checkpoint in the root namespace.
-`CheckpointRef` holds `thread_id` and `checkpoint_id`; `TaskStorageManager`
-persists them as `langgraph_thread_id` and `langgraph_checkpoint_id` in internal
-SDK metadata.
+Both paths use `CheckpointRef` for `thread_id` and `checkpoint_id`, and
+`TaskStorageManager` persists them as `langgraph_thread_id` and
+`langgraph_checkpoint_id` in internal SDK metadata. Branching uses the parent's
+final reference as the child's origin:
 
 | Reference role | Meaning |
 | --- | --- |
@@ -137,27 +142,23 @@ identity is available.
 
 ### Fresh request flow
 
-1. **Select the parent.** Resolve `previous_response_id` through the response
-   provider in the caller's storage scope. Reuse the lookup within the request.
-2. **Validate the starting state.** Check the parent's status, output, and exact
-   checkpoint, then verify that the restored graph has finished.
-3. **Run the graph.** Supply the current input and instructions, using the
-   selected checkpoint for prior state. Checkpointed execution uses
-   `durability="sync"` and streams graph updates, messages, and checkpoints.
-4. **Save progress.** After a graph checkpoint is saved, attach its reference
-   to task metadata, flush output events, and request an SDK recovery snapshot
-   with `stream.checkpoint()`.
-5. **Finalize the response.** Emit the terminal response for SDK storage. A
-   completed, stored response retains its final checkpoint reference for reuse.
+| Stage | Ordinary checkpointed continuation | Branching |
+| --- | --- | --- |
+| Select starting state | Read the conversation-chain checkpoint when available; otherwise use the thread's latest checkpoint. | Load the named parent's exact final checkpoint from its stored response reference. |
+| Validate graph state | A paused graph can accept matching tool results or approval decisions. | Require a completed parent response and a finished graph under the parent eligibility rules. |
+| Finalize linkage | Save the response's checkpoint reference and advance `conversation_chain_store`. | Save the child's own reference while leaving `conversation_chain_store` unchanged. |
+
+Between selection and finalization, both paths run the graph with current input
+and instructions, using the selected checkpoint for prior state. Execution uses
+`durability="sync"` and streams graph updates, messages, and checkpoints. As graph
+checkpoints are saved, the host attaches their references to task metadata,
+flushes output events, and requests SDK recovery snapshots with
+`stream.checkpoint()`. The SDK then stores the terminal response with its final
+checkpoint reference.
 
 Graph checkpoints and SDK response snapshots are saved separately. Recovery
 uses the last snapshot the SDK persisted, which can lag behind graph execution.
 A reusable parent needs both a stored response and its restorable checkpoint.
-
-Branching uses the shared input conversion, graph streaming, progress storage,
-and finalization path. The conversation-chain store supplies the checkpoint
-for ordinary linear continuation; response-ID branches select their parent's
-stored reference. The interaction between these paths is tracked below.
 
 ### Recovery flow
 
@@ -166,18 +167,18 @@ The Agent Server SDK schedules recovery for stored background work when
 survive the restart. See [restart recovery](responses.md#restart-recovery) for
 the shared setup.
 
-| Persisted state | Recovery action |
-| --- | --- |
-| Root with no graph progress | Replay the original request in its existing thread. |
-| Child with no graph progress | Reload and validate the parent, then replay the child's input. |
-| Root or child with valid progress for that response | Resume the saved checkpoint with input `None`, preserving pending writes. |
-| Saved graph already finished | Finalize the response using the saved graph state. |
-| Progress is malformed, unavailable, mismatched, or belongs to another response | Fail recovery. |
+The starting checkpoint is the main difference when recovery has no saved
+graph progress:
 
-Valid response progress provides the recovery starting point without another
-parent lookup. The output stream starts from the persisted response snapshot.
-Work after the last saved snapshot, including external effects and response
-finalization, can run again.
+| Persisted state | Ordinary recovery | Branch-child recovery |
+| --- | --- | --- |
+| No graph progress | Replay the original input through ordinary continuation; a root reuses its existing thread. | Reload and validate the parent's exact checkpoint, then replay the child's input. |
+| Valid progress for the current response | Resume that checkpoint with input `None`, preserving pending writes. | Use the same resume path; the child's progress takes precedence over its parent, so no parent lookup is needed. |
+
+Both paths start the output stream from the persisted response snapshot and
+finalize an already finished graph from its saved state. Malformed, unavailable,
+mismatched, or foreign progress fails recovery. Work after the last saved
+snapshot, including external effects and response finalization, can run again.
 
 ### Source entry points
 
