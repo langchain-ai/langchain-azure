@@ -10,6 +10,8 @@ Complete [Deploy and verify the agent](04-deploy-and-verify.md). Keep the deploy
 
 If your application needs state across turns, configure a durable checkpointer. In the Deep Research example, this state includes messages, reports, and task progress.
 
+Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
+
 Choose a storage service based on what the agent needs to retain:
 
 | Storage service | What to store | How the application uses it |
@@ -53,6 +55,8 @@ azd deploy deep-research-foundry
 
 Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, the client needs to retain the conversation identity and authenticated user across turns. Test continuation in the same session, then in a different session with the same conversation. The [session management guide](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions) explains sessions and conversations.
 
+Verify that conversation-specific state stays isolated from other conversations.
+
 > **Tip:** Measure latency with representative conversation histories and state sizes, including continuation in a new session. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
 
 > **Warning:** User isolation must remain enabled for user-specific state. Test continuation with the same authenticated user and verify that another user cannot access that state.
@@ -84,6 +88,8 @@ Keep `entryPoint: main.py` in `azure.yaml` and redeploy the updated launcher wit
 > **Note:** Foundry State Store's [user isolation](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-state-store#caller-identity) is not supported in local runs. Keep `user_isolation=True` for the hosted agent; a local host test does not verify this configuration's isolation or recovery behavior.
 
 The client must set `background` and `store` to `true` to make the request recoverable. The following PowerShell example uses the [hosted Responses endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=rest#invoke-an-agent-and-let-the-platform-create-the-session):
+
+The example uses `stream=false` for polling; recovery does not require disabling streaming.
 
 > **Note:** Sign in with `az login` using an account with the invocation access described in [Verify the deployed agent](04-deploy-and-verify.md#verify-the-deployed-agent).
 

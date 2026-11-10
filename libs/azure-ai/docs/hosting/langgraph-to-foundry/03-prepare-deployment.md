@@ -92,6 +92,8 @@ uv pip check --python "$checkEnv\Scripts\python.exe"
 
 Both installation and the dependency check must succeed before deployment. This verifies dependency compatibility, not application startup.
 
+Start `main.py` with the fresh environment's interpreter and the required environment variables, then send a representative request that exercises the research tools.
+
 ### Configure upload exclusions
 
 Configure a root `.agentignore` to keep local credentials, development files, and evaluation data out of source uploads. The following exclusions apply to this example's `requirements.txt`-based build. Adapt development-file exclusions to your build process; do not exclude files required at build time or runtime:

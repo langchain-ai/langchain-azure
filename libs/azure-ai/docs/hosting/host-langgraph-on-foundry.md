@@ -8,6 +8,8 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 > **Note:** This guide covers application hosting and runtime configuration. Moving existing LangGraph threads and checkpoints to another storage backend requires a separate data migration.
 
+Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need separate adaptation. See the [Responses hosting limitations](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point).
+
 ## Why host your LangGraph application on Foundry?
 
 Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform to help enterprises deliver production-quality AI agents.

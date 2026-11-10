@@ -55,7 +55,11 @@ $testQuery = "Research when to use asyncio.TaskGroup versus asyncio.gather in Py
 azd ai agent invoke deep-research-foundry --new-session --new-conversation --timeout 600 $testQuery
 ```
 
-Check the final response status, expected tool calls, and application outputs. For the Deep Research example, verify the actual search calls and report contents. If the application depends on sandbox files, the client needs to retain the hosted session as described in [Manage hosted agent sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions).
+Check the final response status, expected tool calls, and application outputs. For the Deep Research example, verify the actual search calls and report contents.
+
+For Python clients, use `project.get_openai_client(agent_name="deep-research-foundry")` to target the hosted agent. Follow the [hosted agent SDK example](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=python#invoke-an-agent-and-let-the-platform-create-the-session) for client setup and invocation.
+
+When chaining turns with `previous_response_id`, also pass the returned `agent_session_id` if later turns need the same hosted filesystem. A `conversation` ID automatically associates turns with a session. See [sessions versus conversations](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions#sessions-versus-conversations).
 
 ## Next steps
 

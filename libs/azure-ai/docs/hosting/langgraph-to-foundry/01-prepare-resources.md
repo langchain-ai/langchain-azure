@@ -18,6 +18,8 @@ Review the [common prerequisites](../host-langgraph-on-foundry.md#before-you-sta
 
 **Runtime access.** The hosted agent uses its own identity to access models and connected resources. Model inference through its own project endpoint is available by default; configure additional access where the application needs it, such as reading connection credentials in [Deploy remotely](04-deploy-and-verify.md#deploy-remotely). See the [hosted agent permissions reference](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
 
+For Microsoft Entra authentication, direct account-level Azure OpenAI calls require an account-scoped inference role for the agent identity. Project-endpoint inference uses the project's managed identity. Model inference and connection-secret access require separate permissions.
+
 > **Note:** If you create Foundry resources or deploy models instead of reusing existing resources, your account needs the corresponding resource-management permissions. For example, an administrator can grant `Contributor` on the existing resource group where you create them. This role does not grant role-assignment permissions. See [Azure resource setup](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions#azure-resource-setup).
 >
 > ```powershell
