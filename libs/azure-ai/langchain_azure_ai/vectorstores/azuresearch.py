@@ -173,7 +173,7 @@ def _get_search_client(
     async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
-    if key is not None:
+    if key:
         # if key.upper() == "INTERACTIVE":
         #     interactive_credential = InteractiveBrowserCredential()
         #     interactive_credential.get_token("https://search.azure.com/.default")
