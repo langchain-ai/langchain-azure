@@ -80,12 +80,14 @@ Ordinary continuation owns request admission, parent selection, and persistence
 of each response's checkpoint reference. Branching reuses that contract: once a
 stored, eligible parent is selected, it restores that parent's exact checkpoint
 and creates an independent child.
+With a checkpointer, both branching-flag values select the referenced response's
+exact checkpoint. Only conversation-only requests access `conversation_chain_store`.
 
 A stored response created within a conversation can be selected using
 `previous_response_id` when the common continuation rules allow it. The branch
 restores that response's persisted exact checkpoint, not a mutable conversation
-head. Whether that branch advances the original conversation's head is a separate
-cross-linkage question tracked under [TODO](#todo).
+head. The current shortcut leaves the original conversation-chain reference
+unchanged. OpenAI cross-linkage alignment remains tracked under [TODO](#todo).
 
 ## Quick start
 
@@ -227,9 +229,11 @@ saver before applying the host's checkpoint proxy. For SQLite, use
 must provide usable implementations of these methods. Validation performs no
 storage reads or writes.
 
-The branching flag controls the checkpoint execution strategy for supported
-requests. It must not change the public meanings of `conversation`, `store`,
-or `instructions`.
+`enable_response_branching=True` enables completed-parent checkpoint branching
+and requires a graph checkpointer. With `False`, ordinary continuation restores
+checkpoint state when the graph has a checkpointer, or uses SDK-resolved message
+history otherwise. The flag must not change the public meanings of
+`conversation`, `store`, or `instructions`.
 The constructor's existing automatic provider selection remains available with
 branching enabled or disabled; `store=provider` is an optional override.
 
@@ -492,8 +496,8 @@ appending persisted text again.
 
 - [Responses handler](../../langchain_azure_ai/agents/hosting/_responses_host.py):
   `build_runnable_config`, `handle_create`, and `_new_stream`.
-- [Branch preparation](../../langchain_azure_ai/agents/hosting/_responses/branching.py):
-  admission, parent selection, and eligibility after configuration hooks.
+- [Request preparation](../../langchain_azure_ai/agents/hosting/_responses/request_preparation.py):
+  HTTP preflight, parent lookup, and completed-parent validation.
 - [Task storage and checkpoint adaptation](../../langchain_azure_ai/agents/hosting/_responses/task_storage_manager.py):
   shared progress references, exact reads, ownership, persistence barriers, and
   native recovery heads.
@@ -557,8 +561,9 @@ branching-only rules or silently fall back to a different conversation or parent
 Investigate the cross-linkage case separately from the current branching
 requirements: A is stored in an explicit conversation, B uses
 `previous_response_id=A.id`, and C later uses the original `conversation` ID.
-Decide whether B advances that conversation's pointer and which parent and
-context C selects, without assuming that B is included or excluded.
+The current shortcut leaves that conversation's host checkpoint reference
+unchanged. Verify OpenAI behavior for B's association, conversation items, and
+C's context before aligning this policy.
 
 If the common continuation rules allow a request to select B, branching restores
 B's persisted exact checkpoint reference and creates an independent child.
