@@ -872,3 +872,60 @@ def test_azure_search_key_takes_precedence_over_azure_credential() -> None:
     credential = sync_init.call_args.kwargs["credential"]
     assert isinstance(credential, AzureKeyCredential)
     assert credential.key == DEFAULT_KEY
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_from_embeddings_accepts_constructor_kwargs(use_async: bool) -> None:
+    """Constructor options must not be forwarded to `add_embeddings`."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    add_method = "aadd_embeddings" if use_async else "add_embeddings"
+    text_embeddings = [("hello world", DEFAULT_EMBEDDING_MODEL.embed_query("hello"))]
+    kwargs: Dict[str, Any] = {
+        "azure_search_endpoint": DEFAULT_ENDPOINT,
+        "azure_search_key": DEFAULT_KEY,
+        "index_name": DEFAULT_INDEX_NAME,
+        "search_type": "similarity",
+        "keys": ["doc-1"],
+    }
+
+    with (
+        patch.object(
+            AzureSearch,
+            add_method,
+            autospec=True,
+            side_effect=getattr(AzureSearch, add_method),
+        ) as add_embeddings,
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        if use_async:
+            vector_store = await AzureSearch.afrom_embeddings(
+                text_embeddings, DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+        else:
+            vector_store = AzureSearch.from_embeddings(
+                text_embeddings, DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+
+    assert vector_store.search_type == "similarity"
+    assert add_embeddings.call_args.kwargs == {"keys": ["doc-1"]}

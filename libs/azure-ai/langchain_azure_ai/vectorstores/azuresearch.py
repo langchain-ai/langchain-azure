@@ -1809,7 +1809,9 @@ class AzureSearch(VectorStore):
             vector_search_dimensions=vector_search_dimensions,
             **kwargs,
         )
-        await azure_search.aadd_embeddings(text_embeddings, metadatas, **kwargs)
+        await azure_search.aadd_embeddings(
+            text_embeddings, metadatas, keys=kwargs.get("keys")
+        )
         return azure_search
 
     @classmethod
@@ -1855,7 +1857,7 @@ class AzureSearch(VectorStore):
             vector_search_dimensions=vector_search_dimensions,
             **kwargs,
         )
-        azure_search.add_embeddings(text_embeddings, metadatas, **kwargs)
+        azure_search.add_embeddings(text_embeddings, metadatas, keys=kwargs.get("keys"))
         return azure_search
 
     def as_retriever(self, **kwargs: Any) -> AzureSearchVectorStoreRetriever:  # type: ignore
