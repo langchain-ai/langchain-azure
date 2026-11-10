@@ -5,7 +5,7 @@ LangGraph state. Set `enable_response_branching=True` on `ResponsesHostServer`
 and select the parent with `previous_response_id`.
 
 This document describes the branching design, including the
-[open implementation and compatibility work](#open-items). See
+[follow-up implementation and compatibility work](#follow-up). See
 [Responses hosting](responses.md) for the shared protocol and host configuration.
 
 ## 1. Behavior
@@ -99,9 +99,9 @@ during execution or recovery, so applications should make replayed work safe.
 
 ## 2. Internal data structures and flow
 
-Branching changes checkpoint selection, parent validation, and conversation-chain
-updates. It shares storage, graph execution, output conversion, and recovery
-from saved progress with ordinary checkpointed continuation.
+Branching adds exact parent selection and finished-parent checks to the shared
+checkpointed execution path. It shares storage, graph execution, output
+conversion, and recovery from saved progress with ordinary continuation.
 
 ### Shared storage
 
@@ -142,11 +142,12 @@ identity is available.
 
 ### Fresh request flow
 
+The current checkpointed paths differ during parent selection and validation:
+
 | Stage | Ordinary checkpointed continuation | Branching |
 | --- | --- | --- |
 | Select starting state | Read the conversation-chain checkpoint when available; otherwise use the thread's latest checkpoint. | Load the named parent's exact final checkpoint from its stored response reference. |
 | Validate graph state | A paused graph can accept matching tool results or approval decisions. | Require a completed parent response and a finished graph under the parent eligibility rules. |
-| Finalize linkage | Save the response's checkpoint reference and advance `conversation_chain_store`. | Save the child's own reference while leaving `conversation_chain_store` unchanged. |
 
 Between selection and finalization, both paths run the graph with current input
 and instructions, using the selected checkpoint for prior state. Execution uses
@@ -196,28 +197,27 @@ Implementation details live with the code:
 - [Branching tests](../../tests/unit_tests/agents/hosting/test_response_branching.py):
   parent preservation, concurrent siblings, failures, and recovery.
 
-### Open items
+### Follow-up
 
-The remaining implementation and compatibility work is:
+The remaining work is:
 
+- Align ordinary continuation with branching for requests using
+  `previous_response_id`: select the referenced response's checkpoint and
+  skip all reads and writes to `conversation_chain_store`. Requests using
+  `conversation` continue to use the conversation-chain checkpoint.
 - Validate parent outputs for unanswered tool calls as well as checking graph
-  completion, and reject requests combining both linkage fields with HTTP 400.
-- Verify request-scoped `instructions` across checkpoint restoration.
-- Cover admission errors through HTTP, including status, error code, parameter,
-  and absence of graph execution. Confirm remaining reference-error details
-  against the service.
-- Verify default local and Foundry providers, explicit provider overrides,
-  eligible parents created through conversations, and ordinary tool/approval
-  continuation.
-- Define conversation linkage: if A belongs to a conversation and B branches
-  from A, decide which context a later request using that conversation selects.
+  completion.
+- Reject requests combining `previous_response_id` and `conversation` with
+  HTTP 400.
+- Isolate top-level `instructions` to the current request across checkpoint
+  restoration, while preserving explicit system and developer message items.
 
 Branching from paused parents requires a separate design for isolating tool
 replies, approval decisions, and resume state between children.
 
 ## 3. Use cases
 
-### Set up a local server
+### Server: enable branching
 
 Install `langchain-azure-ai[hosting]` and configure `model` as in the
 [basic hosting setup](../../README.md#hosting-langgraph-agents-on-microsoft-foundry).
@@ -238,7 +238,7 @@ if __name__ == "__main__":
     ).run(port=8088)
 ```
 
-### Compare alternatives
+### Client: create two branches
 
 Run the client in a separate process. Both plans start from the destination
 suggested by A:
