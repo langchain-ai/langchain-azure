@@ -3,7 +3,7 @@
 ## 1. Interface
 
 [`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) hosts a [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph or
-compatible runnable through HTTP invocations. The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides
+compatible runnable through HTTP invocations. The [Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md) provides
 routing and request context; this host defines the text and
 [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) request formats. See
 [Responses hosting](responses.md) for richer input and output.
@@ -127,7 +127,7 @@ citations, and usage have no default structured output mapping here.
 | Background SSE | × | `background=true` with `stream=true` returns HTTP 400. |
 | SSE reconnect by cursor | × | There is no public stream-reconnect endpoint. |
 
-[Agent Server Invocations](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
 provides the HTTP endpoints. Enabling either server option puts all requests,
 including foreground requests, on the task-backed execution path. It also enables
 `GET /invocations/{id}` and `POST /invocations/{id}/cancel`. With both options
