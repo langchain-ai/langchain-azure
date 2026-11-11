@@ -66,42 +66,19 @@ Override these methods to change request parsing, runnable configuration, or
 input/output conversion. The signatures below omit `self`; only the two parsing
 hooks are asynchronous.
 
-```python
-async def parse_request(
-    request: Request,
-) -> tuple[str | list[dict[str, Any]], bool]: ...
-
-async def parse_execution_options(
-    request: Request,
-    *,
-    stream: bool,
-) -> tuple[bool, str | None]: ...
-
-def build_runnable_config(request: Request) -> RunnableConfig: ...
-
-def build_task_runnable_config(
-    session_id: str,
-    context: TaskContext[dict[str, Any]],
-) -> RunnableConfig: ...
-
-def build_input(message: str) -> GraphInputT: ...
-
-def parse_output(output: GraphOutputT) -> str: ...
-```
+| Hook signature | Responsibility |
+| --- | --- |
+| `async parse_request(request: Request) -> tuple[str \| list[dict[str, Any]], bool]` | Return `(message, stream)`. The default message is text or a list of HITL reply items. |
+| `async parse_execution_options(request: Request, *, stream: bool) -> tuple[bool, str \| None]` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing hooks raise `ValueError` for invalid input, which becomes HTTP 400. |
+| `build_runnable_config(request: Request) -> RunnableConfig` | Configure direct execution. The default derives a user-scoped graph thread from the public session. |
+| `build_task_runnable_config(session_id: str, context: TaskContext[dict[str, Any]]) -> RunnableConfig` | Configure task execution, including foreground requests when either server option is enabled. The default uses `context.task_id` for the graph thread and supplies `invocation_context` and `invocation_cancellation_signal`. |
+| `build_input(message: str) -> GraphInputT` | Convert text to runnable input. The default creates a `messages` dictionary. Structured HITL replies are handled separately by the host. |
+| `parse_output(output: GraphOutputT) -> str` | Convert a non-streaming graph result to the `response` string, using `output_parser` when supplied. SSE tokens use the graph stream instead. |
 
 Import `Request` from `starlette.requests`, `RunnableConfig` from
 `langchain_core.runnables`, `TaskContext` from `azure.ai.agentserver.core.tasks`,
 and `Any` from `typing`. `GraphInputT` and `GraphOutputT` stand for the input and
 output types chosen for the host.
-
-| Hook | Responsibility |
-| --- | --- |
-| `parse_request` | Return `(message, stream)`. The default message is text or a list of HITL reply items. |
-| `parse_execution_options` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing hooks raise `ValueError` for invalid input, which becomes HTTP 400. |
-| `build_runnable_config` | Configure direct execution. The default derives a user-scoped graph thread from the public session. |
-| `build_task_runnable_config` | Configure task execution, including foreground requests when either server option is enabled. The default uses `context.task_id` for the graph thread and supplies `invocation_context` and `invocation_cancellation_signal`. |
-| `build_input` | Convert text to runnable input. The default creates a `messages` dictionary. Structured HITL replies are handled separately by the host. |
-| `parse_output` | Convert a non-streaming graph result to the `response` string, using `output_parser` when supplied. SSE tokens use the graph stream instead. |
 
 For config changes, call the corresponding `super()` hook and preserve its
 thread and task context entries. If customization must work in both execution
