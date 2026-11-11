@@ -342,7 +342,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     The server extends :class:`ResponsesAgentServerHost` and registers a
     default request → graph → events conversion pipeline. The instance is
     an ASGI application; configure routes and middleware directly on it.
-    Server lifecycle methods are inherited from the SDK. For advanced
+    Server lifecycle methods delegate to the SDK. For advanced
     scenarios, users may either:
 
     - subclass and override :meth:`handle_create`, or
@@ -476,6 +476,67 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     def graph(self) -> "CompiledStateGraph":
         """The hosted graph, copied to decorate a configured checkpoint saver."""
         return self._graph
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
+        """Start the server synchronously.
+
+        Once running, the host exposes ``POST /responses`` using the OpenAI
+        Responses API create contract. See the `OpenAI Responses API create
+        docs <https://platform.openai.com/docs/api-reference/responses/create>`_
+        for the full request and response schema. A minimal request is:
+
+        .. code-block:: json
+
+            {"input": "Hello!", "stream": false}
+
+        Common request fields include ``input``, ``instructions``,
+        ``previous_response_id``, ``conversation``, and ``stream``.
+        Non-streaming requests return a Responses API response object whose
+        ``output`` array contains items such as ``message``, ``function_call``,
+        ``function_call_output``, and ``mcp_approval_request``. Streaming
+        requests return ``text/event-stream`` with lifecycle events such as
+        ``response.created``, ``response.output_text.delta``, and
+        ``response.completed``. Continue a conversation with
+        ``previous_response_id`` or ``conversation.id``.
+
+        Args:
+            host: Network interface to bind. Defaults to ``"0.0.0.0"``.
+            port: Port to bind. Defaults to ``PORT`` env var or 8088.
+        """
+        super().run(host=host, port=port)
+
+    async def run_async(
+        self, host: str = "0.0.0.0", port: Optional[int] = None
+    ) -> None:
+        """Start the server asynchronously.
+
+        Exposes the same ``POST /responses`` contract as :meth:`run`, using
+        the OpenAI Responses API create request and response schema. See the
+        `OpenAI Responses API create docs
+        <https://platform.openai.com/docs/api-reference/responses/create>`_
+        for the complete contract. A minimal request is:
+
+        .. code-block:: json
+
+            {"input": "Hello!", "stream": false}
+
+        Non-streaming requests return a Responses API response object whose
+        ``output`` array contains items such as ``message``, ``function_call``,
+        ``function_call_output``, and ``mcp_approval_request``. Streaming
+        requests return ``text/event-stream`` with events such as
+        ``response.created``, ``response.output_text.delta``, and
+        ``response.completed``. Continue a conversation with
+        ``previous_response_id`` or ``conversation.id``.
+
+        Args:
+            host: Network interface to bind.
+            port: Port to bind.
+        """
+        await super().run_async(host=host, port=port)
 
     # ------------------------------------------------------------------
     # Override hooks
