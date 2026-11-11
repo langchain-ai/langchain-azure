@@ -1,12 +1,19 @@
 # Invocations hosting overview
 
-## 1. Interface
+The hosting integration in `langchain-azure-ai` is built on the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md).
+It implements the SDK's handler interface so
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
+run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) hosts a [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph or
-compatible runnable through HTTP invocations. The [Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md) provides
-routing and request context; this host defines the text and
-[human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) request formats. See
-[Responses hosting](responses.md) for richer input and output.
+[`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) maps a graph or compatible runnable to HTTP invocations.
+It converts text and [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts)
+requests into graph input and resume commands, converts graph output into JSON
+or SSE, and connects graph state to session and recovery context. The SDK provides
+protocol routing and the server lifecycle. See [Responses hosting](responses.md)
+for richer input and output.
+
+## 1. Interface
 
 ### Dependencies
 
