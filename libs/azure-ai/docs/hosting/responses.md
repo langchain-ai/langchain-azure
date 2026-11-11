@@ -1,12 +1,19 @@
 # Responses hosting overview
 
-## 1. Interface
+The hosting integration in `langchain-azure-ai` is built on the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md).
+It implements the SDK's handler interface so
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
+run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) hosts a compiled
-[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph through the [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
-The [Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md) provides the protocol; this host handles
-graph input, output, and state. See also
-[Invocations hosting](invocations.md).
+[`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) maps a compiled graph to the
+[Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
+It converts request items into graph input and resume commands, converts graph
+output into response items and events, and connects graph state to conversation
+and recovery context. The SDK provides protocol routing and the server lifecycle.
+See also [Invocations hosting](invocations.md).
+
+## 1. Interface
 
 ### Dependencies
 
