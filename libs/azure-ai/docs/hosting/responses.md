@@ -69,7 +69,7 @@ uses the `PORT` environment variable or port 8088.
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
-> parameters, including `app` and [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
+> parameters, including `app` and [branching](response_branching.md), through Python.
 
 ### Subclass hooks
 
