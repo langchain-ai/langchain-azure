@@ -33,7 +33,7 @@ or keyword argument; all other constructor parameters are keyword-only.
 | Constructor parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `graph` | `Runnable[GraphInputT, GraphOutputT]` | Required | The graph or runnable to serve. |
-| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. These two options configure invocation execution; when composed with `ResponsesAgentServerHost`, the same options configure that protocol host. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two options are used by this wrapper. When composed with `ResponsesAgentServerHost`, the same options configure that protocol host. |
 | `output_parser` | `Callable[[GraphOutputT], str] \| None` | `None` | Synchronously extract final non-streaming response text; the default uses the last AI message. This does not change SSE token output. |
 | `applicationinsights_connection_string` | `str \| None` | SDK default | Forward telemetry configuration to the SDK host. |
 | `graceful_shutdown_timeout` | `int \| None` | SDK default | Forward graceful shutdown configuration to the SDK host. |
