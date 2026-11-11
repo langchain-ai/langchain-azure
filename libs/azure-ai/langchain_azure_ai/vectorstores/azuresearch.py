@@ -545,10 +545,11 @@ class AzureSearch(VectorStore):
         **kwargs: Any,
     ) -> List[str]:
         """Add texts data to an existing index."""
+        texts = list(texts)
         # batching support if embedding function is an Embeddings object
         if isinstance(self.embedding_function, Embeddings):
             try:
-                embeddings = self.embedding_function.embed_documents(list(texts))
+                embeddings = self.embedding_function.embed_documents(texts)
             except NotImplementedError:
                 embeddings = [self.embedding_function.embed_query(x) for x in texts]
         else:
@@ -585,9 +586,10 @@ class AzureSearch(VectorStore):
         Returns:
             List of IDs for the added texts.
         """
+        texts = list(texts)
         if isinstance(self.embedding_function, Embeddings):
             try:
-                embeddings = await self.embedding_function.aembed_documents(list(texts))
+                embeddings = await self.embedding_function.aembed_documents(texts)
             except NotImplementedError:
                 # Use asyncio.gather to await all coroutines concurrently
                 embeddings = await asyncio.gather(
