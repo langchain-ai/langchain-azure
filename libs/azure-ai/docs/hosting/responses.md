@@ -20,30 +20,105 @@ and uses the same LangGraph hosting interface.
 
 ### Constructor
 
-| Constructor parameter | Default | Purpose |
-| --- | --- | --- |
-| `graph` | Required | The compiled graph to serve. |
-| `app` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
-| `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
-| `store` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
-| `conversation_chain_store` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
-| `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
-| `prefix` | Empty | Add a prefix to the protocol routes. |
-| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
+Import the host from `langchain_azure_ai.agents.hosting`. Pass `graph` as a
+positional or keyword argument; all other constructor parameters are keyword-only.
+
+| Constructor parameter | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `graph` | `CompiledStateGraph` | Required | The compiled graph to serve. |
+| `app` | `ResponsesAgentServerHost \| None` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
+| `store` | `ResponseProviderProtocol \| None` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
+| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
+| `enable_response_branching` | `bool` | `False` | Continue from a named response's exact graph checkpoint. |
+| `prefix` | `str` | `""` | Add a prefix to the protocol routes. |
+| `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
+| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown on the created app. |
+
+The host, options, provider, and conversation-chain protocol types are available
+from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
+`langgraph.graph.state`.
 
 > [!NOTE]
 > When supplying `app`, configure its host-level settings, including response
-> storage, on that app. Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
+> storage, route prefix, telemetry, and shutdown, on that app. Pass the same
+> `options` to the app and the wrapper so their runtime settings agree.
+> Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 > The constructor's `store` provider and the request's `store` retention flag
 > are separate controls.
 
-Start serving with `run()` or `run_async()`; `.app` and `.graph` expose the
-underlying server and hosted graph.
+### Lifecycle and accessors
+
+| Member | Result / behavior |
+| --- | --- |
+| `run(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving synchronously. |
+| `async run_async(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving in an async application; await this method. |
+| `.app: ResponsesAgentServerHost` | Read-only access to the underlying server. |
+| `.graph: CompiledStateGraph` | Read-only access to the hosted graph. With a configured saver, this is a copy that wraps the saver for hosting. |
+
+Both start methods delegate to the Agent Server SDK. With `port=None`, the SDK
+uses the `PORT` environment variable or port 8088.
 
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
 > parameters, including `app` and [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
+
+### Subclass hooks
+
+Override these methods to customize request conversion or graph execution.
+The signatures below omit `self`; all five hooks are asynchronous.
+
+```python
+async def build_input(
+    request: CreateResponse,
+    context: ResponseContext,
+    *,
+    skip_call_ids: frozenset[str] | None = None,
+) -> dict[str, Any]: ...
+
+async def build_resume_command(
+    request: CreateResponse,
+    context: ResponseContext,
+    pending: Sequence[Interrupt],
+) -> tuple[Command | None, frozenset[str]]: ...
+
+async def detect_rejection(
+    request: CreateResponse,
+    context: ResponseContext,
+    pending: Sequence[Interrupt],
+) -> str | None: ...
+
+async def build_runnable_config(
+    request: CreateResponse,
+    context: ResponseContext,
+) -> RunnableConfig: ...
+
+async def handle_create(
+    request: CreateResponse,
+    context: ResponseContext,
+    cancellation_signal: asyncio.Event,
+) -> AsyncIterator[Any]: ...
+```
+
+`CreateResponse` and `ResponseContext` come from the Responses SDK and are
+re-exported by `langchain_azure_ai.agents.hosting`. Import `RunnableConfig`
+from `langchain_core.runnables`, `Command` and `Interrupt` from `langgraph.types`,
+`AsyncIterator` and `Sequence` from `collections.abc`, and `Any` from `typing`.
+
+| Hook | Responsibility in the default handler |
+| --- | --- |
+| `build_input` | Build the graph input dictionary when the turn needs fresh input. The default uses `messages`; `skip_call_ids` excludes consumed HITL replies from that input. |
+| `build_resume_command` | Convert replies to pending interrupts into `(command, consumed_call_ids)`. Return `None` for the command when no matching reply is found. |
+| `detect_rejection` | Check pending interrupt replies before building a resume command. Return a rejection message to fail the response, or `None` to continue. |
+| `build_runnable_config` | Select the thread and checkpoint and supply request context. Branching validation can also call this hook before execution. |
+| `handle_create` | Replace the graph execution and Responses event conversion. Yield event payloads as an async iterator and honor the cancellation signal and context's shutdown/recovery lifecycle. |
+
+For config changes, start with
+`await super().build_runnable_config(request, context)` and retain its
+hosting-owned entries, including `response_context`. Keys beginning with
+`__langchain_azure_` are reserved. The constructor validates the graph schema
+before any input hook runs.
 
 ## 2. Calling modes and input/output
 
