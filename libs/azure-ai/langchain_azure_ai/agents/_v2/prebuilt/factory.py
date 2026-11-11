@@ -50,6 +50,7 @@ from langchain_azure_ai.agents._v2.base import (
     AgentServiceAgentState,
     ResponsesAgentNode,
     _get_v2_tool_definitions,
+    _is_approval,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -140,6 +141,8 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     * ``{"approve": True}`` or ``{"approve": False, "reason": "..."}``
     * A plain string ``"true"`` / ``"false"``.
 
+    Any value that isn't an explicit approval denies the requests.
+
     Returns:
         A dict with ``messages`` containing ``ToolMessage`` instances for
         each approval request, ready for the agent to continue.
@@ -173,8 +176,11 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
         content = json.dumps(decision)
     elif isinstance(decision, str):
         content = decision
+    elif decision == interrupt_payload:
+        # The Responses host approves by echoing the interrupt value back.
+        content = json.dumps({"approve": True})
     else:
-        content = json.dumps({"approve": bool(decision)})
+        content = json.dumps({"approve": _is_approval(decision)})
 
     tool_messages = [
         ToolMessage(content=content, tool_call_id=tc["id"]) for tc in approval_requests

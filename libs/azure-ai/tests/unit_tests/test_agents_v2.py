@@ -255,6 +255,137 @@ class TestDeclarativeV2Helpers:
         output = _approval_message_to_output(tool_msg)
         assert output["approve"] is False
 
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "reject",
+            "denied",
+            "",
+            "null",
+            "yes please",
+            '{"approved": false}',
+            '{"approve": "false"}',
+            '{"reason": "not allowed"}',
+            [{"type": "text", "text": '{"approve": false}'}],
+        ],
+    )
+    def test_approval_message_to_output_denies_unrecognized_decision(
+        self, content: Union[str, list]
+    ) -> None:
+        """Anything but an explicit approval must deny the MCP tool call."""
+        from langchain_azure_ai.agents._v2.base import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_222")
+        output = _approval_message_to_output(tool_msg)
+        assert output["approve"] is False
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "true",
+            " TRUE ",
+            "yes",
+            "approve",
+            "1",
+            '{"approve": "true"}',
+            [{"type": "text", "text": '{"approve": true}'}],
+        ],
+    )
+    def test_approval_message_to_output_approves_explicit_decision(
+        self, content: Union[str, list]
+    ) -> None:
+        """Explicit approvals keep approving the MCP tool call."""
+        from langchain_azure_ai.agents._v2.base import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_333")
+        output = _approval_message_to_output(tool_msg)
+        assert output["approve"] is True
+
+    @pytest.mark.parametrize(
+        ("decision", "approve"),
+        [
+            (True, True),
+            (False, False),
+            ({"approve": False, "reason": "risky"}, False),
+            ("reject", False),
+            ([{"approve": False}], False),
+            (None, False),
+        ],
+    )
+    def test_mcp_approval_node_resume_decision(
+        self, decision: Any, approve: bool
+    ) -> None:
+        """The resume value reaches the approval response as given."""
+        from langchain_azure_ai.agents._v2.base import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+            _approval_message_to_output,
+        )
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            _mcp_approval_node,
+        )
+
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "approval_req_444",
+                    "name": MCP_APPROVAL_REQUEST_TOOL_NAME,
+                    "args": {
+                        "server_label": "github",
+                        "name": "delete_repo",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        )
+
+        with patch(
+            "langchain_azure_ai.agents._v2.prebuilt.factory.interrupt",
+            return_value=decision,
+        ):
+            result = _mcp_approval_node({"messages": [ai_message]})
+
+        (tool_msg,) = result["messages"]
+        assert _approval_message_to_output(tool_msg)["approve"] is approve
+
+    def test_mcp_approval_node_approves_echoed_interrupt_value(self) -> None:
+        """The Responses host approves by resuming with the interrupt value."""
+        from langchain_azure_ai.agents._v2.base import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+            _approval_message_to_output,
+        )
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            _mcp_approval_node,
+        )
+
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "approval_req_555",
+                    "name": MCP_APPROVAL_REQUEST_TOOL_NAME,
+                    "args": {
+                        "server_label": "github",
+                        "name": "delete_repo",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        )
+
+        with patch(
+            "langchain_azure_ai.agents._v2.prebuilt.factory.interrupt",
+            side_effect=lambda value: value,
+        ):
+            result = _mcp_approval_node({"messages": [ai_message]})
+
+        (tool_msg,) = result["messages"]
+        assert _approval_message_to_output(tool_msg)["approve"] is True
+
 
 # ---------------------------------------------------------------------------
 # Tests for _AzureAIAgentApiProxyModel
@@ -983,7 +1114,7 @@ class TestDeclarativeV2HelpersAdditional:
         )
 
         tool_msg = ToolMessage(
-            content=[{"type": "text", "text": "yes please"}],  # type: ignore[arg-type]
+            content=[{"type": "text", "text": "yes"}],  # type: ignore[arg-type]
             tool_call_id="approval_req_list2",
         )
         output = _approval_message_to_output(tool_msg)

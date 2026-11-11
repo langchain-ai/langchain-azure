@@ -256,6 +256,16 @@ def _get_v2_tool_definitions(
     return tool_definitions
 
 
+_APPROVE_DECISIONS = frozenset({"true", "1", "yes", "approve"})
+
+
+def _is_approval(decision: Any) -> bool:
+    """Return whether an MCP approval decision explicitly approves the request."""
+    if isinstance(decision, bool):
+        return decision
+    return str(decision).strip().lower() in _APPROVE_DECISIONS
+
+
 def _approval_message_to_output(
     tool_message: ToolMessage,
 ) -> McpApprovalResponse:
@@ -267,6 +277,10 @@ def _approval_message_to_output(
     * ``{"approve": true}`` / ``{"approve": false, "reason": "..."}``
     * ``"true"`` / ``"false"`` (shorthand – treated as approve/deny)
 
+    Only an explicit approval (``true``, ``"true"``, ``"yes"``, ``"approve"``
+    or ``"1"``, case-insensitive) approves the request. Any other content,
+    including a missing ``approve`` key, denies it.
+
     Args:
         tool_message: The tool message whose ``tool_call_id`` matches the
             original ``McpApprovalRequestOutputItem.id``.
@@ -274,32 +288,25 @@ def _approval_message_to_output(
     Returns:
         A ``McpApprovalResponse`` ready to be sent back to the Responses API.
     """
-    content = tool_message.content
-    approve = True
+    content: Any = tool_message.content
     reason: Optional[str] = None
 
+    if isinstance(content, list):
+        # E.g. [{"type": "text", "text": "true"}]
+        content = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
     if isinstance(content, str):
         try:
-            parsed = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            parsed = content
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            pass
 
-        if isinstance(parsed, dict):
-            approve = bool(parsed.get("approve", True))
-            reason = parsed.get("reason")
-        else:
-            # Plain string: "true"/"false" (case-insensitive)
-            approve = str(parsed).lower() not in ("false", "0", "no", "deny")
-    elif isinstance(content, dict):
-        approve = bool(content.get("approve", True))
+    if isinstance(content, dict):
+        approve = _is_approval(content.get("approve"))
         reason = content.get("reason")
-    elif isinstance(content, list):
-        # E.g. [{"type": "text", "text": "true"}]
-        text_parts = [
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        ]
-        combined = " ".join(text_parts).strip().lower()
-        approve = combined not in ("false", "0", "no", "deny")
+    else:
+        approve = _is_approval(content)
 
     if tool_message.tool_call_id is None:
         raise ValueError(
