@@ -23,27 +23,32 @@ and uses the same LangGraph hosting interface.
 | Constructor parameter | Default | Purpose |
 | --- | --- | --- |
 | `graph` | Required | The compiled graph to serve. |
-| `app` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
 | `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
 | `store` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
 | `conversation_chain_store` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
 | `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
 | `prefix` | Empty | Add a prefix to the protocol routes. |
-| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
+| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the server. |
 
 > [!NOTE]
-> When supplying `app`, configure its host-level settings, including response
-> storage, on that app. Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
+> Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 > The constructor's `store` provider and the request's `store` retention flag
 > are separate controls.
 
-Start serving with `run()` or `run_async()`; `.app` and `.graph` expose the
-underlying server and hosted graph.
+`ResponsesHostServer` inherits from `ResponsesAgentServerHost` and is itself
+an ASGI application. Start serving with the inherited `run()` or `run_async()`;
+`.graph` exposes the hosted graph. Configure routes and middleware directly
+on the server instance.
+
+When migrating from the wrapper API, replace `server.app` with `server`, for
+example `TestClient(server)`. The `app=` constructor parameter is no longer
+supported; construct or subclass `ResponsesHostServer` instead of attaching
+it to an existing host.
 
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
-> parameters, including `app` and [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
+> parameters, including [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
 
 ## 2. Calling modes and input/output
 
@@ -135,7 +140,6 @@ can become a new parent.
 | Branching without a checkpointer | × | Rejected at host construction. |
 | Branching + `steerable_conversations=True` | × | Currently unsupported. Disable steering to use branching. |
 | Branching from a paused graph | × | Includes [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) resume through `previous_response_id` in branching mode. Use ordinary continuation for workflows that pause. |
-| Branching + external `app` | × | Branching requires a host-created app. |
 | Branching + stored background recovery | ✓ | Subject to the recovery requirements below. |
 
 Parent system messages can remain in checkpoint state. Missing or inaccessible

@@ -146,7 +146,7 @@ def test_http_attachments_survive_second_turn(
         ]
         return next(e["response"] for e in events if e["type"] == "response.completed")
 
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         first = completed(
             client.post(
                 "/responses",

@@ -250,8 +250,7 @@ async def _validate_request(
 
 def install_request_validation(server: ResponsesHostServer) -> None:
     """Install early parameter checks and context-aware SDK preflight checks."""
-    app = server.app
-    endpoint = app._endpoint
+    endpoint = server._endpoint
     prefetch = endpoint._prefetch_history_ids
 
     @wraps(prefetch)
@@ -291,7 +290,7 @@ def install_request_validation(server: ResponsesHostServer) -> None:
         return None
 
     setattr(endpoint, "_prefetch_history_ids", preflight)
-    for route in app.routes:
+    for route in server.routes:
         if not isinstance(route, Route) or route.name != "create_response":
             continue
         create_response = route.endpoint

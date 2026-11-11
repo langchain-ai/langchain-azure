@@ -346,7 +346,7 @@ async def test_non_string_text_does_not_corrupt_valid_neighbor(
         graph.add_node("answer", lambda _: {"messages": [answer]})
         graph.add_edge(START, "answer")
         graph.add_edge("answer", END)
-        with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+        with TestClient(ResponsesHostServer(graph.compile())) as client:
             result = client.post(
                 "/responses",
                 json={
@@ -395,7 +395,7 @@ def test_invalid_annotation_container_preserves_http_answer(
     )
     graph.add_edge(START, "answer")
     graph.add_edge("answer", END)
-    with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+    with TestClient(ResponsesHostServer(graph.compile())) as client:
         result = client.post("/responses", json={"input": "hello", "stream": streaming})
     assert result.status_code == 200
     response = (
@@ -832,7 +832,7 @@ def test_http_citation_reaches_client_and_second_turn(
         ]
         return next(e["response"] for e in events if e["type"] == "response.completed")
 
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         first = completed(
             client.post("/responses", json={"input": "hello", "stream": streaming})
         )
@@ -933,7 +933,7 @@ def test_model_client_citations_reach_host_response(
     graph.add_node("model", answer)
     graph.add_edge(START, "model")
     graph.add_edge("model", END)
-    with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+    with TestClient(ResponsesHostServer(graph.compile())) as client:
         result = client.post(
             "/responses",
             json={

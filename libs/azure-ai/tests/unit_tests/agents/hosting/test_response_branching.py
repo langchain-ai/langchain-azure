@@ -205,7 +205,7 @@ def _run_branch_crash_host(
                 options=ResponsesServerOptions(resilient_background=True),
                 enable_response_branching=True,
             )
-            provider = server.app._endpoint._provider
+            provider = server._endpoint._provider
 
             async def wait_for_response(response_id: str) -> ResponseObject:
                 async with asyncio.timeout(20):
@@ -227,7 +227,7 @@ def _run_branch_crash_host(
                                         return response
                         await asyncio.sleep(0)
 
-            with TestClient(server.app) as client:
+            with TestClient(server) as client:
                 assert client.portal is not None
                 if recovery_response_id is None:
                     parent = _create(client, input="A")
@@ -306,8 +306,8 @@ def test_branch_validation_precedes_stream(
         store=None if file_provider else InMemoryResponseProvider(),
         enable_response_branching=True,
     )
-    provider = server.app._endpoint._provider
-    with TestClient(server.app) as client:
+    provider = server._endpoint._provider
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored = client.portal.call(provider.get_response, parent["id"])
@@ -368,7 +368,7 @@ def test_siblings_and_descendants_use_the_selected_parent(
 ) -> None:
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
@@ -426,8 +426,8 @@ def test_continuation_reuses_parent_and_selected_checkpoint(
         store=None if file_provider else InMemoryResponseProvider(),
         enable_response_branching=branching,
     )
-    provider = server.app._endpoint._provider
-    with TestClient(server.app) as client:
+    provider = server._endpoint._provider
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
@@ -468,12 +468,12 @@ def test_concurrent_siblings_do_not_share_new_input(graph: CompiledStateGraph) -
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
 
         async def siblings() -> list[httpx.Response]:
             async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=server.app),
+                transport=httpx.ASGITransport(app=server),
                 base_url="http://test",
             ) as requests:
                 return await asyncio.gather(
@@ -557,7 +557,7 @@ async def test_branch_recovery_uses_selected_checkpoint(
 ) -> None:
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
@@ -655,7 +655,7 @@ async def test_branch_recovery_from_finished_checkpoint_preserves_saved_output(
     graph = builder.compile(checkpointer=InMemorySaver())
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         child = _create(client, input="B", previous_response_id=parent["id"])
         assert _text(child) == "A|B"
@@ -732,7 +732,7 @@ async def test_recovery_rejects_damaged_progress_without_replaying_input(
     server = ResponsesHostServer(
         graph, store=provider, enable_response_branching=branching
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
@@ -803,7 +803,7 @@ async def test_unavailable_parent_fails_without_executing_a_new_root(
 ) -> None:
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider, enable_response_branching=True)
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert client.portal is not None
         stored = client.portal.call(provider.get_response, parent["id"])
@@ -859,7 +859,7 @@ def test_checkpoint_cleanup_never_starts_a_new_root(
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert parent["status"] == "completed"
         if cleanup_phase == "config":
@@ -926,7 +926,7 @@ def test_custom_saver_config_is_available_before_checkpoint_reads(
         store=InMemoryResponseProvider(),
         enable_response_branching=enabled,
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         response = _create(client, input="B", previous_response_id=parent["id"])
     assert parent["status"] == "completed"
@@ -954,7 +954,7 @@ async def test_paused_parent_cannot_be_branched(
         store=provider,
         enable_response_branching=True,
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = _create(client, input="A")
         assert parent["status"] == "completed"
         assert client.portal is not None
@@ -1025,11 +1025,11 @@ def test_parent_checkpoint_remains_user_scoped(
     server = ResponsesHostServer(
         graph, store=InMemoryResponseProvider(), enable_response_branching=True
     )
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         parent = client.post(
             "/responses", json={"input": "A"}, headers={USER_ID: "user-a"}
         ).json()
-        provider = server.app._endpoint._provider
+        provider = server._endpoint._provider
         assert client.portal is not None
         stored_parent = client.portal.call(
             partial(
@@ -1173,36 +1173,15 @@ async def test_branching_accepts_async_sqlite_saver(
 
 
 @pytest.mark.parametrize("steerable_conversations", [False, True])
-@pytest.mark.parametrize("provide_options", [False, True])
-def test_branching_rejects_external_host(
-    graph: CompiledStateGraph,
-    steerable_conversations: bool,
-    provide_options: bool,
-) -> None:
-    app = ResponsesAgentServerHost(
-        options=ResponsesServerOptions(steerable_conversations=steerable_conversations),
-        store=InMemoryResponseProvider(),
-    )
-    options = ResponsesServerOptions() if provide_options else None
-    with pytest.raises(ValueError, match="app=None"):
-        ResponsesHostServer(
-            graph,
-            app=app,
-            options=options,
-            enable_response_branching=True,
-        )
-
-
-@pytest.mark.parametrize("steerable_conversations", [False, True])
-def test_external_host_remains_supported_without_branching(
+def test_server_is_sdk_host(
     graph: CompiledStateGraph, steerable_conversations: bool
 ) -> None:
-    app = ResponsesAgentServerHost(
+    server = ResponsesHostServer(
+        graph,
         options=ResponsesServerOptions(steerable_conversations=steerable_conversations),
         store=InMemoryResponseProvider(),
     )
-    server = ResponsesHostServer(graph, app=app)
-    assert server.app is app
-    with TestClient(server.app) as client:
+    assert isinstance(server, ResponsesAgentServerHost)
+    with TestClient(server) as client:
         response = _create(client, input="A")
     assert _text(response) == "A"

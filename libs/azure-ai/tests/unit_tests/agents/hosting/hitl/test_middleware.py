@@ -140,7 +140,7 @@ def test_responses_host_resumes_hitl_middleware(
     host = ResponsesHostServer(_middleware_graph(key, tool_calls))
     conversation_id = key
 
-    with TestClient(host.app) as client:
+    with TestClient(host) as client:
         first = client.post(
             "/responses",
             json={"input": "do it", "conversation": {"id": conversation_id}},
@@ -207,7 +207,7 @@ def test_disallowed_shortcut_keeps_interrupt_pending(
     tool_calls: list[str] = []
     host = ResponsesHostServer(_middleware_graph(key, tool_calls, allowed_decisions))
 
-    with TestClient(host.app) as client:
+    with TestClient(host) as client:
         first = client.post(
             "/responses",
             json={"input": "do it", "conversation": {"id": key}},
@@ -244,7 +244,7 @@ def test_conflicting_approvals_keep_interrupt_pending(
     tool_calls: list[str] = []
     host = ResponsesHostServer(_middleware_graph(key, tool_calls))
 
-    with TestClient(host.app) as client:
+    with TestClient(host) as client:
         first = client.post(
             "/responses",
             json={"input": "do it", "conversation": {"id": key}},

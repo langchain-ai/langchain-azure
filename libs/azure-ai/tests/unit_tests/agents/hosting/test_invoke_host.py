@@ -30,7 +30,6 @@ from azure.ai.agentserver.core.tasks import TaskContext
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
-    ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
 from langchain_core.messages import AIMessage
@@ -1591,12 +1590,13 @@ async def test_invocation_cancel_request_stops_running_turn() -> None:
 
 
 def test_invocations_and_responses_streams_can_share_host() -> None:
-    class CombinedHost(InvocationAgentServerHost, ResponsesAgentServerHost):
+    class CombinedHost(ResponsesHostServer, InvocationAgentServerHost):
         pass
 
     options = ResponsesServerOptions(steerable_conversations=True)
-    app = CombinedHost(options=options, store=InMemoryResponseProvider())
-    ResponsesHostServer(make_streaming_graph(), app=app, options=options)
+    app = CombinedHost(
+        make_streaming_graph(), options=options, store=InMemoryResponseProvider()
+    )
     InvocationsHostServer(make_streaming_graph(), app=app, options=options)
 
     with TestClient(app) as client:

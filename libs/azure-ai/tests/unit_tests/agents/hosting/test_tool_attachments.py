@@ -74,7 +74,7 @@ async def test_tool_attachments_reach_client(block: dict[str, Any], mode: str) -
         graph.add_node("report", lambda _: {"messages": deepcopy(messages)})
         graph.add_edge(START, "report")
         graph.add_edge("report", END)
-        with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+        with TestClient(ResponsesHostServer(graph.compile())) as client:
             result = client.post(
                 "/responses",
                 json={
@@ -199,7 +199,7 @@ def test_tool_node_mixed_attachments_reach_http_client(streaming: bool) -> None:
     graph.add_edge(START, "plan")
     graph.add_edge("plan", "tools")
     graph.add_edge("tools", END)
-    with TestClient(ResponsesHostServer(graph.compile()).app) as client:
+    with TestClient(ResponsesHostServer(graph.compile())) as client:
         result = client.post(
             "/responses",
             json={

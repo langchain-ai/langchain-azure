@@ -314,7 +314,7 @@ def _response_root_id(response: Any) -> str | None:
 
 
 @experimental()
-class ResponsesHostServer:
+class ResponsesHostServer(ResponsesAgentServerHost):
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
     Example:
@@ -340,10 +340,11 @@ class ResponsesHostServer:
         checkpointer. With a checkpointer, the host returns HTTP 400 before
         streaming or graph execution.
 
-    The host owns an internal :class:`ResponsesAgentServerHost` and
-    registers a default request → graph → events conversion pipeline
-    against it. For advanced scenarios (custom routes, multi-protocol
-    composition, custom converter), users may either:
+    The server extends :class:`ResponsesAgentServerHost` and registers a
+    default request → graph → events conversion pipeline. The instance is
+    an ASGI application; configure routes and middleware directly on it.
+    Server lifecycle methods are inherited from the SDK. For advanced
+    scenarios, users may either:
 
     - subclass and override :meth:`handle_create`, or
     - drop down to :class:`ResponsesAgentServerHost` directly and write
@@ -357,11 +358,6 @@ class ResponsesHostServer:
             reusing this class as a starting point).
 
     Keyword Args:
-        app: Optional existing :class:`ResponsesAgentServerHost` to attach
-            to (e.g. a multi-protocol mixin). In this mode the host-level
-            kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself. Response branching requires
-            ``app=None``.
         options: Optional :class:`ResponsesServerOptions` forwarded to
             :class:`ResponsesAgentServerHost`.
         store: Optional :class:`ResponseProviderProtocol`. This provider
@@ -380,8 +376,8 @@ class ResponsesHostServer:
             conversation head. Defaults to ``False``. Requires a
             history-preserving checkpointer with asynchronous ``aget_tuple``,
             ``aput``, and ``aput_writes`` implementations, steering disabled,
-            and ``app=None``.
-            Branching from paused graphs is not supported.
+            and a finished parent graph. Branching from paused graphs is not
+            supported.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -393,14 +389,13 @@ class ResponsesHostServer:
             configured without a LangGraph checkpointer. Override this class
             to host custom-state graphs. Also raised if response branching is
             enabled without the required async checkpoint implementations,
-            with steering enabled, or with an external ``app``.
+            or with steering enabled.
     """
 
     def __init__(
         self,
         graph: "CompiledStateGraph",
         *,
-        app: Optional[ResponsesAgentServerHost] = None,
         options: Optional[ResponsesServerOptions] = None,
         store: Optional[ResponseProviderProtocol] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
@@ -422,12 +417,11 @@ class ResponsesHostServer:
         self._enable_response_branching = enable_response_branching
         if enable_response_branching and (
             not self._graph_has_checkpointer
-            or app is not None
             or (options is not None and options.steerable_conversations)
         ):
             raise ValueError(
                 "Response branching requires a history-preserving checkpointer, "
-                "steerable_conversations=False, and app=None."
+                "and steerable_conversations=False."
             )
         self._conversation_chain_store = (
             conversation_chain_store
@@ -435,8 +429,7 @@ class ResponsesHostServer:
             else FoundryConversationChainStore()
         )
         if (
-            app is None
-            and options is not None
+            options is not None
             and options.resilient_background
             and not self._graph_has_checkpointer
         ):
@@ -461,109 +454,37 @@ class ResponsesHostServer:
             self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 
-        if app is not None:
-            # Attach to an existing host (e.g. a multi-protocol mixin).
-            # In this mode the host-level kwargs are ignored — the caller
-            # is expected to have configured them on ``app`` itself.
-            self._app = app
-        else:
-            host_kwargs: dict[str, Any] = {}
-            if applicationinsights_connection_string is not None:
-                host_kwargs["applicationinsights_connection_string"] = (
-                    applicationinsights_connection_string
-                )
-            if graceful_shutdown_timeout is not None:
-                host_kwargs["graceful_shutdown_timeout"] = graceful_shutdown_timeout
-
-            self._app = ResponsesAgentServerHost(
-                prefix=prefix,
-                options=options,
-                store=store,
-                **host_kwargs,
+        host_kwargs: dict[str, Any] = {}
+        if applicationinsights_connection_string is not None:
+            host_kwargs["applicationinsights_connection_string"] = (
+                applicationinsights_connection_string
             )
+        if graceful_shutdown_timeout is not None:
+            host_kwargs["graceful_shutdown_timeout"] = graceful_shutdown_timeout
+
+        super().__init__(
+            prefix=prefix,
+            options=options,
+            store=store,
+            **host_kwargs,
+        )
 
         self._log_conversation_management_selection()
-        _install_recovery_stream_lock_workaround(self._app)
+        _install_recovery_stream_lock_workaround(self)
 
         install_request_validation(self)
 
         # Wire the create handler.
-        self._app.response_handler(self._handle_create_async_gen)
+        self.response_handler(self._handle_create_async_gen)
 
     # ------------------------------------------------------------------
     # Public accessors
     # ------------------------------------------------------------------
 
     @property
-    def app(self) -> ResponsesAgentServerHost:
-        """The underlying :class:`ResponsesAgentServerHost`."""
-        return self._app
-
-    @property
     def graph(self) -> "CompiledStateGraph":
         """The hosted graph, copied to decorate a configured checkpoint saver."""
         return self._graph
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
-        """Start the server synchronously.
-
-        Once running, the host exposes ``POST /responses`` using the OpenAI
-        Responses API create contract. See the `OpenAI Responses API create
-        docs <https://platform.openai.com/docs/api-reference/responses/create>`_
-        for the full request and response schema. A minimal request is:
-
-        .. code-block:: json
-
-            {"input": "Hello!", "stream": false}
-
-        Common request fields include ``input``, ``instructions``,
-        ``previous_response_id``, ``conversation``, and ``stream``.
-        Non-streaming requests return a Responses API response object whose
-        ``output`` array contains items such as ``message``, ``function_call``,
-        ``function_call_output``, and ``mcp_approval_request``. Streaming
-        requests return ``text/event-stream`` with lifecycle events such as
-        ``response.created``, ``response.output_text.delta``, and
-        ``response.completed``. Continue a conversation with
-        ``previous_response_id`` or ``conversation.id``.
-
-        Args:
-            host: Network interface to bind. Defaults to ``"0.0.0.0"``.
-            port: Port to bind. Defaults to ``PORT`` env var or 8088.
-        """
-        self._app.run(host=host, port=port)
-
-    async def run_async(
-        self, host: str = "0.0.0.0", port: Optional[int] = None
-    ) -> None:
-        """Start the server asynchronously.
-
-        Exposes the same ``POST /responses`` contract as :meth:`run`, using
-        the OpenAI Responses API create request and response schema. See the
-        `OpenAI Responses API create docs
-        <https://platform.openai.com/docs/api-reference/responses/create>`_
-        for the complete contract. A minimal request is:
-
-        .. code-block:: json
-
-            {"input": "Hello!", "stream": false}
-
-        Non-streaming requests return a Responses API response object whose
-        ``output`` array contains items such as ``message``, ``function_call``,
-        ``function_call_output``, and ``mcp_approval_request``. Streaming
-        requests return ``text/event-stream`` with events such as
-        ``response.created``, ``response.output_text.delta``, and
-        ``response.completed``. Continue a conversation with
-        ``previous_response_id`` or ``conversation.id``.
-
-        Args:
-            host: Network interface to bind.
-            port: Port to bind.
-        """
-        await self._app.run_async(host=host, port=port)
 
     # ------------------------------------------------------------------
     # Override hooks
@@ -916,7 +837,7 @@ class ResponsesHostServer:
         if mode == "langgraph_checkpoint" and _is_in_memory_checkpointer(
             getattr(self._graph, "checkpointer", None)
         ):
-            config = getattr(self._app, "config", None)
+            config = getattr(self, "config", None)
             if bool(getattr(config, "is_hosted", False)):
                 logger.warning(
                     "ResponsesHostServer selected LangGraph checkpoint "

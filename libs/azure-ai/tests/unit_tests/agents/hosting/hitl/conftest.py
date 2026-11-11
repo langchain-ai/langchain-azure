@@ -75,8 +75,8 @@ def script() -> Iterator[ScriptRegistrar]:
 
 
 def client_for(host: ResponsesHostServer) -> TestClient:
-    """Return an HTTP test client bound to a host's ASGI app."""
-    return TestClient(host.app)
+    """Return an HTTP test client bound to the host."""
+    return TestClient(host)
 
 
 # ---------------------------------------------------------------------------

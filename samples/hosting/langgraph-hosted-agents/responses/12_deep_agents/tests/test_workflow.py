@@ -302,7 +302,7 @@ class PublicationFailureWorkflowTests(unittest.TestCase):
                         [],
                         create_report_export_tool(MagicMock()),
                     )
-                    with TestClient(ResponsesHostServer(graph).app) as client:
+                    with TestClient(ResponsesHostServer(graph)) as client:
                         first = response(client, stream, input="Save and publish v1")
                         second = response(
                             client,
@@ -413,7 +413,7 @@ class PublicationFailureWorkflowTests(unittest.TestCase):
                             [],
                             create_report_export_tool(MagicMock()),
                         )
-                        with TestClient(ResponsesHostServer(graph).app) as client:
+                        with TestClient(ResponsesHostServer(graph)) as client:
                             first = response(
                                 client, stream, input="Save and publish report-v1.md"
                             )

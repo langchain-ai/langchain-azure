@@ -68,7 +68,7 @@ from .conftest import (  # noqa: E402
 
 
 def _client(server: ResponsesHostServer) -> TestClient:
-    return TestClient(server.app)
+    return TestClient(server)
 
 
 @pytest.mark.parametrize("ending", ["success", "failure", "cancel", "close"])
@@ -908,7 +908,7 @@ def test_background_handler_keeps_clients_after_http_request_ends(
                         sent.append(message)
 
                     await asyncio.wait_for(
-                        server.app(
+                        server(
                             {
                                 "type": "http",
                                 "asgi": {"version": "3.0", "spec_version": "2.0"},
@@ -1174,12 +1174,12 @@ def test_store_false_without_checkpointer_does_not_persist(
     server = ResponsesHostServer(graph, prefix=prefix)
     graph_stream = MagicMock(wraps=server.graph.astream)
     monkeypatch.setattr(server.graph, "astream", graph_stream)
-    provider = server.app._endpoint._provider
+    provider = server._endpoint._provider
     storage_calls: list[AsyncMock] = []
     for owner, method in (
         (provider, "create_response"),
         (provider, "update_response"),
-        (server.app._orchestrator, "_start_resilient_background"),
+        (server._orchestrator, "_start_resilient_background"),
         (streams, "get_or_create"),
         (server._conversation_chain_store, "set"),
     ):
@@ -1668,7 +1668,7 @@ async def test_recovered_response_reclaims_stale_replay_stream_lock(
     context.is_recovery = True
     context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
     record = SimpleNamespace(input_items=[], previous_response_id=None)
-    orchestrator = server.app._orchestrator
+    orchestrator = server._orchestrator
     assert orchestrator is not None
 
     with pytest.raises(BodyObserved):
@@ -1717,7 +1717,7 @@ async def test_fresh_response_does_not_reclaim_replay_stream_lock(
     context = _context(response_id=response_id)
     context.platform_context = SimpleNamespace(user_id_key=None, call_id=None)
     record = SimpleNamespace(input_items=[], previous_response_id=None)
-    orchestrator = server.app._orchestrator
+    orchestrator = server._orchestrator
     assert orchestrator is not None
 
     with pytest.raises(RuntimeError, match="lock contention"):
