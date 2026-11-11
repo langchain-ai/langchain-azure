@@ -71,17 +71,17 @@ uses the `PORT` environment variable or port 8088.
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
 > parameters, including `app` and [branching](response_branching.md), through Python.
 
-### Subclass hooks
+### Overridable methods
 
 Override these methods to customize request conversion or graph execution.
-The signatures below omit `self`; all five hooks are asynchronous.
+The signatures below omit `self`; all five methods are asynchronous.
 
-| Hook signature | Responsibility in the default handler |
+| Method signature | Responsibility in the default handler |
 | --- | --- |
 | `async build_input(request: CreateResponse, context: ResponseContext, *, skip_call_ids: frozenset[str] \| None = None) -> dict[str, Any]` | Build the graph input dictionary when the turn needs fresh input. The default uses `messages`; `skip_call_ids` excludes consumed HITL replies from that input. |
 | `async build_resume_command(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> tuple[Command \| None, frozenset[str]]` | Convert replies to pending interrupts into `(command, consumed_call_ids)`. Return `None` for the command when no matching reply is found. |
 | `async detect_rejection(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> str \| None` | Check pending interrupt replies before building a resume command. Return a rejection message to fail the response, or `None` to continue. |
-| `async build_runnable_config(request: CreateResponse, context: ResponseContext) -> RunnableConfig` | Select the thread and checkpoint and supply request context. Branching validation can also call this hook before execution. |
+| `async build_runnable_config(request: CreateResponse, context: ResponseContext) -> RunnableConfig` | Select the thread and checkpoint and supply request context. Branching validation can also call this method before execution. |
 | `async handle_create(request: CreateResponse, context: ResponseContext, cancellation_signal: asyncio.Event) -> AsyncIterator[Any]` | Replace the graph execution and Responses event conversion. Yield event payloads as an async iterator and honor the cancellation signal and context's shutdown/recovery lifecycle. |
 
 `CreateResponse` and `ResponseContext` come from the
@@ -94,7 +94,7 @@ For config changes, start with
 `await super().build_runnable_config(request, context)` and retain its
 hosting-owned entries, including `response_context`. Keys beginning with
 `__langchain_azure_` are reserved. The constructor validates the graph schema
-before any input hook runs.
+before any input conversion runs.
 
 ## 2. Calling modes and input/output
 
