@@ -385,6 +385,21 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.3.1**:
+
+  - We fixed `AzureSearch.add_texts()` and `aadd_texts()` to upload texts supplied as generators or other one-shot iterables instead of silently returning no results. [#1330](https://github.com/langchain-ai/langchain-azure/pull/1330)
+  - We fixed `AzureSearch.from_embeddings()` and `afrom_embeddings()` to accept constructor options without forwarding them to document uploads, while preserving supplied document keys. [#1328](https://github.com/langchain-ai/langchain-azure/pull/1328)
+  - We fixed Azure Search authentication to use a supplied token credential or the default Azure credential when the API key is empty or omitted. Nonempty API keys retain precedence. [#1327](https://github.com/langchain-ai/langchain-azure/pull/1327)
+  - We fixed Azure Search custom field names to resolve when each store is constructed, so `AZURESEARCH_FIELDS_*` settings work after import and remain consistent across synchronous and asynchronous operations. [#918](https://github.com/langchain-ai/langchain-azure/pull/918)
+  - We fixed the Azure Search retriever to apply the documented `filter` option. The `filters` alias remains supported; passing both raises `ValueError`. [#1303](https://github.com/langchain-ai/langchain-azure/pull/1303)
+  - We fixed asynchronous Azure Search MMR searches to return an empty list when no documents match. [#817](https://github.com/langchain-ai/langchain-azure/pull/817)
+  - We fixed `AzureAIChatCompletionsModel` to send zero-valued settings such as `temperature=0` and `seed=0`, and to let per-call options override model defaults without duplicate-keyword errors. [#1269](https://github.com/langchain-ai/langchain-azure/pull/1269)
+  - We fixed `AzureAIImageAnalysisTool` construction and visual-feature handling, included `caption` and `denseCaptions` in its output, and surfaced service failures instead of returning an empty result. [#1302](https://github.com/langchain-ai/langchain-azure/pull/1302)
+  - We fixed `AzureAIOpenTelemetryTracer` to use the retriever's run or class name for retriever spans when no serialized name is available. [#1321](https://github.com/langchain-ai/langchain-azure/pull/1321)
+  - We added a hosting telemetry flag that records whether response branching is enabled. [#1307](https://github.com/langchain-ai/langchain-azure/pull/1307)
+  - We clarified SDK setup, Agent Service usage, and durable state configuration in the package README. [#1309](https://github.com/langchain-ai/langchain-azure/pull/1309) [#1315](https://github.com/langchain-ai/langchain-azure/pull/1315)
+  - We added Responses and Invocations hosting guides, clarified local checkpoint storage and response branching, and added a response branching sample. [#1299](https://github.com/langchain-ai/langchain-azure/pull/1299) [#1308](https://github.com/langchain-ai/langchain-azure/pull/1308) [#1329](https://github.com/langchain-ai/langchain-azure/pull/1329) [#1289](https://github.com/langchain-ai/langchain-azure/pull/1289)
+
 - **1.3.0**:
 
   - **[NEW, Experimental]** We introduced opt-in response branching through `ResponsesHostServer(graph, enable_response_branching=True)`. Requests with `previous_response_id` start from the completed parent's exact saved checkpoint, creating independent siblings without advancing the shared conversation head. This requires a retained parent, a history-preserving async checkpointer, steering disabled, and no externally supplied `app`; paused-parent branching is not supported. See the [design document](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md) for usage scenarios and implementation gaps. [#1263](https://github.com/langchain-ai/langchain-azure/pull/1263) [#1260](https://github.com/langchain-ai/langchain-azure/pull/1260) [#1288](https://github.com/langchain-ai/langchain-azure/pull/1288)
