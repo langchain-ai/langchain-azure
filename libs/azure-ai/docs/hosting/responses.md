@@ -4,7 +4,7 @@
 
 [`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) hosts a compiled
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph through the [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
-The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides the protocol; this host handles
+The [Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md) provides the protocol; this host handles
 graph input, output, and state. See also
 [Invocations hosting](invocations.md).
 
@@ -101,7 +101,8 @@ async def handle_create(
 ) -> AsyncIterator[Any]: ...
 ```
 
-`CreateResponse` and `ResponseContext` come from the Responses SDK and are
+`CreateResponse` and `ResponseContext` come from the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md) and are
 re-exported by `langchain_azure_ai.agents.hosting`. Import `RunnableConfig`
 from `langchain_core.runnables`, `Command` and `Interrupt` from `langgraph.types`,
 `AsyncIterator` and `Sequence` from `collections.abc`, and `Any` from `typing`.
@@ -126,7 +127,7 @@ Request defaults are `store=true`, `stream=false`, and `background=false`.
 ✓ means supported under the stated conditions; × means unsupported.
 
 Create, retrieve, cancel, delete, input-item listing, and [server-sent events (SSE)](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) formatting follow
-[Agent Server Responses](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
 A create request returns JSON or SSE according to `stream`. Background execution
 requires `store=true`; stored background streams support reconnecting with
 `starting_after`. Deleting a response leaves graph checkpoints intact.
