@@ -69,51 +69,19 @@ uses the `PORT` environment variable or port 8088.
 Override these methods to customize request conversion or graph execution.
 The signatures below omit `self`; all five hooks are asynchronous.
 
-```python
-async def build_input(
-    request: CreateResponse,
-    context: ResponseContext,
-    *,
-    skip_call_ids: frozenset[str] | None = None,
-) -> dict[str, Any]: ...
-
-async def build_resume_command(
-    request: CreateResponse,
-    context: ResponseContext,
-    pending: Sequence[Interrupt],
-) -> tuple[Command | None, frozenset[str]]: ...
-
-async def detect_rejection(
-    request: CreateResponse,
-    context: ResponseContext,
-    pending: Sequence[Interrupt],
-) -> str | None: ...
-
-async def build_runnable_config(
-    request: CreateResponse,
-    context: ResponseContext,
-) -> RunnableConfig: ...
-
-async def handle_create(
-    request: CreateResponse,
-    context: ResponseContext,
-    cancellation_signal: asyncio.Event,
-) -> AsyncIterator[Any]: ...
-```
+| Hook signature | Responsibility in the default handler |
+| --- | --- |
+| `async build_input(request: CreateResponse, context: ResponseContext, *, skip_call_ids: frozenset[str] \| None = None) -> dict[str, Any]` | Build the graph input dictionary when the turn needs fresh input. The default uses `messages`; `skip_call_ids` excludes consumed HITL replies from that input. |
+| `async build_resume_command(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> tuple[Command \| None, frozenset[str]]` | Convert replies to pending interrupts into `(command, consumed_call_ids)`. Return `None` for the command when no matching reply is found. |
+| `async detect_rejection(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> str \| None` | Check pending interrupt replies before building a resume command. Return a rejection message to fail the response, or `None` to continue. |
+| `async build_runnable_config(request: CreateResponse, context: ResponseContext) -> RunnableConfig` | Select the thread and checkpoint and supply request context. Branching validation can also call this hook before execution. |
+| `async handle_create(request: CreateResponse, context: ResponseContext, cancellation_signal: asyncio.Event) -> AsyncIterator[Any]` | Replace the graph execution and Responses event conversion. Yield event payloads as an async iterator and honor the cancellation signal and context's shutdown/recovery lifecycle. |
 
 `CreateResponse` and `ResponseContext` come from the
 [Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md) and are
 re-exported by `langchain_azure_ai.agents.hosting`. Import `RunnableConfig`
 from `langchain_core.runnables`, `Command` and `Interrupt` from `langgraph.types`,
 `AsyncIterator` and `Sequence` from `collections.abc`, and `Any` from `typing`.
-
-| Hook | Responsibility in the default handler |
-| --- | --- |
-| `build_input` | Build the graph input dictionary when the turn needs fresh input. The default uses `messages`; `skip_call_ids` excludes consumed HITL replies from that input. |
-| `build_resume_command` | Convert replies to pending interrupts into `(command, consumed_call_ids)`. Return `None` for the command when no matching reply is found. |
-| `detect_rejection` | Check pending interrupt replies before building a resume command. Return a rejection message to fail the response, or `None` to continue. |
-| `build_runnable_config` | Select the thread and checkpoint and supply request context. Branching validation can also call this hook before execution. |
-| `handle_create` | Replace the graph execution and Responses event conversion. Yield event payloads as an async iterator and honor the cancellation signal and context's shutdown/recovery lifecycle. |
 
 For config changes, start with
 `await super().build_runnable_config(request, context)` and retain its
