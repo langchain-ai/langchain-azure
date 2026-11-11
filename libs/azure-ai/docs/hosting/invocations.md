@@ -6,7 +6,7 @@ It implements the SDK's handler interface so
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
 run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) maps a graph or compatible runnable to HTTP invocations.
+[`InvocationsHostServer`](../../langchain_azure_ai/agents/hosting/_invoke_host.py) maps a graph or compatible runnable to HTTP invocations.
 It converts text and [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts)
 requests into graph input and resume commands, converts graph output into JSON
 or SSE, and connects graph state to session and recovery context. The SDK provides
@@ -209,8 +209,8 @@ a persistent saver. Protocol result storage and graph state have separate
 lifetimes.
 
 The same [graph storage choices](responses.md#storage-choices) apply
-here: [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) for the
-[durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver)
+here: [`FoundryCheckpointSaver`](../../langchain_azure_ai/agents/hosting/_checkpoint/_foundry_checkpoint_saver.py) for the
+[durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/aio/_langgraph_checkpoint_store.py)
 for [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview) checkpoints.
 
 | Conversation feature | Supported | Conditions / behavior |
