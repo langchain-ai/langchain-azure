@@ -6,7 +6,7 @@ It implements the SDK's handler interface so
 [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
 run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) maps a compiled graph to the
+[`ResponsesHostServer`](../../langchain_azure_ai/agents/hosting/_responses_host.py) maps a compiled graph to the
 [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
 It converts request items into graph input and resume commands, converts graph
 output into response items and events, and connects graph state to conversation
@@ -36,7 +36,7 @@ positional or keyword argument; all other constructor parameters are keyword-onl
 | `app` | `ResponsesAgentServerHost \| None` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
 | `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
 | `store` | `ResponseProviderProtocol \| None` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
-| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
+| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
 | `enable_response_branching` | `bool` | `False` | Continue from a named response's exact graph checkpoint. |
 | `prefix` | `str` | `""` | Add a prefix to the protocol routes. |
 | `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
@@ -144,8 +144,8 @@ The repository provides the following implementations for different state roles:
 | Role | Implementation | Package / backend |
 | --- | --- | --- |
 | Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; local files or Foundry State Store. |
-| Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; local files or Foundry State Store. |
-| Graph checkpoints | [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
+| Graph checkpoints | [`FoundryCheckpointSaver`](../../langchain_azure_ai/agents/hosting/_checkpoint/_foundry_checkpoint_saver.py) | `langchain-azure-ai`; local files or Foundry State Store. |
+| Graph checkpoints | [`CosmosDBSaver`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/aio/_langgraph_checkpoint_store.py) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
 
 The State Store-backed implementations use local files under
 `~/.agentserver/state_stores` during local development. Set
@@ -157,7 +157,7 @@ local processes or machines.
 
 Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
 one. Both hosts require the async `CosmosDBSaver` rather than
-[`CosmosDBSaverSync`](https://reference.langchain.com/python/langchain-azure-cosmosdb/_langgraph_checkpoint_store/CosmosDBSaverSync). Cosmos DB implementations require installing
+[`CosmosDBSaverSync`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/_langgraph_checkpoint_store.py). Cosmos DB implementations require installing
 `langchain-azure-cosmosdb` separately.
 
 ### Steering
