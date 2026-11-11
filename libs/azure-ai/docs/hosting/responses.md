@@ -29,6 +29,7 @@ and uses the same LangGraph hosting interface.
 | `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
 | `prefix` | Empty | Add a prefix to the protocol routes. |
 | `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the server. |
+| `**kwargs` | Empty | Forward additional [SDK host configuration](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.hosting.responsesagentserverhost), such as `configure_observability`, `log_level`, `access_log`, `access_log_format`, and `routes`. |
 
 > [!NOTE]
 > Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
@@ -39,6 +40,10 @@ and uses the same LangGraph hosting interface.
 an ASGI application. Start serving with the inherited `run()` or `run_async()`;
 `.graph` exposes the hosted graph. Configure routes and middleware directly
 on the server instance.
+
+Additional SDK keyword arguments are forwarded unchanged, including explicit
+`None` values. For example, `ResponsesHostServer(graph, configure_observability=None)`
+skips the SDK's observability initialization.
 
 When migrating from the wrapper API, replace `server.app` with `server`, for
 example `TestClient(server)`. The `app=` constructor parameter is no longer

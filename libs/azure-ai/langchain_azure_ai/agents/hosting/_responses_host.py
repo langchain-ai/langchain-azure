@@ -44,7 +44,6 @@ try:
     from azure.ai.agentserver.responses import (
         ResponseContext,
         ResponseEventStream,
-        ResponseProviderProtocol,
         ResponsesAgentServerHost,
         ResponsesServerOptions,
     )
@@ -382,6 +381,13 @@ class ResponsesHostServer(ResponsesAgentServerHost):
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+        kwargs: SDK host keyword arguments forwarded unchanged to
+            :class:`ResponsesAgentServerHost`, such as ``configure_observability``,
+            ``log_level``, ``access_log``, ``access_log_format``, and ``routes``.
+            Host-only arguments documented above are also accepted through
+            this parameter. Explicit ``None`` values are preserved.
+            See the `ResponsesAgentServerHost API reference
+            <https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.hosting.responsesagentserverhost>`_.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
@@ -390,6 +396,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             to host custom-state graphs. Also raised if response branching is
             enabled without the required async checkpoint implementations,
             or with steering enabled.
+        TypeError: If the underlying SDK host does not accept a keyword argument.
     """
 
     def __init__(
@@ -397,12 +404,9 @@ class ResponsesHostServer(ResponsesAgentServerHost):
         graph: "CompiledStateGraph",
         *,
         options: Optional[ResponsesServerOptions] = None,
-        store: Optional[ResponseProviderProtocol] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
         enable_response_branching: bool = False,
-        prefix: str = "",
-        applicationinsights_connection_string: Optional[str] = None,
-        graceful_shutdown_timeout: Optional[int] = None,
+        **kwargs: Any,
     ) -> None:
         self._validate_graph_schema(graph)
         saver = getattr(graph, "checkpointer", None)
@@ -454,20 +458,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 
-        host_kwargs: dict[str, Any] = {}
-        if applicationinsights_connection_string is not None:
-            host_kwargs["applicationinsights_connection_string"] = (
-                applicationinsights_connection_string
-            )
-        if graceful_shutdown_timeout is not None:
-            host_kwargs["graceful_shutdown_timeout"] = graceful_shutdown_timeout
-
-        super().__init__(
-            prefix=prefix,
-            options=options,
-            store=store,
-            **host_kwargs,
-        )
+        super().__init__(options=options, **kwargs)
 
         self._log_conversation_management_selection()
         _install_recovery_stream_lock_workaround(self)
