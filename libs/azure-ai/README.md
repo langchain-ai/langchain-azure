@@ -41,7 +41,8 @@ install the `hosting` extra:
 pip install -U langchain-azure-ai[hosting]
 ```
 
-If you are transitioning from Microsoft Foundry classic and you need access to deprecated classes, use `[v1]` extra.
+For the deprecated Azure AI Inference chat and embedding models, use the `v1`
+extra. This extra no longer provides Agent Service V1 support.
 
 ```bash
 pip install -U langchain-azure-ai[v1]
@@ -194,6 +195,18 @@ Name: my-echo-agent
 
 You're not a genius and you don't love programming!
 ```
+
+#### Migrating from Agent Service V1
+
+**Breaking change:** The `langchain_azure_ai.agents.v1` and
+`langchain_azure_ai.agents._v1` namespaces have been removed after being deprecated
+in version 1.1.0. Use `AgentServiceFactory` and `AgentServiceAgentState` from
+`langchain_azure_ai.agents`, following the Agent Service quick start above.
+
+The current implementation uses `azure-ai-projects` and Responses/Conversations
+instead of the V1 threads/runs APIs. Update agent creation, graph state, and tool
+configuration for V2 rather than aliasing the removed imports. The `v1` extra
+remains available only for deprecated Azure AI Inference models.
 
 ### Applying Content Safety guardrails via middleware
 

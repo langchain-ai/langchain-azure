@@ -350,20 +350,6 @@ wheels = [
 ]
 
 [[package]]
-name = "azure-ai-agents"
-version = "1.2.0b6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "azure-core" },
-    { name = "isodate" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/68/32/f4e534dc05dfb714705df56a190d690c5452cd4dd7e936612cb1adddc44f/azure_ai_agents-1.2.0b6.tar.gz", hash = "sha256:d3c10848c3b19dec98a292f8c10cee4ba4aac1050d4faabf9c2e2456b727f528", size = 396865, upload-time = "2025-10-24T18:04:47.877Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/d0/930c522f5fa9da163de057e57f8b44539424e13f46618c52624ebc712293/azure_ai_agents-1.2.0b6-py3-none-any.whl", hash = "sha256:ce23ad8fb9791118905be1ec8eae5c907cca2e536a455f1d3b830062c72cf2a7", size = 217950, upload-time = "2025-10-24T18:04:49.72Z" },
-]
-
-[[package]]
 name = "azure-ai-agentserver-core"
 version = "2.3.0b2"
 source = { registry = "https://pypi.org/simple" }
@@ -1636,7 +1622,6 @@ tools = [
     { name = "filetype" },
 ]
 v1 = [
-    { name = "azure-ai-agents" },
     { name = "azure-ai-inference" },
 ]
 
@@ -1675,7 +1660,6 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14" },
     { name = "anthropic", specifier = ">=0.111.0" },
     { name = "anyio", marker = "extra == 'hosting'", specifier = ">=4,<5" },
-    { name = "azure-ai-agents", marker = "extra == 'v1'", specifier = "==1.2.0b6" },
     { name = "azure-ai-agentserver-core", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },
     { name = "azure-ai-agentserver-invocations", marker = "extra == 'hosting'", specifier = ">=1.1.0b1,<2.0" },
     { name = "azure-ai-agentserver-responses", marker = "extra == 'hosting'", specifier = ">=2.1.0b2,<3.0" },

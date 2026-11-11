@@ -156,16 +156,11 @@ Environment variable resolution priority (highest to lowest):
 
 Providing both `project_endpoint` and `endpoint` as constructor parameters raises `ValueError`.
 
-#### Agent Service Versioning (V1 / V2)
+#### Agent Service (V2)
 
-The agents module has two parallel implementations:
+The agents module uses `azure-ai-projects` with the Responses/Conversations API (OpenAI SDK types).
 
-- **V1** (`agents/_v1/`): Uses `azure-ai-agents` SDK with threads/runs pattern. **Deprecated.**
-- **V2** (`agents/_v2/`): Uses `azure-ai-projects >= 2.0` with Responses/Conversations API (OpenAI SDK types). **Current.**
-
-The default import path (`from langchain_azure_ai.agents import AgentServiceFactory`) resolves to **V2**. V1 requires explicit import from `langchain_azure_ai.agents.v1`.
-
-Implementation lives in private `_v1/` and `_v2/` directories. Public API directories (`v1/`, `v2/`, `prebuilt/`) only contain `__init__.py` files that re-export via lazy imports.
+The public import path (`from langchain_azure_ai.agents import AgentServiceFactory`) resolves to the **V2** implementation under `agents/_v2/`. Public namespaces re-export the implementation via lazy imports.
 
 Key V2 classes:
 - `AgentServiceFactory` — factory for creating LangGraph agent nodes
@@ -184,7 +179,6 @@ V2 supports middleware (`AgentMiddleware` with `before_agent`, `after_agent`, `w
 The following classes use the legacy `azure-ai-inference` SDK and are deprecated:
 - `AzureAIChatCompletionsModel` (use `AzureAIOpenAIApiChatModel`)
 - `AzureAIEmbeddingsModel` (use `AzureAIOpenAIApiEmbeddingsModel`)
-- V1 agents classes (use V2)
 
 ---
 
@@ -415,7 +409,7 @@ LangChain integrations extend the appropriate LangChain base class; LangGraph ch
 ### Optional Dependencies
 
 In `langchain-azure-ai`, heavy SDKs are gated behind extras in `pyproject.toml`:
-- `v1`: `azure-ai-agents` + `azure-ai-inference[opentelemetry]`
+- `v1`: `azure-ai-inference` for deprecated chat and embedding models only
 - `opentelemetry`: Azure Monitor + OpenTelemetry stack
 - `tools`: `azure-ai-documentintelligence`, `azure-ai-textanalytics`, `azure-ai-vision-imageanalysis`, `azure-logicapps-connector`
 

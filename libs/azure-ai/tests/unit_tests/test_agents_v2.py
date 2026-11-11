@@ -724,6 +724,15 @@ class TestPromptBasedAgentModelV2Streaming:
 class TestAgentServiceFactory:
     """Tests for AgentServiceFactory."""
 
+    def test_public_factory_uses_v2(self) -> None:
+        """Test that the public factory resolves to the current implementation."""
+        from langchain_azure_ai.agents import AgentServiceFactory
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            AgentServiceFactory as V2AgentServiceFactory,
+        )
+
+        assert AgentServiceFactory is V2AgentServiceFactory
+
     def test_validate_environment_from_env(self) -> None:
         """Test environment variable validation."""
         from langchain_azure_ai.agents._v2.prebuilt.factory import (

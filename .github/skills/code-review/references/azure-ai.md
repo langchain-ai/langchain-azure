@@ -67,11 +67,11 @@ delegation trap.
 
 ## Versioned and deprecated APIs
 
-`agents/v1` and `agents/_v1` exist for compatibility with Microsoft Foundry
-classic and are gated behind the `v1` extra. New functionality belongs in the
-current API; expanding the deprecated surface is a design finding. Deprecations
-in this package use the local `langchain_azure_ai._api.base` decorators
-(`deprecated`, `experimental`), not `langchain_core._api`.
+The `v1` extra only supplies deprecated `azure-ai-inference` chat and embedding
+models. Agent Service V1 support has been removed; new agent functionality belongs
+in the current V2 implementation. Deprecations in this package use the local
+`langchain_azure_ai._api.base` decorators (`deprecated`, `experimental`), not
+`langchain_core._api`.
 
 ## Tests
 
