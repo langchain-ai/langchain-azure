@@ -1,12 +1,19 @@
 # Responses hosting overview
 
-## 1. Interface
+The hosting integration in `langchain-azure-ai` is built on the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md).
+It implements the SDK's handler interface so
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
+run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`ResponsesHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses_host/ResponsesHostServer) hosts a compiled
-[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph through the [Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
-The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides the protocol; this host handles
-graph input, output, and state. See also
-[Invocations hosting](invocations.md).
+[`ResponsesHostServer`](../../langchain_azure_ai/agents/hosting/_responses_host.py) maps a compiled graph to the
+[Responses protocol](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/langchain-hosted-agents#responses-protocol).
+It converts request items into graph input and resume commands, converts graph
+output into response items and events, and connects graph state to conversation
+and recovery context. The SDK provides protocol routing and the server lifecycle.
+See also [Invocations hosting](invocations.md).
+
+## 1. Interface
 
 ### Dependencies
 
@@ -55,13 +62,38 @@ it to an existing host.
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
 > parameters, including [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
 
+### Overridable methods
+
+Override these methods to customize request conversion or graph execution.
+The signatures below omit `self`; all five methods are asynchronous.
+
+| Method signature | Responsibility in the default handler |
+| --- | --- |
+| `async build_input(request: CreateResponse, context: ResponseContext, *, skip_call_ids: frozenset[str] \| None = None) -> dict[str, Any]` | Build the graph input dictionary when the turn needs fresh input. The default uses `messages`; `skip_call_ids` excludes consumed HITL replies from that input. |
+| `async build_resume_command(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> tuple[Command \| None, frozenset[str]]` | Convert replies to pending interrupts into `(command, consumed_call_ids)`. Return `None` for the command when no matching reply is found. |
+| `async detect_rejection(request: CreateResponse, context: ResponseContext, pending: Sequence[Interrupt]) -> str \| None` | Check pending interrupt replies before building a resume command. Return a rejection message to fail the response, or `None` to continue. |
+| `async build_runnable_config(request: CreateResponse, context: ResponseContext) -> RunnableConfig` | Select the thread and checkpoint and supply request context. Branching validation can also call this method before execution. |
+| `async handle_create(request: CreateResponse, context: ResponseContext, cancellation_signal: asyncio.Event) -> AsyncIterator[Any]` | Replace the graph execution and Responses event conversion. Yield event payloads as an async iterator and honor the cancellation signal and context's shutdown/recovery lifecycle. |
+
+`CreateResponse` and `ResponseContext` come from the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md) and are
+re-exported by `langchain_azure_ai.agents.hosting`. Import `RunnableConfig`
+from `langchain_core.runnables`, `Command` and `Interrupt` from `langgraph.types`,
+`AsyncIterator` and `Sequence` from `collections.abc`, and `Any` from `typing`.
+
+For config changes, start with
+`await super().build_runnable_config(request, context)` and retain its
+hosting-owned entries, including `response_context`. Keys beginning with
+`__langchain_azure_` are reserved. The constructor validates the graph schema
+before any input conversion runs.
+
 ## 2. Calling modes and input/output
 
 Request defaults are `store=true`, `stream=false`, and `background=false`.
 ✓ means supported under the stated conditions; × means unsupported.
 
 Create, retrieve, cancel, delete, input-item listing, and [server-sent events (SSE)](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) formatting follow
-[Agent Server Responses](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/README.md#protocol-endpoints).
 A create request returns JSON or SSE according to `stream`. Background execution
 requires `store=true`; stored background streams support reconnecting with
 `starting_after`. Deleting a response leaves graph checkpoints intact.
@@ -103,8 +135,8 @@ The repository provides the following implementations for different state roles:
 | Role | Implementation | Package / backend |
 | --- | --- | --- |
 | Conversation-chain references | `FoundryConversationChainStore` | `langchain-azure-ai`; local files or Foundry State Store. |
-| Graph checkpoints | [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) | `langchain-azure-ai`; local files or Foundry State Store. |
-| Graph checkpoints | [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
+| Graph checkpoints | [`FoundryCheckpointSaver`](../../langchain_azure_ai/agents/hosting/_checkpoint/_foundry_checkpoint_saver.py) | `langchain-azure-ai`; local files or Foundry State Store. |
+| Graph checkpoints | [`CosmosDBSaver`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/aio/_langgraph_checkpoint_store.py) | `langchain-azure-cosmosdb`; [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview). |
 
 The State Store-backed implementations use local files under
 `~/.agentserver/state_stores` during local development. Set
@@ -116,7 +148,7 @@ local processes or machines.
 
 Supply a checkpointer through `compile(checkpointer=...)`; the host does not add
 one. Both hosts require the async `CosmosDBSaver` rather than
-[`CosmosDBSaverSync`](https://reference.langchain.com/python/langchain-azure-cosmosdb/_langgraph_checkpoint_store/CosmosDBSaverSync). Cosmos DB implementations require installing
+[`CosmosDBSaverSync`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/_langgraph_checkpoint_store.py). Cosmos DB implementations require installing
 `langchain-azure-cosmosdb` separately.
 
 ### Steering

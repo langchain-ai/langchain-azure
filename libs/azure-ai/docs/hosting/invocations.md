@@ -1,12 +1,19 @@
 # Invocations hosting overview
 
-## 1. Interface
+The hosting integration in `langchain-azure-ai` is built on the
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md).
+It implements the SDK's handler interface so
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agents can
+run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents).
 
-[`InvocationsHostServer`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_invoke_host/InvocationsHostServer) hosts a [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph or
-compatible runnable through HTTP invocations. The [Agent Server SDK](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-core/azure.ai.agentserver.core?view=azure-python) provides
-routing and request context; this host defines the text and
-[human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts) request formats. See
-[Responses hosting](responses.md) for richer input and output.
+[`InvocationsHostServer`](../../langchain_azure_ai/agents/hosting/_invoke_host.py) maps a graph or compatible runnable to HTTP invocations.
+It converts text and [human-in-the-loop (HITL)](https://docs.langchain.com/oss/python/langgraph/interrupts)
+requests into graph input and resume commands, converts graph output into JSON
+or SSE, and connects graph state to session and recovery context. The SDK provides
+protocol routing and the server lifecycle. See [Responses hosting](responses.md)
+for richer input and output.
+
+## 1. Interface
 
 ### Dependencies
 
@@ -18,25 +25,72 @@ is optional and uses the same graph interface.
 
 ### Constructor
 
-| Constructor parameter | Default | Purpose |
-| --- | --- | --- |
-| `graph` | Required | The graph or runnable to serve. |
-| `app` | `None` | Attach to an existing Invocations app, or create one when omitted. |
-| `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
-| `output_parser` | `None` | Customize final response text extraction; the default uses the last AI message. |
-| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the created app. |
+Import the host from `langchain_azure_ai.agents.hosting`. The class is generic
+over the runnable's input and output types:
+`InvocationsHostServer[GraphInputT, GraphOutputT]`. Pass `graph` as a positional
+or keyword argument; all other constructor parameters are keyword-only.
+
+| Constructor parameter | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `graph` | `Runnable[GraphInputT, GraphOutputT]` | Required | The graph or runnable to serve. |
+| `app` | `InvocationAgentServerHost \| None` | `None` | Attach to an existing Invocations app, or create one when omitted. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two options are used by this wrapper. |
+| `output_parser` | `Callable[[GraphOutputT], str] \| None` | `None` | Synchronously extract final non-streaming response text; the default uses the last AI message. This does not change SSE token output. |
+| `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
+| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown on the created app. |
+
+The host, `InvocationAgentServerHost`, and `ResponsesServerOptions` are available
+from `langchain_azure_ai.agents.hosting`. Import `Runnable` from
+`langchain_core.runnables` and `Callable` from `collections.abc`. The generic
+types describe the runnable; request parsing and output conversion still use
+the defaults below unless customized.
 
 > [!NOTE]
-> When supplying `app`, configure its host-level settings on that app. Supply
-> the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
+> When supplying `app`, configure its telemetry and shutdown settings on that
+> app. The wrapper still reads `options` to configure invocation execution.
+> Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 
-Start serving with `run()` or `run_async()`; `.app` and `.graph` expose the
-underlying server and runnable.
+### Lifecycle and accessors
+
+| Member | Result / behavior |
+| --- | --- |
+| `run(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving synchronously. |
+| `async run_async(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving in an async application; await this method. |
+| `.app: InvocationAgentServerHost` | Read-only access to the underlying server. |
+| `.graph: Runnable[GraphInputT, GraphOutputT]` | Read-only access to the hosted runnable. |
+
+Both start methods delegate to the Agent Server SDK. With `port=None`, the SDK
+uses the `PORT` environment variable or port 8088.
 
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
 > `--protocol invocations`. Configure constructor parameters through Python;
 > `--option` is only accepted for Responses.
+
+### Overridable methods
+
+Override these methods to change request parsing, runnable configuration, or
+input/output conversion. The signatures below omit `self`; only the two parsing
+methods are asynchronous.
+
+| Method signature | Responsibility |
+| --- | --- |
+| `async parse_request(request: Request) -> tuple[str \| list[dict[str, Any]], bool]` | Return `(message, stream)`. The default message is text or a list of HITL reply items. |
+| `async parse_execution_options(request: Request, *, stream: bool) -> tuple[bool, str \| None]` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing methods raise `ValueError` for invalid input, which becomes HTTP 400. |
+| `build_runnable_config(request: Request) -> RunnableConfig` | Configure direct execution. The default derives a user-scoped graph thread from the public session. |
+| `build_task_runnable_config(session_id: str, context: TaskContext[dict[str, Any]]) -> RunnableConfig` | Configure task execution, including foreground requests when either server option is enabled. The default uses `context.task_id` for the graph thread and supplies `invocation_context` and `invocation_cancellation_signal`. |
+| `build_input(message: str) -> GraphInputT` | Convert text to runnable input. The default creates a `messages` dictionary. Structured HITL replies are handled separately by the host. |
+| `parse_output(output: GraphOutputT) -> str` | Convert a non-streaming graph result to the `response` string, using `output_parser` when supplied. SSE tokens use the graph stream instead. |
+
+Import `Request` from `starlette.requests`, `RunnableConfig` from
+`langchain_core.runnables`, `TaskContext` from `azure.ai.agentserver.core.tasks`,
+and `Any` from `typing`. `GraphInputT` and `GraphOutputT` stand for the input and
+output types chosen for the host.
+
+For config changes, call the corresponding method on `super()` and preserve its
+thread and task context entries. If customization must work in both execution
+paths, override both config methods. The constructor validates the graph schema
+before any input conversion runs.
 
 ## 2. Calling modes and input/output
 
@@ -57,16 +111,97 @@ citations, and usage have no default structured output mapping here.
 | Background SSE | × | `background=true` with `stream=true` returns HTTP 400. |
 | SSE reconnect by cursor | × | There is no public stream-reconnect endpoint. |
 
-[Agent Server Invocations](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
+[Agent Server SDK](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-invocations/README.md#protocol-endpoints)
 provides the HTTP endpoints. Enabling either server option puts all requests,
 including foreground requests, on the task-backed execution path. It also enables
 `GET /invocations/{id}` and `POST /invocations/{id}/cancel`. With both options
 off, requests execute directly. Background requests require
 `resilient_background=True` even when steering is enabled.
 
+### HTTP request and foreground result
+
+For example, `POST /invocations` with `Content-Type: application/json`:
+
+```json
+{"message": "Hello!", "stream": false, "background": false}
+```
+
+`message` is required. `stream` and `background` must be booleans. The optional
+`previous_invocation_id` must be a non-empty string and checks the latest turn
+when task execution is enabled.
+
+A successful foreground request returns HTTP 200 in both direct and task
+execution:
+
+```json
+{"response": "Hello! How can I help?"}
+```
+
+Pending interrupts add an `output` array of HITL items. Request validation
+errors return HTTP 400 with `{"error": "..."}`; conversation conflicts return
+HTTP 409 with the same error shape.
+
+### Background submission, polling, and cancellation
+
+Submit `{"message": "Hello!", "background": true}` to receive HTTP 202:
+
+```json
+{
+  "id": "<invocation-id>",
+  "status": "in_progress",
+  "agent_session_id": "<session-id>"
+}
+```
+
+The initial status is `queued` or `in_progress`. The `id` also appears in the
+`x-agent-invocation-id` response header. Poll `GET /invocations/{id}` for the
+current state. A completed result looks like this:
+
+```json
+{
+  "id": "<invocation-id>",
+  "status": "completed",
+  "agent_session_id": "<session-id>",
+  "response": "Hello! How can I help?"
+}
+```
+
+Polling and cancellation return `id`, `status`, and `agent_session_id`, with
+`response`, `output`, or `error` when available. `output` contains HITL items;
+`error` is an object with `code` and `message`. Status values are `queued`,
+`in_progress`, `cancelling`, `completed`, `failed`, and `cancelled`.
+
+`POST /invocations/{id}/cancel` returns the current invocation envelope. Active
+work can pass through `cancelling`; a terminal invocation returns its existing
+result. Unknown IDs return HTTP 404. Cancellation returns HTTP 409 when the
+invocation exists but has no active task in the current process.
+
+### SSE format
+
+With `stream=true`, a foreground request returns `text/event-stream`. Token
+events have no event name. A successful stream ends with `done`:
+
+```text
+data: {"token": "Hello"}
+
+data: {"token": "!"}
+
+event: done
+data: {}
+
+```
+
+Pending interrupts produce `event: output_item` before `done`. Its `data` is the
+HITL item itself, without a Responses `response.output_item.done` wrapper.
+On execution failure, the stream ends with `event: error` instead of `done`.
+Direct execution uses `data: {"error": "..."}`; task execution uses an error
+object with `code` and `message`.
+
 ## 3. Conversation and state
 
-Reuse `agent_session_id` for later turns. The host maps the resolved session
+Reuse the `x-agent-session-id` response header as the next request's
+`agent_session_id` query parameter, for example
+`POST /invocations?agent_session_id=<session-id>`. The host maps the resolved session
 and platform user to an internal LangGraph [thread](https://docs.langchain.com/oss/python/langgraph/persistence#threads). A checkpointer restores
 prior graph state; without one, each request supplies only its current input.
 An in-memory saver retains state within one process; restart recovery requires
@@ -74,8 +209,8 @@ a persistent saver. Protocol result storage and graph state have separate
 lifetimes.
 
 The same [graph storage choices](responses.md#storage-choices) apply
-here: [`FoundryCheckpointSaver`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_foundry_checkpoint_saver/FoundryCheckpointSaver) for the
-[durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](https://reference.langchain.com/python/langchain-azure-cosmosdb/aio/_langgraph_checkpoint_store/CosmosDBSaver)
+here: [`FoundryCheckpointSaver`](../../langchain_azure_ai/agents/hosting/_checkpoint/_foundry_checkpoint_saver.py) for the
+[durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), async [`CosmosDBSaver`](../../../azure-cosmosdb/src/langchain_azure_cosmosdb/aio/_langgraph_checkpoint_store.py)
 for [Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/overview) checkpoints.
 
 | Conversation feature | Supported | Conditions / behavior |
@@ -109,9 +244,9 @@ to a LangGraph resume command. This works with foreground JSON/SSE and
 background polling.
 
 > [!NOTE]
-> The [two HITL reply paths and event examples](responses.md#human-in-the-loop)
-> also apply here. Put the reply items in `message` and reuse `agent_session_id`;
-> Responses uses `input`.
+> Use the [same two HITL reply item types and routing IDs](responses.md#human-in-the-loop).
+> Put reply items in `message` and reuse `agent_session_id`; Responses uses
+> `input`. The SSE event names and framing differ as described above.
 
 Plain text while paused re-emits the pending items; structured answers require
 a pending interrupt. A completed invocation can leave the graph paused for a
