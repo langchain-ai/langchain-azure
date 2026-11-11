@@ -623,7 +623,11 @@ class AzureSearch(VectorStore):
         *,
         keys: Optional[List[str]] = None,
     ) -> List[str]:
-        """Add embeddings to an existing index."""
+        """Add embeddings to an existing index.
+
+        Each document is stored under the key from ``keys`` as given, or under a
+        base64-url-encoded uuid when ``keys`` is not supplied.
+        """
         ids = []
 
         # Write data to index
@@ -686,16 +690,31 @@ class AzureSearch(VectorStore):
         *,
         keys: Optional[List[str]] = None,
     ) -> List[str]:
-        """Add embeddings to an existing index."""
+        """Add embeddings to an existing index.
+
+        Each document is stored under the key from ``keys`` as given, or under a
+        base64-url-encoded uuid when ``keys`` is not supplied.
+
+        Earlier releases also base64-url-encoded a caller-supplied ``keys`` entry on
+        this async path, so an index written through it with explicit keys holds those
+        documents under the encoded key
+        (``base64.urlsafe_b64encode(key.encode()).decode()``). Writing such a key again
+        now uses the key as given and therefore adds a second document instead of
+        updating the old one. To migrate, either delete the encoded documents or keep
+        passing the encoded key for them.
+        """
         ids = []
 
         # Write data to index
         data = []
         for i, (text, embedding) in enumerate(text_embeddings):
             # Use provided key otherwise use default key
-            key = keys[i] if keys else str(uuid.uuid4())
-            # Encoding key for Azure Search valid characters
-            key = base64.urlsafe_b64encode(bytes(key, "utf-8")).decode("ascii")
+            if keys:
+                key = keys[i]
+            else:
+                key = str(uuid.uuid4())
+                # Encoding key for Azure Search valid characters
+                key = base64.urlsafe_b64encode(bytes(key, "utf-8")).decode("ascii")
             metadata = metadatas[i] if metadatas else {}
             # Add data to index
             # Additional metadata to fields mapping
