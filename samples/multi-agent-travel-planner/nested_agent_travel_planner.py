@@ -483,12 +483,7 @@ def main() -> None:
     global TRACER  # noqa: PLW0602 - sample wiring
 
     configure_azure_monitor(
-        connection_string=os.getenv(
-            "APPLICATION_INSIGHTS_CONNECTION_STRING",
-            "InstrumentationKey=bf44b3ee-950b-483c-aadb-2642ca4c9a97;"
-            "IngestionEndpoint=https://swedencentral-0.in.applicationinsights.azure.com/;"
-            "ApplicationId=a5229eaa-5849-4d38-a77d-a80f50881c0e",
-        )
+        connection_string=os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
     )
     _configure_otlp_tracing()
 
