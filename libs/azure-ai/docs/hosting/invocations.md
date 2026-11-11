@@ -67,16 +67,16 @@ uses the `PORT` environment variable or port 8088.
 > `--protocol invocations`. Configure constructor parameters through Python;
 > `--option` is only accepted for Responses.
 
-### Subclass hooks
+### Overridable methods
 
 Override these methods to change request parsing, runnable configuration, or
 input/output conversion. The signatures below omit `self`; only the two parsing
-hooks are asynchronous.
+methods are asynchronous.
 
-| Hook signature | Responsibility |
+| Method signature | Responsibility |
 | --- | --- |
 | `async parse_request(request: Request) -> tuple[str \| list[dict[str, Any]], bool]` | Return `(message, stream)`. The default message is text or a list of HITL reply items. |
-| `async parse_execution_options(request: Request, *, stream: bool) -> tuple[bool, str \| None]` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing hooks raise `ValueError` for invalid input, which becomes HTTP 400. |
+| `async parse_execution_options(request: Request, *, stream: bool) -> tuple[bool, str \| None]` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing methods raise `ValueError` for invalid input, which becomes HTTP 400. |
 | `build_runnable_config(request: Request) -> RunnableConfig` | Configure direct execution. The default derives a user-scoped graph thread from the public session. |
 | `build_task_runnable_config(session_id: str, context: TaskContext[dict[str, Any]]) -> RunnableConfig` | Configure task execution, including foreground requests when either server option is enabled. The default uses `context.task_id` for the graph thread and supplies `invocation_context` and `invocation_cancellation_signal`. |
 | `build_input(message: str) -> GraphInputT` | Convert text to runnable input. The default creates a `messages` dictionary. Structured HITL replies are handled separately by the host. |
@@ -87,10 +87,10 @@ Import `Request` from `starlette.requests`, `RunnableConfig` from
 and `Any` from `typing`. `GraphInputT` and `GraphOutputT` stand for the input and
 output types chosen for the host.
 
-For config changes, call the corresponding `super()` hook and preserve its
+For config changes, call the corresponding method on `super()` and preserve its
 thread and task context entries. If customization must work in both execution
-paths, override both config hooks. The constructor validates the graph schema
-before any input hook runs.
+paths, override both config methods. The constructor validates the graph schema
+before any input conversion runs.
 
 ## 2. Calling modes and input/output
 
