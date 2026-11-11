@@ -355,7 +355,9 @@ async def _close_async_iterator(iterator: AsyncIterator[Any]) -> None:
 
 
 @experimental()
-class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
+class InvocationsHostServer(
+    InvocationAgentServerHost, Generic[GraphInputT, GraphOutputT]
+):
     """Host a LangChain ``Runnable`` as the Invocations API.
 
     Example:
@@ -409,6 +411,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     API envelope, while task and LangGraph state use an internal id derived
     from the user partition and session id.
 
+    The server extends :class:`InvocationAgentServerHost` and is itself an
+    ASGI application. Configure routes and middleware directly on the server.
+    Lifecycle methods delegate to the SDK.
+
     Args:
         graph: The runnable to host. The default converters expect a
             LangGraph-style messages state input and output. Pass
@@ -422,20 +428,26 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         options: Optional :class:`ResponsesServerOptions`. The
             ``resilient_background`` and ``steerable_conversations`` values
             configure durable invocation recovery and in-flight conversation
-            steering respectively.
-        app: Optional existing :class:`InvocationAgentServerHost` to
-            attach to (e.g. a multi-protocol mixin). In this mode the
-            host-level kwargs are ignored — the caller is expected to
-            have configured them on ``app`` itself.
+            steering respectively. When composed with
+            :class:`ResponsesAgentServerHost`, the same options configure
+            that protocol host.
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+        kwargs: SDK host keyword arguments forwarded unchanged to
+            :class:`InvocationAgentServerHost`, such as ``configure_observability``,
+            ``log_level``, ``access_log``, ``routes``, and ``openapi_spec``.
+            Host-level arguments documented above are also accepted through
+            this parameter. Explicit ``None`` values are preserved.
+            See the `InvocationAgentServerHost API reference
+            <https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-invocations/azure.ai.agentserver.invocations.invocationagentserverhost>`_.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``resilient_background=True`` is
             configured without a LangGraph checkpointer. Override this class
             to host custom-state graphs.
+        TypeError: If the underlying SDK host does not accept a keyword argument.
     """
 
     def __init__(
@@ -444,9 +456,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         *,
         output_parser: Optional[InvocationOutputParser[GraphOutputT]] = None,
         options: Optional[ResponsesServerOptions] = None,
-        app: Optional[InvocationAgentServerHost] = None,
-        applicationinsights_connection_string: Optional[str] = None,
-        graceful_shutdown_timeout: Optional[int] = None,
+        **kwargs: Any,
     ) -> None:
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
@@ -470,6 +480,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             )
         _add_process_hosting_features(self._hosting_features)
         self._output_parser = output_parser
+        # TODO: Replace ResponsesServerOptions with invocation-specific options.
+        # The adapter only needs resilient_background and steerable_conversations.
         self._options = options or ResponsesServerOptions()
         self._invocation_task: Optional[
             MultiTurnTask[dict[str, Any], dict[str, Any]]
@@ -479,26 +491,15 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self._cancel_requests: dict[str, asyncio.Event] = {}
         self._invocation_state_store: Optional[InvocationStateStore] = None
 
-        if app is not None:
-            # Attach to an existing host (e.g. a multi-protocol mixin).
-            # In this mode the host-level kwargs are ignored — the caller
-            # is expected to have configured them on ``app`` itself.
-            self._app = app
-        else:
-            host_kwargs: dict[str, Any] = {}
-            if applicationinsights_connection_string is not None:
-                host_kwargs["applicationinsights_connection_string"] = (
-                    applicationinsights_connection_string
-                )
-            if graceful_shutdown_timeout is not None:
-                host_kwargs["graceful_shutdown_timeout"] = graceful_shutdown_timeout
-            self._app = InvocationAgentServerHost(**host_kwargs)
+        if isinstance(self, ResponsesAgentServerHost):
+            kwargs["options"] = self._options
+        super().__init__(**kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
             if not resilient_tasks_enabled():
                 set_resilient_tasks_enabled(True)
             self._invocation_state_store = create_invocation_state_store(
-                hosted=bool(getattr(self._app.config, "is_hosted", False))
+                hosted=bool(getattr(self.config, "is_hosted", False))
             )
             if self._options.resilient_background:
                 streams.use_file_backed_replay(
@@ -507,25 +508,20 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     serializer=_serialize_stream_event,
                     deserializer=_deserialize_stream_event,
                 )
-            elif app is None or not isinstance(app, ResponsesAgentServerHost):
+            elif not isinstance(self, ResponsesAgentServerHost):
                 streams.use_in_memory_replay(
                     cursor_fn=_invocation_event_cursor,
                     ttl_seconds=_REPLAY_EVENT_TTL_SECONDS,
                 )
             self._invocation_task = self._register_invocation_task()
-            self._app.get_invocation_handler(self._handle_get_invocation)
-            self._app.cancel_invocation_handler(self._handle_cancel_invocation)
+            self.get_invocation_handler(self._handle_get_invocation)
+            self.cancel_invocation_handler(self._handle_cancel_invocation)
 
-        self._app.invoke_handler(self._handle_invoke)
+        self.invoke_handler(self._handle_invoke)
 
     # ------------------------------------------------------------------
     # Public accessors
     # ------------------------------------------------------------------
-
-    @property
-    def app(self) -> InvocationAgentServerHost:
-        """The underlying :class:`InvocationAgentServerHost`."""
-        return self._app
 
     @property
     def graph(self) -> Runnable[GraphInputT, GraphOutputT]:
@@ -580,7 +576,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             host: Network interface to bind. Defaults to ``"0.0.0.0"``.
             port: Port to bind. Defaults to ``PORT`` env var or 8088.
         """
-        self._app.run(host=host, port=port)
+        super().run(host=host, port=port)
 
     async def run_async(
         self, host: str = "0.0.0.0", port: Optional[int] = None
@@ -607,7 +603,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             host: Network interface to bind.
             port: Port to bind.
         """
-        await self._app.run_async(host=host, port=port)
+        await super().run_async(host=host, port=port)
 
     # ------------------------------------------------------------------
     # Override hooks

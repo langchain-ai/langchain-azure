@@ -172,7 +172,7 @@ def test_invocations_host_resumes_hitl_middleware(
     tool_calls: list[str] = []
     server = InvocationsHostServer(_middleware_graph(key, tool_calls))
 
-    with TestClient(server.app) as client:
+    with TestClient(server) as client:
         first = client.post(
             f"/invocations?agent_session_id={key}", json={"message": "do it"}
         )

@@ -27,7 +27,6 @@ from azure.ai.agentserver.core import (
 )
 from azure.ai.agentserver.core.streaming import EventStream, streams
 from azure.ai.agentserver.core.tasks import TaskContext
-from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponsesAgentServerHost,
@@ -69,7 +68,7 @@ from .hitl.graphs import (  # noqa: E402
 
 
 def _client(server: InvocationsHostServer) -> TestClient:
-    return TestClient(server.app)
+    return TestClient(server)
 
 
 async def _set_recovery_state(
@@ -1591,13 +1590,14 @@ async def test_invocation_cancel_request_stops_running_turn() -> None:
 
 
 def test_invocations_and_responses_streams_can_share_host() -> None:
-    class CombinedHost(InvocationAgentServerHost, ResponsesAgentServerHost):
+    class CombinedHost(InvocationsHostServer, ResponsesAgentServerHost):
         pass
 
     options = ResponsesServerOptions(steerable_conversations=True)
-    app = CombinedHost(options=options, store=InMemoryResponseProvider())
+    app = CombinedHost(
+        make_streaming_graph(), options=options, store=InMemoryResponseProvider()
+    )
     ResponsesHostServer(make_streaming_graph(), app=app, options=options)
-    InvocationsHostServer(make_streaming_graph(), app=app, options=options)
 
     with TestClient(app) as client:
         invocation = client.post(
