@@ -27,40 +27,48 @@ and uses the same LangGraph hosting interface.
 
 ### Constructor
 
-| Constructor parameter | Default | Purpose |
-| --- | --- | --- |
-| `graph` | Required | The compiled graph to serve. |
-| `options` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
-| `store` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
-| `conversation_chain_store` | `None` | If not specified, uses [`FoundryConversationChainStore`](https://reference.langchain.com/python/langchain-azure-ai/agents/hosting/_responses/conversation_chain_store/FoundryConversationChainStore), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
-| `enable_response_branching` | `False` | Continue from a named response's exact graph checkpoint. |
-| `prefix` | Empty | Add a prefix to the protocol routes. |
-| `applicationinsights_connection_string` / `graceful_shutdown_timeout` | `None` | Configure telemetry / graceful shutdown on the server. |
-| `**kwargs` | Empty | Forward additional [SDK host configuration](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.hosting.responsesagentserverhost), such as `configure_observability`, `log_level`, `access_log`, `access_log_format`, and `routes`. |
+Import the host from `langchain_azure_ai.agents.hosting`. Pass `graph` as a
+positional or keyword argument; all other constructor parameters are keyword-only.
+
+| Constructor parameter | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `graph` | `CompiledStateGraph` | Required | The compiled graph to serve. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
+| `store` | `ResponseProviderProtocol \| None` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
+| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
+| `enable_response_branching` | `bool` | `False` | Continue from a named response's exact graph checkpoint. |
+| `prefix` | `str` | `""` | Add a prefix to the protocol routes. |
+| `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
+| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown on the created app. |
+| `**kwargs` | `Any` | Empty | Forward additional SDK host configuration unchanged, including explicit `None` values. |
+
+The host, options, provider, and conversation-chain protocol types are available
+from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
+`langgraph.graph.state`.
 
 > [!NOTE]
+> `ResponsesHostServer` is itself an ASGI application; configure routes and
+> middleware directly on it. Use `server` instead of `server.app`; `app=`
+> is no longer supported.
 > Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 > The constructor's `store` provider and the request's `store` retention flag
 > are separate controls.
 
-`ResponsesHostServer` inherits from `ResponsesAgentServerHost` and is itself
-an ASGI application. Start serving with the inherited `run()` or `run_async()`;
-`.graph` exposes the hosted graph. Configure routes and middleware directly
-on the server instance.
+### Lifecycle and accessors
 
-Additional SDK keyword arguments are forwarded unchanged, including explicit
-`None` values. For example, `ResponsesHostServer(graph, configure_observability=None)`
-skips the SDK's observability initialization.
+| Member | Result / behavior |
+| --- | --- |
+| `run(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving synchronously. |
+| `async run_async(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving in an async application; await this method. |
+| `.graph: CompiledStateGraph` | Read-only access to the hosted graph. With a configured saver, this is a copy that wraps the saver for hosting. |
 
-When migrating from the wrapper API, replace `server.app` with `server`, for
-example `TestClient(server)`. The `app=` constructor parameter is no longer
-supported; construct or subclass `ResponsesHostServer` instead of attaching
-it to an existing host.
+Both start methods delegate to the Agent Server SDK. With `port=None`, the SDK
+uses the `PORT` environment variable or port 8088.
 
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
 > `--protocol responses` and `--option NAME=VALUE`. Configure other constructor
-> parameters, including [branching](https://docs.langchain.com/oss/python/langgraph/use-time-travel), through Python.
+> parameters, including [branching](response_branching.md), through Python.
 
 ### Overridable methods
 

@@ -38,7 +38,7 @@ request input to the graph.
 | Graph checkpointer | A history-preserving saver with asynchronous reads and writes. |
 | Stored parent | A response available to the caller, with `status="completed"` and an exact checkpoint reference. |
 | Finished execution | The graph has no pending tasks or interrupts, and the response has no unanswered function calls or MCP approval requests. |
-| Host configuration | `options.steerable_conversations=False`. |
+| Host configuration | `app=None` and `options.steerable_conversations=False`. |
 
 Unsupported host configurations raise `ValueError` during initialization. Use
 an async saver such as `AsyncSqliteSaver` for SQLite, and a durable saver when
