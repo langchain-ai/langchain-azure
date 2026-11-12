@@ -43,7 +43,7 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
-from pydantic import BaseModel, ConfigDict, RootModel, StrictStr
+from pydantic import BaseModel, ConfigDict, RootModel, StrictStr, model_validator
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.base import (
@@ -127,10 +127,35 @@ class _McpApprovalInterruptItem(TypedDict):
     arguments: Optional[StrictStr]
 
 
-class _McpApprovalResume(
-    RootModel[Union[_McpApprovalValue, List[_McpApprovalInterruptItem]]]
-):
-    """Resume value accepted by ``_mcp_approval_node``."""
+_McpApprovalResumeValue = Union[_McpApprovalValue, List[_McpApprovalInterruptItem]]
+
+
+def _mcp_approval_resume_schema(
+    interrupt_payload: List[Dict[str, Any]],
+) -> Type[RootModel[_McpApprovalResumeValue]]:
+    """Return the resume schema for an ``_mcp_approval_node`` interrupt.
+
+    A list resume value is only accepted when it equals ``interrupt_payload``,
+    which is how the Responses host approves.
+
+    Args:
+        interrupt_payload: The value passed to ``interrupt``.
+
+    Returns:
+        A model class to pass as ``response_schema``.
+    """
+
+    class _McpApprovalResume(RootModel[_McpApprovalResumeValue]):
+        """Resume value accepted by ``_mcp_approval_node``."""
+
+        @model_validator(mode="before")
+        @classmethod
+        def _check_echo(cls, value: Any) -> Any:
+            if isinstance(value, list) and value != interrupt_payload:
+                raise ValueError("A list resume value must equal the interrupt value.")
+            return value
+
+    return _McpApprovalResume
 
 
 def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
@@ -186,12 +211,13 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
         }
         for tc in approval_requests
     ]
-    decision = interrupt(interrupt_payload, response_schema=_McpApprovalResume).root
+    decision = interrupt(
+        interrupt_payload,
+        response_schema=_mcp_approval_resume_schema(interrupt_payload),
+    ).root
 
     if isinstance(decision, list):
         # The Responses host approves by echoing the interrupt value back.
-        if decision != interrupt_payload:
-            raise ValueError("MCP approval resume list must echo the interrupt value.")
         approve, reason = True, None
     else:
         approve, reason = _parse_approval_decision(decision)
