@@ -61,6 +61,7 @@ except ImportError as exc:
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from starlette.types import Receive, Scope, Send
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -341,7 +342,8 @@ class ResponsesHostServer(ResponsesAgentServerHost):
 
     The server extends :class:`ResponsesAgentServerHost` and registers a
     default request → graph → events conversion pipeline. The instance is
-    an ASGI application; configure routes and middleware directly on it.
+    an ASGI application; configure routes and middleware directly on it,
+    or on the supplied host when using the deprecated ``app=`` argument.
     Server lifecycle methods delegate to the SDK. For advanced
     scenarios, users may either:
 
@@ -357,12 +359,12 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             reusing this class as a starting point).
 
     Keyword Args:
-        app: Deprecated compatibility argument, accepted but ignored. It will be
-            retired after version 1.5.0. The supplied host's routes, middleware,
-            and configuration are not reused. Configure this instance directly
-            instead.
+        app: Deprecated existing SDK host to attach to. Its routes, middleware,
+            storage, and lifecycle are preserved. SDK host constructor options
+            must be configured on that host directly. Defaults to ``None``.
+            This argument will be retired after version 1.5.0.
         options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            :class:`ResponsesAgentServerHost` when ``app`` is ``None``.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -379,8 +381,8 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             conversation head. Defaults to ``False``. Requires a
             history-preserving checkpointer with asynchronous ``aget_tuple``,
             ``aput``, and ``aput_writes`` implementations, steering disabled,
-            and a finished parent graph. Branching from paused graphs is not
-            supported.
+            ``app=None``, and a finished parent graph. Branching from paused
+            graphs is not supported.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
@@ -389,7 +391,8 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             :class:`ResponsesAgentServerHost`, such as ``configure_observability``,
             ``log_level``, ``access_log``, ``access_log_format``, and ``routes``.
             Host-only arguments documented above are also accepted through
-            this parameter. Explicit ``None`` values are preserved.
+            this parameter. Explicit ``None`` values are preserved. These
+            arguments are ignored when ``app`` is supplied.
             See the `ResponsesAgentServerHost API reference
             <https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.hosting.responsesagentserverhost>`_.
 
@@ -399,7 +402,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             configured without a LangGraph checkpointer. Override this class
             to host custom-state graphs. Also raised if response branching is
             enabled without the required async checkpoint implementations,
-            or with steering enabled.
+            with steering enabled, or with an injected ``app``.
         TypeError: If the underlying SDK host does not accept a keyword argument.
     """
 
@@ -415,10 +418,8 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     ) -> None:
         if app is not None:
             logger.warning(
-                "app parameter will be removed after v1.5.0."
-                "The 'app' argument is deprecated and ignored. ResponsesHostServer "
-                "is the ASGI application; pass host options to its constructor and "
-                "configure routes and middleware on the instance."
+                "The 'app' argument is deprecated and will be retired after "
+                "v1.5.0. Configure the ResponsesHostServer instance directly instead."
             )
 
         self._validate_graph_schema(graph)
@@ -434,11 +435,12 @@ class ResponsesHostServer(ResponsesAgentServerHost):
         self._enable_response_branching = enable_response_branching
         if enable_response_branching and (
             not self._graph_has_checkpointer
+            or app is not None
             or (options is not None and options.steerable_conversations)
         ):
             raise ValueError(
                 "Response branching requires a history-preserving checkpointer, "
-                "and steerable_conversations=False."
+                "steerable_conversations=False, and app=None."
             )
         self._conversation_chain_store = (
             conversation_chain_store
@@ -471,15 +473,20 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 
-        super().__init__(options=options, **kwargs)
+        # Prefer native SDK/ASGI hosting for consistent server identity.
+        # Keep app= delegation only for migration; do not expand this path.
+        # TODO: Remove legacy delegation and the app accessor after v1.5.0.
+        self._app = app if app is not None else self
+        if app is None:
+            super().__init__(options=options, **kwargs)
 
         self._log_conversation_management_selection()
-        _install_recovery_stream_lock_workaround(self)
+        _install_recovery_stream_lock_workaround(self._app)
 
         install_request_validation(self)
 
         # Wire the create handler.
-        self.response_handler(self._handle_create_async_gen)
+        self._app.response_handler(self._handle_create_async_gen)
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -489,13 +496,13 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     def app(self) -> ResponsesAgentServerHost:
         """The deprecated ASGI application alias, to be retired after v1.5.0.
 
-        Use this host directly instead.
+        Returns the supplied host, or this instance when no host was supplied.
         """
         logger.warning(
             "The 'app' property is deprecated and will be retired after v1.5.0. "
             "Use the ResponsesHostServer instance directly instead."
         )
-        return self
+        return self._app
 
     @property
     def graph(self) -> "CompiledStateGraph":
@@ -505,6 +512,19 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Serve ASGI requests through the configured host.
+
+        Args:
+            scope: The ASGI connection scope.
+            receive: The ASGI receive callable.
+            send: The ASGI send callable.
+        """
+        if self._app is self:
+            await super().__call__(scope, receive, send)
+        else:
+            await self._app(scope, receive, send)
 
     def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         """Start the server synchronously.
@@ -532,7 +552,10 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             host: Network interface to bind. Defaults to ``"0.0.0.0"``.
             port: Port to bind. Defaults to ``PORT`` env var or 8088.
         """
-        super().run(host=host, port=port)
+        if self._app is self:
+            super().run(host=host, port=port)
+        else:
+            self._app.run(host=host, port=port)
 
     async def run_async(
         self, host: str = "0.0.0.0", port: Optional[int] = None
@@ -561,7 +584,10 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             host: Network interface to bind.
             port: Port to bind.
         """
-        await super().run_async(host=host, port=port)
+        if self._app is self:
+            await super().run_async(host=host, port=port)
+        else:
+            await self._app.run_async(host=host, port=port)
 
     # ------------------------------------------------------------------
     # Override hooks
