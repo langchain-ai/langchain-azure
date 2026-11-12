@@ -11,9 +11,10 @@ import openai
 import pytest
 from azure.core.credentials import AccessToken, AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
-from langchain_core.runnables import RunnableLambda
+from langchain_core.load import dumps, loads
+from langchain_core.runnables import ConfigurableField, RunnableLambda
 from langchain_openai.decisions import OpenAIDecisions
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.decisions import (
@@ -227,7 +228,6 @@ def test_project_environment(project_env: str, monkeypatch: pytest.MonkeyPatch) 
     ):
         decisions = AzureAIOpenAIApiDecisions()
     assert decisions.base_url == ENDPOINT
-    assert decisions.project_endpoint == PROJECT
     assert decisions.model == "env-deployment"
 
 
@@ -281,6 +281,7 @@ def test_default_credential(credential: Any) -> None:
         ({"endpoint": ENDPOINT, "project_endpoint": PROJECT}, "only one"),
         ({"endpoint": ENDPOINT, "base_url": ENDPOINT}, "only one"),
         ({"endpoint": ENDPOINT, "credential": "key", "api_key": "key"}, "only one"),
+        ({"endpoint": ENDPOINT, "credential": object()}, "credential.*must be"),
         ({"project_endpoint": PROJECT, "credential": "key"}, "token credential"),
         ({"project_endpoint": PROJECT, "api_key": "key"}, "token credential"),
     ],
@@ -358,6 +359,114 @@ def test_no_credential_leak(credential: Any) -> None:
     assert "private-test-key" not in repr(decisions)
     assert "private-test-key" not in decisions.model_dump_json()
     assert "private-test-key" not in json.dumps(decisions.to_json())
+
+
+@pytest.mark.parametrize("auth_field", ["credential", "api_key"])
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"endpoint": ENDPOINT, "model": ""}, {"project_endpoint": PROJECT}],
+)
+def test_validation_errors_hide_secrets(
+    auth_field: str, kwargs: dict[str, Any]
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        AzureAIOpenAIApiDecisions(
+            **{"model": "deployment", auth_field: "private-test-key", **kwargs}
+        )
+    assert "private-test-key" not in str(error.value)
+    assert "private-test-key" not in repr(error.value)
+    assert AzureAIOpenAIApiDecisions.model_config == {
+        **OpenAIDecisions.model_config,
+        "hide_input_in_errors": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"endpoint": ENDPOINT, "credential": "test-key"},
+        {"endpoint": ENDPOINT, "credential": AzureKeyCredential("test-key")},
+        {"endpoint": ENDPOINT, "credential": SyncCredential()},
+        {"project_endpoint": PROJECT, "credential": SyncCredential()},
+    ],
+)
+def test_configurable_model(
+    kwargs: dict[str, Any],
+    transport: httpx.MockTransport,
+    requests: list[httpx.Request],
+) -> None:
+    with httpx.Client(transport=transport) as client:
+        decisions = AzureAIOpenAIApiDecisions(
+            model="original", http_client=client, **kwargs
+        )
+        decisions.invoke(REQUEST)
+        configured = decisions.configurable_fields(
+            model=ConfigurableField(id="deployment")
+        ).with_config(configurable={"deployment": "other-deployment"})
+        assert configured.invoke(REQUEST).predicates["refund"].probability == 0.9
+    assert [json.loads(r.content)["model"] for r in requests] == [
+        "original",
+        "other-deployment",
+    ]
+    assert [str(r.url) for r in requests] == [ENDPOINT + "/decisions"] * 2
+    assert requests[1].headers["authorization"] in ("Bearer test-key", "Bearer token-2")
+
+
+@pytest.mark.parametrize("endpoint_field", ["endpoint", "project_endpoint"])
+@pytest.mark.parametrize("credential_type", [SyncCredential, AsyncCredential])
+async def test_async_configurable_model(
+    endpoint_field: str,
+    credential_type: Any,
+    transport: httpx.MockTransport,
+    requests: list[httpx.Request],
+) -> None:
+    credential = credential_type()
+    async with httpx.AsyncClient(transport=transport) as client:
+        decisions = AzureAIOpenAIApiDecisions(
+            **{endpoint_field: ENDPOINT if endpoint_field == "endpoint" else PROJECT},
+            credential=credential,
+            model="original",
+            http_async_client=client,
+        )
+        await decisions.ainvoke(REQUEST)
+        configured = decisions.configurable_fields(
+            model=ConfigurableField(id="deployment")
+        ).with_config(configurable={"deployment": "other-deployment"})
+        await configured.ainvoke(REQUEST)
+    assert json.loads(requests[1].content)["model"] == "other-deployment"
+    assert str(requests[1].url) == ENDPOINT + "/decisions"
+    assert requests[1].headers["authorization"] == "Bearer token-2"
+
+
+@pytest.mark.parametrize("endpoint_field", ["endpoint", "project_endpoint"])
+def test_serialization_round_trip(
+    endpoint_field: str,
+    transport: httpx.MockTransport,
+    requests: list[httpx.Request],
+) -> None:
+    decisions = AzureAIOpenAIApiDecisions(
+        **{endpoint_field: ENDPOINT if endpoint_field == "endpoint" else PROJECT},
+        credential=SyncCredential(),
+        model="deployment",
+    )
+    restored = AzureAIOpenAIApiDecisions.model_validate(decisions.model_dump())
+    with httpx.Client(transport=transport) as client:
+        restored.http_client = client
+        restored.invoke(REQUEST)
+    serialized = dumps(decisions)
+    restored = loads(
+        serialized,
+        secrets_map={"OPENAI_API_KEY": "restored-token"},
+        valid_namespaces=["langchain_azure_ai"],
+        allowed_objects=[AzureAIOpenAIApiDecisions],
+    )
+    assert isinstance(restored, AzureAIOpenAIApiDecisions)
+    with httpx.Client(transport=transport) as client:
+        restored.http_client = client
+        restored.invoke(REQUEST)
+    assert [str(r.url) for r in requests] == [ENDPOINT + "/decisions"] * 2
+    assert requests[0].headers["authorization"] == "Bearer token-1"
+    assert requests[1].headers["authorization"] == "Bearer restored-token"
 
 
 def test_experimental_warning_and_exports() -> None:

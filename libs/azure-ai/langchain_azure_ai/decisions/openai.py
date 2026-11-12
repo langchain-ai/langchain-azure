@@ -8,7 +8,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import from_env
 from langchain_openai.decisions import OpenAIDecisions
-from pydantic import Field, SecretStr, model_validator
+from pydantic import ConfigDict, Field, SecretStr, model_validator
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import (
@@ -52,7 +52,8 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
 
     Raises:
         ValueError: If no endpoint is configured, endpoint parameters conflict,
-            authentication parameters conflict, or a project uses key authentication.
+            authentication parameters conflict, a credential type is unsupported,
+            or a project uses key authentication.
         pydantic.ValidationError: If the deployment name or another field is invalid.
 
     Example:
@@ -78,16 +79,36 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
     )
     """Azure deployment name for a supported Decisions model."""
 
-    endpoint: str | None = None
-    """Direct OpenAI-compatible resource endpoint, including ``/openai/v1``."""
+    model_config = ConfigDict(hide_input_in_errors=True)
 
-    project_endpoint: str | None = None
-    """Foundry project endpoint used to resolve the resource endpoint."""
+    def __init__(
+        self,
+        *,
+        endpoint: str | None = None,
+        project_endpoint: str | None = None,
+        credential: (
+            str | AzureKeyCredential | TokenCredential | AsyncTokenCredential | None
+        ) = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize Azure options and upstream Decisions configuration.
 
-    credential: (
-        str | AzureKeyCredential | TokenCredential | AsyncTokenCredential | None
-    ) = Field(default=None, exclude=True, repr=False)
-    """Azure credential; excluded from model dumps and representations."""
+        Args:
+            endpoint: Direct resource URL. Defaults to Azure environment variables.
+            project_endpoint: Foundry project URL. Defaults to Foundry environment
+                variables when no direct endpoint is supplied.
+            credential: Azure key or token credential. Defaults to an Azure API key
+                or ``DefaultAzureCredential``, as described in the class docstring.
+            **kwargs: Options accepted by ``OpenAIDecisions``.
+        """
+        super().__init__(
+            **{
+                "endpoint": endpoint,
+                "project_endpoint": project_endpoint,
+                "credential": credential,
+                **kwargs,
+            }
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -106,7 +127,6 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
         if project_endpoint:
             _validate_endpoint_url(project_endpoint, "project_endpoint")
             endpoint = _get_base_url_from_endpoint(project_endpoint) + "/openai/v1"
-            values["project_endpoint"] = project_endpoint
         if not endpoint:
             endpoint = get_from_dict_or_env(
                 values, "endpoint", "AZURE_AI_OPENAI_ENDPOINT", nullable=True
@@ -116,8 +136,11 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
         if not endpoint:
             raise ValueError("Provide an Azure `endpoint` or `project_endpoint`.")
         _validate_endpoint_url(endpoint, "endpoint")
+        # Store only upstream configuration so Runnable reconstruction is idempotent.
+        values.pop("endpoint", None)
+        values.pop("project_endpoint", None)
         values["base_url"] = endpoint
-        credential = values.get("credential")
+        credential = values.pop("credential", None)
         if credential is not None and values.get("api_key") is not None:
             raise ValueError("Provide only one of `credential` and `api_key`.")
         if project_endpoint:
@@ -137,7 +160,11 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
             values["api_key"] = _make_async_token_provider(credential)
         elif isinstance(credential, TokenCredential):
             values["api_key"] = _make_token_provider(credential)
-        values["credential"] = credential
+        elif credential is not None:
+            raise ValueError(
+                "`credential` must be a key string, AzureKeyCredential, "
+                "TokenCredential, or AsyncTokenCredential."
+            )
         values["default_headers"] = {
             "x-ms-useragent": "langchain-azure-ai",
             **(values.get("default_headers") or {}),

@@ -30,6 +30,10 @@ and response parsing stay upstream; the adapter adds Azure configuration using
 the existing endpoint and credential helpers. This requires
 `langchain-openai>=1.7.2`.
 
+Azure constructor options are normalized to the inherited `base_url` and `api_key`
+fields. Only this resolved configuration is retained for Runnable reconstruction
+and serialization; credentials use the upstream secret-reference mechanism.
+
 Requests go directly to the resource's `/openai/v1/decisions` endpoint. When
 configured with a Foundry project endpoint, the adapter derives the resource
 URL; it does not call the project or Agent Service APIs.
