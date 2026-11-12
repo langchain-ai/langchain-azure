@@ -86,6 +86,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
@@ -412,7 +413,8 @@ class InvocationsHostServer(
     from the user partition and session id.
 
     The server extends :class:`InvocationAgentServerHost` and is itself an
-    ASGI application. Configure routes and middleware directly on the server.
+    ASGI application. Configure routes and middleware directly on the server,
+    or on the supplied host when using the deprecated ``app=`` argument.
     Lifecycle methods delegate to the SDK.
 
     Args:
@@ -422,13 +424,17 @@ class InvocationsHostServer(
             runnable shapes.
 
     Keyword Args:
+        app: Deprecated existing SDK host to attach to. Its routes, middleware,
+            configuration, and lifecycle are preserved. SDK host constructor
+            options must be configured on that host directly. Defaults to
+            ``None``. This argument will be retired after version 1.5.0.
         output_parser: Optional callable that converts the runnable result
             into response text for non-streaming requests. When omitted, the
             default parser reads the last AI message from a ``messages`` state.
         options: Optional :class:`ResponsesServerOptions`. The
             ``resilient_background`` and ``steerable_conversations`` values
             configure durable invocation recovery and in-flight conversation
-            steering respectively. When composed with
+            steering respectively. When composed through inheritance with
             :class:`ResponsesAgentServerHost`, the same options configure
             that protocol host.
         applicationinsights_connection_string: Forwarded to
@@ -438,7 +444,8 @@ class InvocationsHostServer(
             :class:`InvocationAgentServerHost`, such as ``configure_observability``,
             ``log_level``, ``access_log``, ``routes``, and ``openapi_spec``.
             Host-level arguments documented above are also accepted through
-            this parameter. Explicit ``None`` values are preserved.
+            this parameter. Explicit ``None`` values are preserved. These
+            arguments are ignored when ``app`` is supplied.
             See the `InvocationAgentServerHost API reference
             <https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-invocations/azure.ai.agentserver.invocations.invocationagentserverhost>`_.
 
@@ -454,10 +461,16 @@ class InvocationsHostServer(
         self,
         graph: Runnable[GraphInputT, GraphOutputT],
         *,
+        app: Optional[InvocationAgentServerHost] = None,
         output_parser: Optional[InvocationOutputParser[GraphOutputT]] = None,
         options: Optional[ResponsesServerOptions] = None,
         **kwargs: Any,
     ) -> None:
+        if app is not None:
+            logger.warning(
+                "The 'app' argument is deprecated and will be retired after "
+                "v1.5.0. Configure the InvocationsHostServer instance directly instead."
+            )
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
         if options is not None and options.resilient_background:
@@ -491,15 +504,20 @@ class InvocationsHostServer(
         self._cancel_requests: dict[str, asyncio.Event] = {}
         self._invocation_state_store: Optional[InvocationStateStore] = None
 
-        if isinstance(self, ResponsesAgentServerHost):
-            kwargs["options"] = self._options
-        super().__init__(**kwargs)
+        # Prefer native SDK/ASGI hosting for consistent server identity.
+        # Keep app= delegation only for migration; do not expand this path.
+        # TODO: Remove legacy delegation and the app accessor after v1.5.0.
+        self._app = app if app is not None else self
+        if app is None:
+            if isinstance(self, ResponsesAgentServerHost):
+                kwargs["options"] = self._options
+            super().__init__(**kwargs)
 
         if self._options.resilient_background or self._options.steerable_conversations:
             if not resilient_tasks_enabled():
                 set_resilient_tasks_enabled(True)
             self._invocation_state_store = create_invocation_state_store(
-                hosted=bool(getattr(self.config, "is_hosted", False))
+                hosted=bool(getattr(self._app.config, "is_hosted", False))
             )
             if self._options.resilient_background:
                 streams.use_file_backed_replay(
@@ -508,20 +526,32 @@ class InvocationsHostServer(
                     serializer=_serialize_stream_event,
                     deserializer=_deserialize_stream_event,
                 )
-            elif not isinstance(self, ResponsesAgentServerHost):
+            elif not isinstance(self._app, ResponsesAgentServerHost):
                 streams.use_in_memory_replay(
                     cursor_fn=_invocation_event_cursor,
                     ttl_seconds=_REPLAY_EVENT_TTL_SECONDS,
                 )
             self._invocation_task = self._register_invocation_task()
-            self.get_invocation_handler(self._handle_get_invocation)
-            self.cancel_invocation_handler(self._handle_cancel_invocation)
+            self._app.get_invocation_handler(self._handle_get_invocation)
+            self._app.cancel_invocation_handler(self._handle_cancel_invocation)
 
-        self.invoke_handler(self._handle_invoke)
+        self._app.invoke_handler(self._handle_invoke)
 
     # ------------------------------------------------------------------
     # Public accessors
     # ------------------------------------------------------------------
+
+    @property
+    def app(self) -> InvocationAgentServerHost:
+        """The deprecated ASGI application alias, to be retired after v1.5.0.
+
+        Returns the supplied host, or this instance when no host was supplied.
+        """
+        logger.warning(
+            "The 'app' property is deprecated and will be retired after v1.5.0. "
+            "Use the InvocationsHostServer instance directly instead."
+        )
+        return self._app
 
     @property
     def graph(self) -> Runnable[GraphInputT, GraphOutputT]:
@@ -531,6 +561,19 @@ class InvocationsHostServer(
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Serve ASGI requests through the configured host.
+
+        Args:
+            scope: The ASGI connection scope.
+            receive: The ASGI receive callable.
+            send: The ASGI send callable.
+        """
+        if self._app is self:
+            await super().__call__(scope, receive, send)
+        else:
+            await self._app(scope, receive, send)
 
     def run(self, host: str = "0.0.0.0", port: Optional[int] = None) -> None:
         """Start the server synchronously.
@@ -576,7 +619,10 @@ class InvocationsHostServer(
             host: Network interface to bind. Defaults to ``"0.0.0.0"``.
             port: Port to bind. Defaults to ``PORT`` env var or 8088.
         """
-        super().run(host=host, port=port)
+        if self._app is self:
+            super().run(host=host, port=port)
+        else:
+            self._app.run(host=host, port=port)
 
     async def run_async(
         self, host: str = "0.0.0.0", port: Optional[int] = None
@@ -603,7 +649,10 @@ class InvocationsHostServer(
             host: Network interface to bind.
             port: Port to bind.
         """
-        await super().run_async(host=host, port=port)
+        if self._app is self:
+            await super().run_async(host=host, port=port)
+        else:
+            await self._app.run_async(host=host, port=port)
 
     # ------------------------------------------------------------------
     # Override hooks

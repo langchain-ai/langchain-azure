@@ -33,11 +33,12 @@ or keyword argument; all other constructor parameters are keyword-only.
 | Constructor parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `graph` | `Runnable[GraphInputT, GraphOutputT]` | Required | The graph or runnable to serve. |
-| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two options are used by this wrapper. When composed with `ResponsesAgentServerHost`, the same options configure that protocol host. |
+| `app` | `InvocationAgentServerHost \| None` | `None` | Deprecated existing SDK host to attach to; configure that host directly. Will be retired after version 1.5.0. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two options are used by this wrapper. When composed through inheritance with `ResponsesAgentServerHost`, the same options configure that protocol host. |
 | `output_parser` | `Callable[[GraphOutputT], str] \| None` | `None` | Synchronously extract final non-streaming response text; the default uses the last AI message. This does not change SSE token output. |
 | `applicationinsights_connection_string` | `str \| None` | SDK default | Forward telemetry configuration to the SDK host. |
 | `graceful_shutdown_timeout` | `int \| None` | SDK default | Forward graceful shutdown configuration to the SDK host. |
-| `**kwargs` | `Any` | SDK defaults | Forward additional keyword arguments unchanged to `InvocationAgentServerHost`. |
+| `**kwargs` | `Any` | SDK defaults | Forward additional keyword arguments unchanged to `InvocationAgentServerHost`. Ignored when `app` is supplied. |
 
 SDK host keywords include `configure_observability`, `log_level`, `access_log`,
 `access_log_format`, `routes`, and `openapi_spec`. Omitted values use SDK
@@ -61,6 +62,7 @@ the defaults below unless customized.
 | --- | --- |
 | `run(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving synchronously. |
 | `async run_async(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving in an async application; await this method. |
+| `.app: InvocationAgentServerHost` | The supplied host, or this instance when no host was supplied. Access logs a warning; will be retired after v1.5.0. Use `server` directly for new code. |
 | `.graph: Runnable[GraphInputT, GraphOutputT]` | Read-only access to the hosted runnable. |
 
 Both start methods delegate to the Agent Server SDK. With `port=None`, the SDK
@@ -70,9 +72,12 @@ The server extends `InvocationAgentServerHost` and is itself an ASGI application
 Pass it directly to ASGI tools, for example `TestClient(server)`, and configure
 routes or middleware through `server.add_route(...)` and `server.add_middleware(...)`.
 
-For migration from the earlier wrapper API, replace `server.app` with `server`.
-The `app=` constructor parameter has been removed. Configure or subclass the
-server itself instead of injecting an existing SDK host.
+For new code, use `server` instead of `server.app`, and configure or subclass
+the server itself. The deprecated `app=` argument reuses the supplied host,
+preserving its routes, middleware, configuration, and lifecycle. Configure that
+host directly; SDK host constructor keyword arguments on the adapter are ignored
+for this legacy path. The adapter's `options` still configure invocation task
+behavior. Both `app=` and `.app` will be retired after version 1.5.0.
 
 > [!TIP]
 > The [CLI](../../langchain_azure_ai/agents/hosting/run.py) supports
