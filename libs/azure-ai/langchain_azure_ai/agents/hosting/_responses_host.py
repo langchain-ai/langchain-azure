@@ -494,6 +494,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
 
     @property
     @deprecated(
+        since="v1.3.2",
         removal="v1.5.0",
         message="The 'app' property is deprecated and will be removed after v1.5.0. "
         "Use the ResponsesHostServer instance itself ('self' inside the class), "
