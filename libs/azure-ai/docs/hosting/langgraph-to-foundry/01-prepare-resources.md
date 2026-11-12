@@ -22,11 +22,23 @@ For Microsoft Entra authentication, direct account-level Azure OpenAI calls requ
 
 > **Note:** If you create Foundry resources or deploy models instead of reusing existing resources, your account needs the corresponding resource-management permissions. For example, an administrator can grant `Contributor` on the existing resource group where you create them. This role does not grant role-assignment permissions. See [Azure resource setup](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions#azure-resource-setup).
 >
+> PowerShell (Windows):
+>
 > ```powershell
 > az role assignment create `
 >     --assignee-object-id "<your-user-object-id>" `
 >     --assignee-principal-type User `
 >     --role "Contributor" `
+>     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>"
+> ```
+>
+> Bash (macOS and Linux):
+>
+> ```bash
+> az role assignment create \
+>     --assignee-object-id "<your-user-object-id>" \
+>     --assignee-principal-type User \
+>     --role "Contributor" \
 >     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>"
 > ```
 
