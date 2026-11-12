@@ -10,7 +10,9 @@ import errno
 import json
 import threading
 import uuid
+from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -20,6 +22,7 @@ import pytest
 pytest.importorskip("starlette")
 
 from azure.ai.agentserver.core import (
+    AgentServerHost,
     FoundryAgentRequestContext,
     get_request_context,
     reset_request_context,
@@ -27,6 +30,7 @@ from azure.ai.agentserver.core import (
 )
 from azure.ai.agentserver.core.streaming import EventStream, streams
 from azure.ai.agentserver.core.tasks import TaskContext
+from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.agentserver.responses import (
     InMemoryResponseProvider,
     ResponsesAgentServerHost,
@@ -35,7 +39,9 @@ from azure.ai.agentserver.responses import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.types import Command, Interrupt
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from starlette.testclient import TestClient
 
 from langchain_azure_ai.agents.hosting import (
@@ -168,6 +174,97 @@ def test_non_streaming_invocation_returns_response_text() -> None:
         resp = client.post("/invocations", json={"message": "hi"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"response": "Echo: hi"}
+
+
+def test_injected_host_preserves_asgi_configuration_and_lifespan() -> None:
+    events: list[str] = []
+    app = InvocationAgentServerHost(
+        configure_observability=None,
+        openapi_spec={
+            "openapi": "3.1.0",
+            "info": {"title": "Injected host", "version": "test"},
+        },
+    )
+    config = app.config
+    sdk_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(host: InvocationAgentServerHost) -> AsyncGenerator[None, None]:
+        assert host is app
+        async with sdk_lifespan(host):
+            events.append("startup")
+            yield
+            events.append("shutdown")
+
+    async def authorize(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        assert request.app is app
+        assert request.app.config is config
+        if request.headers.get("x-compat-token") != "allowed":
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
+
+    async def custom_route(request: Request) -> JSONResponse:
+        return JSONResponse({"host": "injected"})
+
+    app.router.lifespan_context = lifespan
+    app.add_middleware(BaseHTTPMiddleware, dispatch=authorize)
+    app.add_route("/custom", custom_route, methods=["GET"])
+
+    with patch.object(
+        AgentServerHost,
+        "__init__",
+        side_effect=AssertionError("Unexpected SDK host initialization"),
+    ) as initialize_host:
+        server = InvocationsHostServer(
+            make_echo_graph(), app=app, openapi_spec={"ignored": True}
+        )
+    initialize_host.assert_not_called()
+
+    with _client(server) as client:
+        assert events == ["startup"]
+        denied = client.post("/invocations", json={"message": "hi"})
+        assert denied.status_code == 401, denied.text
+
+        headers = {"x-compat-token": "allowed"}
+        invocation = client.post(
+            "/invocations", json={"message": "hi"}, headers=headers
+        )
+        assert invocation.status_code == 200, invocation.text
+        assert invocation.json() == {"response": "Echo: hi"}
+
+        custom = client.get("/custom", headers=headers)
+        assert custom.status_code == 200, custom.text
+        assert custom.json() == {"host": "injected"}
+
+        spec = client.get("/invocations/docs/openapi.json", headers=headers)
+        assert spec.status_code == 200, spec.text
+        assert spec.json()["info"]["title"] == "Injected host"
+
+    assert events == ["startup", "shutdown"]
+
+
+def test_run_delegates_to_injected_host() -> None:
+    app = InvocationAgentServerHost(configure_observability=None)
+    server = InvocationsHostServer(make_echo_graph(), app=app)
+
+    with patch.object(InvocationAgentServerHost, "run", autospec=True) as run:
+        server.run(host="127.0.0.1", port=9123)
+
+    run.assert_called_once_with(app, host="127.0.0.1", port=9123)
+
+
+async def test_run_async_delegates_to_injected_host() -> None:
+    app = InvocationAgentServerHost(configure_observability=None)
+    server = InvocationsHostServer(make_echo_graph(), app=app)
+
+    with patch.object(
+        InvocationAgentServerHost, "run_async", autospec=True
+    ) as run_async:
+        await server.run_async(host="127.0.0.1", port=9124)
+
+    run_async.assert_awaited_once_with(app, host="127.0.0.1", port=9124)
 
 
 def test_non_streaming_invocation_accepts_runnable_without_builder() -> None:
