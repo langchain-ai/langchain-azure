@@ -508,7 +508,7 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     def graph(self) -> "CompiledStateGraph":
         """The hosted graph, copied to decorate a configured checkpoint saver."""
         return self._graph
-    
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
