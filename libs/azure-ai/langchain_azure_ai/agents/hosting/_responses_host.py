@@ -63,7 +63,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from starlette.types import Receive, Scope, Send
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated, experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -493,15 +493,17 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     # ------------------------------------------------------------------
 
     @property
+    @deprecated(
+        removal="v1.5.0",
+        message="The 'app' property is deprecated and will be removed after v1.5.0. "
+        "Use the ResponsesHostServer instance itself ('self' inside the class), "
+        "not its 'app' property.",
+    )
     def app(self) -> ResponsesAgentServerHost:
         """The deprecated ASGI application alias, to be retired after v1.5.0.
 
         Returns the supplied host, or this instance when no host was supplied.
         """
-        logger.warning(
-            "The 'app' property is deprecated and will be retired after v1.5.0. "
-            "Use the ResponsesHostServer instance directly instead."
-        )
         return self._app
 
     @property
