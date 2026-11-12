@@ -7,6 +7,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | I want to... | Start with |
 | --- | --- |
 | Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Ask typed questions with Azure OpenAI Decisions (experimental) | [Decisions guide](docs/decisions.md) and [sample](../../samples/decisions/README.md) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
