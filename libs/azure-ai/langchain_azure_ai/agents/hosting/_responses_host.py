@@ -357,6 +357,10 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             reusing this class as a starting point).
 
     Keyword Args:
+        app: Deprecated compatibility argument, accepted but ignored. It will be
+            retired after version 1.5.0. The supplied host's routes, middleware,
+            and configuration are not reused. Configure this instance directly
+            instead.
         options: Optional :class:`ResponsesServerOptions` forwarded to
             :class:`ResponsesAgentServerHost`.
         store: Optional :class:`ResponseProviderProtocol`. This provider
@@ -403,11 +407,20 @@ class ResponsesHostServer(ResponsesAgentServerHost):
         self,
         graph: "CompiledStateGraph",
         *,
+        app: Optional[ResponsesAgentServerHost] = None,
         options: Optional[ResponsesServerOptions] = None,
         conversation_chain_store: Optional[ConversationChainStoreProtocol] = None,
         enable_response_branching: bool = False,
         **kwargs: Any,
     ) -> None:
+        if app is not None:
+            logger.warning(
+                "app parameter will be removed after v1.5.0."
+                "The 'app' argument is deprecated and ignored. ResponsesHostServer "
+                "is the ASGI application; pass host options to its constructor and "
+                "configure routes and middleware on the instance."
+            )
+
         self._validate_graph_schema(graph)
         saver = getattr(graph, "checkpointer", None)
         if enable_response_branching:
@@ -473,10 +486,22 @@ class ResponsesHostServer(ResponsesAgentServerHost):
     # ------------------------------------------------------------------
 
     @property
+    def app(self) -> ResponsesAgentServerHost:
+        """The deprecated ASGI application alias, to be retired after v1.5.0.
+
+        Use this host directly instead.
+        """
+        logger.warning(
+            "The 'app' property is deprecated and will be retired after v1.5.0. "
+            "Use the ResponsesHostServer instance directly instead."
+        )
+        return self
+
+    @property
     def graph(self) -> "CompiledStateGraph":
         """The hosted graph, copied to decorate a configured checkpoint saver."""
         return self._graph
-
+    
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

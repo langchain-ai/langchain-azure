@@ -33,6 +33,7 @@ positional or keyword argument; all other constructor parameters are keyword-onl
 | Constructor parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `graph` | `CompiledStateGraph` | Required | The compiled graph to serve. |
+| `app` | `ResponsesAgentServerHost \| None` | `None` | Deprecated compatibility argument; accepted but ignored. Will be retired after version 1.5.0. |
 | `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
 | `store` | `ResponseProviderProtocol \| None` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
 | `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
@@ -48,8 +49,10 @@ from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
 
 > [!NOTE]
 > `ResponsesHostServer` is itself an ASGI application; configure routes and
-> middleware directly on it. Use `server` instead of `server.app`; `app=`
-> is no longer supported.
+> middleware directly on it. Use `server` instead of `server.app`. The legacy
+> `app=` argument is accepted with a warning but ignored; its routes, middleware,
+> and configuration are not reused. This parameter will be retired after version
+> 1.5.0.
 > Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 > The constructor's `store` provider and the request's `store` retention flag
 > are separate controls.
@@ -60,6 +63,7 @@ from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
 | --- | --- |
 | `run(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving synchronously. |
 | `async run_async(host: str = "0.0.0.0", port: int \| None = None) -> None` | Start serving in an async application; await this method. |
+| `.app: ResponsesAgentServerHost` | Deprecated alias for this host (`server.app is server`). Access logs a warning; will be retired after v1.5.0. Use `server` directly instead. |
 | `.graph: CompiledStateGraph` | Read-only access to the hosted graph. With a configured saver, this is a copy that wraps the saver for hosting. |
 
 Both start methods delegate to the Agent Server SDK. With `port=None`, the SDK
