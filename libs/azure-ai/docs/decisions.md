@@ -100,5 +100,3 @@ Inherited Runnable features include `batch`, `abatch`, callbacks, and compositio
 with `|`. OpenAI SDK options such as `timeout`, `max_retries`, `default_headers`,
 `default_query`, `http_client`, and `http_async_client` are forwarded upstream.
 The caller owns any supplied HTTP clients and Azure credentials.
-
-See the [runnable sample](../../../samples/decisions/README.md).
