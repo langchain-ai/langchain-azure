@@ -2151,6 +2151,24 @@ def test_constructor_rejects_resilient_background_without_checkpointer() -> None
         ResponsesHostServer(make_echo_graph(), options=options)
 
 
+def test_constructor_ignores_injected_host_resilient_background_options() -> None:
+    from azure.ai.agentserver.responses import ResponsesAgentServerHost
+
+    app = ResponsesAgentServerHost(
+        options=ResponsesServerOptions(resilient_background=False)
+    )
+    server = ResponsesHostServer(
+        make_echo_graph(),
+        app=app,
+        options=ResponsesServerOptions(resilient_background=True),
+    )
+
+    with _client(server) as client:
+        response = client.post("/responses", json={"input": "hello"})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed"
+
+
 def test_constructor_accepts_resilient_background_with_checkpointer() -> None:
     options = ResponsesServerOptions(resilient_background=True)
 

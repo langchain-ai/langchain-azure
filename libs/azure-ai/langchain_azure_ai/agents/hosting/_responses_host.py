@@ -448,7 +448,8 @@ class ResponsesHostServer(ResponsesAgentServerHost):
             else FoundryConversationChainStore()
         )
         if (
-            options is not None
+            app is None
+            and options is not None
             and options.resilient_background
             and not self._graph_has_checkpointer
         ):
