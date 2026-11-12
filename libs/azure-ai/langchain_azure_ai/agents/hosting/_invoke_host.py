@@ -541,7 +541,7 @@ class InvocationsHostServer(
     # Public accessors
     # ------------------------------------------------------------------
 
-    @property 
+    @property
     @deprecated(
         since="v1.3.2",
         removal="v1.5.0",
