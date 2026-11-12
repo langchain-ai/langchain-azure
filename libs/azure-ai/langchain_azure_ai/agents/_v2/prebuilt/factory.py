@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Dict,
     Hashable,
+    List,
     Literal,
     Optional,
     Sequence,
@@ -42,7 +43,7 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, RootModel, StrictStr
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.base import (
@@ -50,7 +51,8 @@ from langchain_azure_ai.agents._v2.base import (
     AgentServiceAgentState,
     ResponsesAgentNode,
     _get_v2_tool_definitions,
-    _is_approval,
+    _McpApprovalValue,
+    _parse_approval_decision,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -116,6 +118,21 @@ def external_tools_condition(
     return "__end__"
 
 
+class _McpApprovalInterruptItem(TypedDict):
+    """One approval request in the ``_mcp_approval_node`` interrupt value."""
+
+    id: StrictStr
+    server_label: Optional[StrictStr]
+    tool_name: Optional[StrictStr]
+    arguments: Optional[StrictStr]
+
+
+class _McpApprovalResume(
+    RootModel[Union[_McpApprovalValue, List[_McpApprovalInterruptItem]]]
+):
+    """Resume value accepted by ``_mcp_approval_node``."""
+
+
 def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     r"""Pause execution for human approval of MCP tool calls.
 
@@ -141,11 +158,13 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     * ``{"approve": True}`` or ``{"approve": False, "reason": "..."}``
     * A plain string ``"true"`` / ``"false"``.
 
-    Any value that isn't an explicit approval denies the requests.
-
     Returns:
         A dict with ``messages`` containing ``ToolMessage`` instances for
         each approval request, ready for the agent to continue.
+
+    Raises:
+        pydantic.ValidationError: If the resume value is not one of the shapes
+            above. Nothing is saved, so the interrupt can be answered again.
     """
     ai_message = state["messages"][-1]
     approval_requests = [
@@ -167,20 +186,19 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
         }
         for tc in approval_requests
     ]
-    decision = interrupt(interrupt_payload)
+    decision = interrupt(interrupt_payload, response_schema=_McpApprovalResume).root
 
-    # Convert the human decision into a content string.
-    if isinstance(decision, bool):
-        content = json.dumps({"approve": decision})
-    elif isinstance(decision, dict):
-        content = json.dumps(decision)
-    elif isinstance(decision, str):
-        content = decision
-    elif decision == interrupt_payload:
+    if isinstance(decision, list):
         # The Responses host approves by echoing the interrupt value back.
-        content = json.dumps({"approve": True})
+        if decision != interrupt_payload:
+            raise ValueError("MCP approval resume list must echo the interrupt value.")
+        approve, reason = True, None
     else:
-        content = json.dumps({"approve": _is_approval(decision)})
+        approve, reason = _parse_approval_decision(decision)
+    response: Dict[str, Any] = {"approve": approve}
+    if reason is not None:
+        response["reason"] = reason
+    content = json.dumps(response)
 
     tool_messages = [
         ToolMessage(content=content, tool_call_id=tc["id"]) for tc in approval_requests
