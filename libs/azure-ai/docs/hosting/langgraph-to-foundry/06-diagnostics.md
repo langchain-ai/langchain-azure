@@ -31,13 +31,13 @@ Use a representative application request; the Deep Research query from [Verify t
 
 Use the hosted session ID from the invocation output to inspect its console logs:
 
-```powershell
+```shell
 azd ai agent monitor deep-research-foundry --session-id "<session-id>" --tail 300
 ```
 
 For startup failures or container restarts, also inspect system events:
 
-```powershell
+```shell
 azd ai agent monitor deep-research-foundry --session-id "<session-id>" --type system --tail 300
 ```
 
@@ -57,6 +57,8 @@ Use the following sequence for the hosted application:
 
    If your organization requires Microsoft Entra-authenticated ingestion, follow [Configure Microsoft Entra authentication for trace ingestion (preview)](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-ingestion-entra-authentication) to configure the connection. The linked portal workflow grants `Monitoring Metrics Publisher` to the project managed identity for server-side traces. Also grant this role to the agent identity for traces emitted by its code:
 
+   PowerShell (Windows):
+
    ```powershell
    $appInsightsResourceId = "<application-insights-resource-arm-id>"
    $agentInfo = azd ai agent show deep-research-foundry --output json | ConvertFrom-Json
@@ -66,6 +68,18 @@ Use the following sequence for the hosted application:
        --assignee-principal-type ServicePrincipal `
        --role "Monitoring Metrics Publisher" `
        --scope $appInsightsResourceId
+   ```
+
+   Bash (macOS and Linux):
+
+   ```bash
+   appInsightsResourceId="<application-insights-resource-arm-id>"
+   agentPrincipalId=$(azd ai agent show deep-research-foundry --output json | jq -r '.instance_identity.principal_id')
+   az role assignment create \
+       --assignee-object-id "$agentPrincipalId" \
+       --assignee-principal-type ServicePrincipal \
+       --role "Monitoring Metrics Publisher" \
+       --scope "$appInsightsResourceId"
    ```
 
    This ingestion assignment is not required for key-based ingestion.
@@ -79,11 +93,23 @@ You can also find these traces in the Azure portal: open the Log Analytics works
 
 > **Note:** To query traces, your account needs `Log Analytics Reader` on the connected Application Insights resource. An administrator can grant it with the command below. For workspace-scoped queries, repeat the assignment using the linked workspace's ARM ID as the scope. Protected tables can require additional access, as described in the [tracing prerequisites](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#prerequisites). These read permissions are separate from the agent's ingestion permissions.
 >
+> PowerShell (Windows):
+>
 > ```powershell
 > az role assignment create `
 >     --assignee-object-id "<your-user-object-id>" `
 >     --assignee-principal-type User `
 >     --role "Log Analytics Reader" `
+>     --scope "<application-insights-resource-arm-id>"
+> ```
+>
+> Bash (macOS and Linux):
+>
+> ```bash
+> az role assignment create \
+>     --assignee-object-id "<your-user-object-id>" \
+>     --assignee-principal-type User \
+>     --role "Log Analytics Reader" \
 >     --scope "<application-insights-resource-arm-id>"
 > ```
 

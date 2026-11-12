@@ -12,11 +12,23 @@ Reuse your existing evaluation dataset, evaluators, and pass criteria. Change ho
 
 > **Note:** For Foundry portal or SDK evaluations, your account needs `Foundry User` on the project. Foundry model inference also needs account-scoped access; the assignment below covers both for this example. For CI, assign access to the workload identity instead. See [evaluation permissions](https://learn.microsoft.com/azure/foundry/observability/how-to/evaluation-permissions) for additional workflows.
 >
+> PowerShell (Windows):
+>
 > ```powershell
 > az role assignment create `
 >     --assignee-object-id "<your-user-object-id>" `
 >     --assignee-principal-type User `
 >     --role "Foundry User" `
+>     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>"
+> ```
+>
+> Bash (macOS and Linux):
+>
+> ```bash
+> az role assignment create \
+>     --assignee-object-id "<your-user-object-id>" \
+>     --assignee-principal-type User \
+>     --role "Foundry User" \
 >     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>"
 > ```
 

@@ -4,13 +4,13 @@ With the [resources prepared](01-prepare-resources.md), you can test your existi
 
 ## Before you start
 
-Complete [Prepare Foundry resources](01-prepare-resources.md). Run commands from the application root, `{local-root}\deep_research`, with the existing graph and local model and search credentials available.
+Complete [Prepare Foundry resources](01-prepare-resources.md). Run commands from the application root, `{local-root}/deep_research`, with the existing graph and local model and search credentials available.
 
 ## Add the hosting dependency
 
 The hosting runner requires the `hosting` extra described in the [hosting package installation guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#install-the-package). Add this dependency before starting the host:
 
-```powershell
+```shell
 uv add --python 3.13 --prerelease allow --upgrade-package langchain-azure-ai "langchain-azure-ai[hosting]"
 uv pip check
 ```
@@ -52,6 +52,8 @@ The local host test can use the application's existing search credentials. When 
 
 > **Note:** If your application uses `DefaultAzureCredential`, ensure its authentication dependencies are installed and sign in with `az login` or `azd auth login`. For this example's Foundry model calls, your account can use `Foundry User` on the parent Foundry resource. An administrator can grant it as shown below. This authorizes your local account, not the deployed agent; local success does not verify the agent's runtime access. Other model providers use their own authentication requirements.
 >
+> PowerShell (Windows):
+>
 > ```powershell
 > az role assignment create `
 >     --assignee-object-id "<your-user-object-id>" `
@@ -59,18 +61,30 @@ The local host test can use the application's existing search credentials. When 
 >     --role "Foundry User" `
 >     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>"
 > ```
+>
+> Bash (macOS and Linux):
+>
+> ```bash
+> az role assignment create \
+>     --assignee-object-id "<your-user-object-id>" \
+>     --assignee-principal-type User \
+>     --role "Foundry User" \
+>     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>"
+> ```
 
 ## Start and test the host
 
 After `uv add` installs the declared dependencies, start the Responses host. The command uses `--no-sync` to run with the environment you just prepared:
 
-```powershell
+```shell
 uv run --no-sync --env-file .env python -m langchain_azure_ai.agents.hosting.run --protocol responses --config langgraph.json
 ```
 
 ## Verify local execution
 
 In another terminal, send a representative request to the local `/responses` endpoint. The default port is `8088`; adjust the URL if you configured a different port:
+
+PowerShell (Windows):
 
 ```powershell
 $body = @{
@@ -85,6 +99,18 @@ $response = Invoke-RestMethod `
     -Body $body `
     -TimeoutSec 600
 $response | ConvertTo-Json -Depth 20
+```
+
+Bash (macOS and Linux):
+
+```bash
+body=$(jq -n --arg input "Research when to use asyncio.TaskGroup versus asyncio.gather in Python. Use Tavily search and official Python documentation. Return a summary of at most 200 words with source links." \
+    '{input: $input, stream: false}')
+
+curl --silent --show-error --max-time 600 \
+    --request POST "http://localhost:8088/responses" \
+    --header "Content-Type: application/json" \
+    --data "$body" | jq .
 ```
 
 Verify that the response has `status: completed`, no error, and the expected search calls and cited answer. To inspect streamed events and tool execution interactively, use [Foundry Toolkit Agent Inspector](https://learn.microsoft.com/azure/foundry/how-to/develop/vs-code-agent-inspector#connect-and-debug). For projects already configured for azd, [azd local invocation](https://learn.microsoft.com/azure/foundry/agents/how-to/invoke-hosted-agent#invoke-locally) is another option.

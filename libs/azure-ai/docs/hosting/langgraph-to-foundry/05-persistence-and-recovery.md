@@ -47,7 +47,7 @@ The existing root `langgraph.json` loads `./agent.py:agent`. The Responses host 
 
 Redeploy the updated agent:
 
-```powershell
+```shell
 azd deploy deep-research-foundry
 ```
 
@@ -87,11 +87,13 @@ Keep `entryPoint: main.py` in `azure.yaml` and redeploy the updated launcher wit
 
 > **Note:** Foundry State Store's [user isolation](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-state-store#caller-identity) is not supported in local runs. Keep `user_isolation=True` for the hosted agent; a local host test does not verify this configuration's isolation or recovery behavior.
 
-The client must set `background` and `store` to `true` to make the request recoverable. The following PowerShell example uses the [hosted Responses endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=rest#invoke-an-agent-and-let-the-platform-create-the-session):
+The client must set `background` and `store` to `true` to make the request recoverable. The following examples use the [hosted Responses endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions?pivots=rest#invoke-an-agent-and-let-the-platform-create-the-session):
 
 The example uses `stream=false` for polling; recovery does not require disabling streaming.
 
 > **Note:** Sign in with `az login` using an account with the invocation access described in [Verify the deployed agent](04-deploy-and-verify.md#verify-the-deployed-agent).
+
+PowerShell (Windows):
 
 ```powershell
 $projectEndpoint = "https://<resource>.services.ai.azure.com/api/projects/<project>"
@@ -114,13 +116,40 @@ $response = Invoke-RestMethod `
 $response.id
 ```
 
+Bash (macOS and Linux):
+
+```bash
+projectEndpoint="https://<resource>.services.ai.azure.com/api/projects/<project>"
+responsesUrl="$projectEndpoint/agents/deep-research-foundry/endpoint/protocols/openai/responses"
+token=$(az account get-access-token --resource https://ai.azure.com --query accessToken --output tsv)
+body=$(jq -n --arg input "Research the difference between HTTP 429 and 503. Save a report with citations to /reports/http-errors.md." \
+    '{input: $input, background: true, store: true, stream: false}')
+
+responseId=$(curl --silent --show-error --fail-with-body \
+    --request POST "${responsesUrl}?api-version=v1" \
+    --header "Authorization: Bearer $token" \
+    --header "Content-Type: application/json" \
+    --data "$body" | jq -r '.id')
+echo "$responseId"
+```
+
 Retain the returned response ID. A background request can return before completion. Retrieve the same response until its status is terminal:
+
+PowerShell (Windows):
 
 ```powershell
 $current = Invoke-RestMethod `
     -Uri "$responsesUrl/$($response.id)?api-version=v1" `
     -Headers $headers
 $current | ConvertTo-Json -Depth 20
+```
+
+Bash (macOS and Linux):
+
+```bash
+curl --silent --show-error --fail-with-body \
+    "$responsesUrl/$responseId?api-version=v1" \
+    --header "Authorization: Bearer $token" | jq .
 ```
 
 After a connection failure, retrieve the existing response instead of submitting the research request again. Refresh the access token if it expires.

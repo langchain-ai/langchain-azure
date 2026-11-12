@@ -8,6 +8,8 @@ Complete [Host and test the agent locally](02-run-locally.md). Keep the verified
 
 > **Note:** Your account needs `Foundry Project Manager` on the Foundry project to create project connections and deploy the source-code agent. An administrator can grant this access with the following command. This assignment is for your account, not the agent identity. See the [source-code deployment permissions](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code#required-permissions).
 >
+> PowerShell (Windows):
+>
 > ```powershell
 > az role assignment create `
 >     --assignee-object-id "<your-user-object-id>" `
@@ -15,12 +17,22 @@ Complete [Host and test the agent locally](02-run-locally.md). Keep the verified
 >     --role "Foundry Project Manager" `
 >     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>/projects/<project-name>"
 > ```
+>
+> Bash (macOS and Linux):
+>
+> ```bash
+> az role assignment create \
+>     --assignee-object-id "<your-user-object-id>" \
+>     --assignee-principal-type User \
+>     --role "Foundry Project Manager" \
+>     --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<resource-name>/projects/<project-name>"
+> ```
 
 ## Prepare deployment files
 
 ### Add a deployment launcher
 
-Create `main.py` in the application root, `{local-root}\deep_research`. It calls the hosting runner with an explicit argument list and reuses the graph entry point in `langgraph.json`:
+Create `main.py` in the application root, `{local-root}/deep_research`. It calls the hosting runner with an explicit argument list and reuses the graph entry point in `langgraph.json`:
 
 ```python
 from langchain_azure_ai.agents.hosting.run import main
@@ -35,9 +47,9 @@ The launcher passes runner options as separate arguments. The deployment entry p
 
 `langgraph.json` tells the runner how to load the agent, both locally and in Foundry. `azure.yaml` tells azd how to deploy and start the hosted agent. The deployment package must include `main.py`, `langgraph.json`, and the application files it references. See [Package the zip manually](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code#package-the-zip-manually) for the package layout and `requirements.txt`.
 
-Initialize a source-code deployment from `{local-root}\deep_research`:
+Initialize a source-code deployment from `{local-root}/deep_research`:
 
-```powershell
+```shell
 azd auth login
 azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 --entry-point main.py
 ```
@@ -83,11 +95,22 @@ If you keep the original Anthropic model, also include `langchain-anthropic>=1.5
 
 Check that these requirements install in a fresh Python 3.13 environment outside the project:
 
+PowerShell (Windows):
+
 ```powershell
 $checkEnv = Join-Path $env:TEMP ("foundry-deps-" + [guid]::NewGuid().ToString("N"))
 uv venv --python 3.13 $checkEnv
 uv pip install --python "$checkEnv\Scripts\python.exe" --prerelease allow -r requirements.txt
 uv pip check --python "$checkEnv\Scripts\python.exe"
+```
+
+Bash (macOS and Linux):
+
+```bash
+checkEnv=$(mktemp -d "${TMPDIR:-/tmp}/foundry-deps-XXXXXX")
+uv venv --python 3.13 "$checkEnv"
+uv pip install --python "$checkEnv/bin/python" --prerelease allow -r requirements.txt
+uv pip check --python "$checkEnv/bin/python"
 ```
 
 Both installation and the dependency check must succeed before deployment. This verifies dependency compatibility, not application startup.
@@ -127,7 +150,7 @@ This example uses a `CustomKeys` connection named `tavily-search` with target `h
 
 Add the project SDK to the dependencies before updating the Tavily client initialization:
 
-```powershell
+```shell
 uv add --prerelease allow azure-ai-projects
 uv pip check
 ```
@@ -183,7 +206,7 @@ This example uses the following values:
 
 Set the model deployment name and connection name in the selected azd environment:
 
-```powershell
+```shell
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<deployment-name>"
 azd env set TAVILY_CONNECTION_NAME tavily-search
 ```

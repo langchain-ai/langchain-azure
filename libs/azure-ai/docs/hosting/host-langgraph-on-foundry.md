@@ -45,7 +45,9 @@ The following prerequisites apply before you prepare and deploy your application
 
 > **Tip:** Use Azure Developer CLI (`azd`) or [Microsoft Foundry Toolkit for VS Code](https://learn.microsoft.com/azure/foundry/how-to/develop/vs-code-agents-workflow-pro-code) for local testing and deployment. If you use a coding agent, add the [Microsoft Foundry Skill](https://learn.microsoft.com/azure/foundry/how-to/develop/use-microsoft-foundry-skill) to assist with setup and troubleshooting.
 
-This guide assumes that the Deep Research example from the Deep Agents repository is available at `{local-root}\deep_research`. All application paths in this guide are relative to that directory. The example includes `agent.py`, `research_agent/`, `langgraph.json`, and dependency files. The guide adds Foundry hosting and deployment files alongside them.
+The commands in this guide run on Windows, macOS, and Linux. Blocks labeled `shell` work in PowerShell and Bash. Where the syntax differs, the guide shows a PowerShell (Windows) block and a Bash (macOS and Linux) block. The Bash examples use `curl` and [`jq`](https://jqlang.org/download/) to send requests and read JSON output.
+
+This guide assumes that the Deep Research example from the Deep Agents repository is available at `{local-root}/deep_research`. All application paths in this guide are relative to that directory. The example includes `agent.py`, `research_agent/`, `langgraph.json`, and dependency files. The guide adds Foundry hosting and deployment files alongside them.
 
 Your local `.env` must remain outside source control and source uploads. See [Configure upload exclusions](langgraph-to-foundry/03-prepare-deployment.md#configure-upload-exclusions).
 
