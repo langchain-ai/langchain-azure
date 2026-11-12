@@ -47,6 +47,19 @@ If you are transitioning from Microsoft Foundry classic and you need access to d
 pip install -U langchain-azure-ai[v1]
 ```
 
+### User-Agent telemetry
+
+The shared User-Agent includes the installed versions of `langchain`,
+`langgraph`, and `deepagents` as `package/version` tokens. Versions are read
+once from package metadata without importing the frameworks. Packages that
+are absent or have unavailable version metadata are omitted.
+
+Hosting forwards these tokens through its existing OpenAI, Anthropic, and
+Azure SDK User-Agent propagation. Caller-owned `AZURE_HTTP_USER_AGENT`
+values are preserved. Set `LANGCHAIN_AZURE_AI_USER_AGENT_DISABLED=true`
+before importing the package to disable the shared User-Agent telemetry.
+The tokens describe installed versions, not which framework handled a request.
+
 ## Quick Start with langchain-azure-ai
 
 The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.

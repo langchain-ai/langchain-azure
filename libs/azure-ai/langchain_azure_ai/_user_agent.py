@@ -14,6 +14,11 @@ prepended to the base token by :func:`get_user_agent`, yielding e.g.::
 
     langchain_azure_ai.agents.hosting/<host-ver> langchain-azure-ai/<pkg-ver>
 
+Installed ``langchain``, ``langgraph``, and ``deepagents`` versions are
+included as additional ``package/version`` tokens before the base token.
+Versions are read once from package metadata without importing the frameworks.
+These tokens describe the environment, not which framework handled a request.
+
 The :envvar:`LANGCHAIN_AZURE_AI_USER_AGENT_DISABLED` environment
 variable opts the process out — :func:`get_user_agent` then returns the
 empty string and :func:`with_user_agent` becomes a no-op.
@@ -52,6 +57,24 @@ USER_AGENT_TELEMETRY_DISABLED_ENV_VAR: Final[str] = (
 """Env var that, when truthy, suppresses the langchain-azure-ai UA prefix."""
 
 _FOUNDRY_HOSTING_ENV_VAR: Final[str] = "FOUNDRY_HOSTING_ENVIRONMENT"
+
+
+def _get_framework_user_agent() -> str:
+    tokens = []
+    for package in ("langchain", "langgraph", "deepagents"):
+        try:
+            version = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        except Exception:
+            logger.debug("Skipping version metadata for %s.", package, exc_info=True)
+            continue
+        if version:
+            tokens.append(f"{package}/{version}")
+    return " ".join(tokens)
+
+
+_FRAMEWORK_USER_AGENT: Final[str] = _get_framework_user_agent()
 
 # Insertion-ordered prefix registry. Keys identify registrations so dynamic
 # prefixes can be updated in place without changing their emission order.
@@ -143,9 +166,8 @@ def is_hosted_environment() -> bool:
 def get_user_agent() -> str:
     """Return the combined User-Agent string.
 
-    Format: ``"<prefix1> <prefix2> ... langchain-azure-ai/<ver>"`` when
-    prefixes have been registered, otherwise just
-    ``"langchain-azure-ai/<ver>"``.
+    Format: ``"<prefixes> <installed-frameworks> langchain-azure-ai/<ver>"``.
+    Missing packages and unavailable version metadata are omitted.
 
     Returns an empty string when telemetry is disabled via
     :envvar:`LANGCHAIN_AZURE_AI_USER_AGENT_DISABLED`.
@@ -153,8 +175,6 @@ def get_user_agent() -> str:
     if not _telemetry_enabled():
         return ""
     _detect_hosted_environment()
-    if not _user_agent_prefixes:
-        return BASE_USER_AGENT
     prefixes: list[str] = []
     for prefix in _user_agent_prefixes.values():
         try:
@@ -164,7 +184,7 @@ def get_user_agent() -> str:
             continue
         if resolved:
             prefixes.append(resolved)
-    return " ".join((*filter(None, prefixes), BASE_USER_AGENT))
+    return " ".join(filter(None, (*prefixes, _FRAMEWORK_USER_AGENT, BASE_USER_AGENT)))
 
 
 def with_user_agent(headers: "dict[str, Any] | None" = None) -> "dict[str, Any]":

@@ -28,6 +28,53 @@ def _run_fresh_process(source: str, *args: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_framework_versions_do_not_import_frameworks() -> None:
+    _run_fresh_process(
+        """
+        from importlib.metadata import version
+        import sys
+
+        from langchain_azure_ai._user_agent import get_user_agent
+
+        ua = get_user_agent()
+        for package in ("langchain", "langgraph"):
+            assert f"{package}/{version(package)}" in ua
+        for package in ("langchain", "langgraph", "deepagents"):
+            assert package not in sys.modules
+        """
+    )
+
+
+def test_azure_sdk_user_agent_includes_framework_versions() -> None:
+    _run_fresh_process(
+        """
+        from importlib.metadata import version
+        import os
+
+        os.environ.pop("AZURE_HTTP_USER_AGENT", None)
+        import langchain_azure_ai.agents.hosting as hosting
+        from azure.core.pipeline import PipelineRequest, PipelineContext
+        from azure.core.pipeline.policies import UserAgentPolicy
+        from azure.core.rest import HttpRequest
+        from langchain_azure_ai._user_agent import BASE_USER_AGENT
+
+        hosting._add_process_hosting_features(hosting.HostingFeature.RESPONSES)
+        with hosting._hosting_feature_scope(hosting.HostingFeature.HITL):
+            hosting._add_process_hosting_features(hosting.HostingFeature.INVOCATIONS)
+
+        request = PipelineRequest(HttpRequest("GET", "https://example.test"),
+                                  PipelineContext(None))
+        UserAgentPolicy().on_request(request)
+        ua = request.http_request.headers["User-Agent"]
+        assert hosting.HOSTING_USER_AGENT in ua
+        assert BASE_USER_AGENT in ua
+        assert "(features=3)" in ua
+        for package in ("langchain", "langgraph"):
+            assert f"{package}/{version(package)}" in ua
+        """
+    )
+
+
 @pytest.mark.parametrize("host_name", ["ResponsesHostServer", "InvocationsHostServer"])
 def test_public_host_import_does_not_load_model_sdks(host_name: str) -> None:
     _run_fresh_process(
@@ -182,24 +229,36 @@ def test_user_agent_installed_for_either_import_order(
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
 @pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("deepagents_installed", [False, True])
 def test_langchain_client_created_later_sends_dynamic_user_agent(
-    provider: str, mode: str
+    provider: str, mode: str, deepagents_installed: bool
 ) -> None:
     _run_fresh_process(
         """
         import asyncio
+        from importlib.metadata import version
         import sys
         from unittest.mock import patch
 
-        import langchain_azure_ai.agents.hosting as hosting
+        provider, mode, deepagents_installed = sys.argv[1:]
+        def metadata_version(package):
+            if package == "deepagents":
+                if deepagents_installed == "True":
+                    return "0.7.28"
+                from importlib.metadata import PackageNotFoundError
+                raise PackageNotFoundError(package)
+            return version(package)
+
+        with patch("importlib.metadata.version", side_effect=metadata_version):
+            import langchain_azure_ai.agents.hosting as hosting
 
         assert "openai" not in sys.modules
         assert "anthropic" not in sys.modules
+        assert "deepagents" not in sys.modules
 
         import httpx
         from langchain_azure_ai._user_agent import BASE_USER_AGENT
 
-        provider, mode = sys.argv[1:]
         sent_headers = []
 
         def respond(request):
@@ -265,6 +324,12 @@ def test_langchain_client_created_later_sends_dynamic_user_agent(
                     ua = headers["user-agent"]
                     assert ua.count(hosting.HOSTING_USER_AGENT) == 1, ua
                     assert BASE_USER_AGENT in ua, ua
+                    for package in ("langchain", "langgraph"):
+                        assert f"{package}/{version(package)}" in ua, ua
+                    if deepagents_installed == "True":
+                        assert "deepagents/0.7.28" in ua, ua
+                    else:
+                        assert "deepagents/" not in ua, ua
                     assert "(features=" + mask + ")" in ua, ua
                     assert ua.endswith("test-app/1.0"), ua
                     assert headers["x-test"] == "preserved"
@@ -276,4 +341,5 @@ def test_langchain_client_created_later_sends_dynamic_user_agent(
         """,
         provider,
         mode,
+        str(deepagents_installed),
     )
