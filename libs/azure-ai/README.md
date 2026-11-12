@@ -56,8 +56,7 @@ are absent or have unavailable version metadata are omitted.
 
 Hosting forwards these tokens through its existing OpenAI, Anthropic, and
 Azure SDK User-Agent propagation. Caller-owned `AZURE_HTTP_USER_AGENT`
-values are preserved. Set `LANGCHAIN_AZURE_AI_USER_AGENT_DISABLED=true`
-before importing the package to disable the shared User-Agent telemetry.
+values are preserved.
 The tokens describe installed versions, not which framework handled a request.
 
 ## Quick Start with langchain-azure-ai
