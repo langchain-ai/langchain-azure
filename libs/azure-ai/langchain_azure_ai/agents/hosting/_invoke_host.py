@@ -419,14 +419,20 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         output_parser: Optional callable that converts the runnable result
             into response text for non-streaming requests. When omitted, the
             default parser reads the last AI message from a ``messages`` state.
-        options: Optional :class:`ResponsesServerOptions`. The
-            ``resilient_background`` and ``steerable_conversations`` values
-            configure durable invocation recovery and in-flight conversation
-            steering respectively.
+        options: Optional :class:`ResponsesServerOptions` reused by this
+            adapter. Only ``resilient_background`` (durable recovery) and
+            ``steerable_conversations`` (in-flight steering) are read. The
+            object is not forwarded to :class:`InvocationAgentServerHost`;
+            other fields have no effect here. Either flag enables task-backed
+            execution, including foreground JSON and SSE requests.
+            ``background=True`` still requires ``resilient_background=True``.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
-            host-level kwargs are ignored — the caller is expected to
-            have configured them on ``app`` itself.
+            adapter registers its invocation handlers on the supplied host.
+            Host-level kwargs (``applicationinsights_connection_string`` and
+            ``graceful_shutdown_timeout``) are ignored; configure them on
+            ``app`` itself. ``options`` still configures this adapter's
+            task-backed execution and checkpointer requirement.
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
@@ -524,7 +530,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
     @property
     def app(self) -> InvocationAgentServerHost:
-        """The underlying :class:`InvocationAgentServerHost`."""
+        """The supplied or internally created :class:`InvocationAgentServerHost`."""
         return self._app
 
     @property

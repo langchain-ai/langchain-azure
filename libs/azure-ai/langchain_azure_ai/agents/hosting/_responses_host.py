@@ -340,7 +340,7 @@ class ResponsesHostServer:
         checkpointer. With a checkpointer, the host returns HTTP 400 before
         streaming or graph execution.
 
-    The host owns an internal :class:`ResponsesAgentServerHost` and
+    The host creates or attaches to a :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline
     against it. For advanced scenarios (custom routes, multi-protocol
     composition, custom converter), users may either:
@@ -358,12 +358,19 @@ class ResponsesHostServer:
 
     Keyword Args:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
-            to (e.g. a multi-protocol mixin). In this mode the host-level
-            kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself. Response branching requires
-            ``app=None``.
-        options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            to (e.g. a multi-protocol mixin). Its SDK configuration is retained:
+            ``store``, ``prefix``, ``applicationinsights_connection_string``,
+            and ``graceful_shutdown_timeout`` are ignored, and ``options``
+            neither reconfigures ``app`` nor is inferred from it. Pass matching
+            ``options`` to this adapter and ``app`` so SDK behavior and
+            ``foundry.agent.steerable_conversation`` metadata agree. The
+            resilient-background/checkpointer constructor check is skipped
+            when ``app`` is supplied; durable graph recovery still requires a
+            checkpointer. Response branching requires ``app=None``.
+        options: Optional :class:`ResponsesServerOptions`, forwarded to the
+            SDK host only when ``app=None``. Also read independently by this
+            adapter for hosting feature flags and steering metadata, including
+            when attaching to an existing ``app``.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -389,11 +396,12 @@ class ResponsesHostServer:
 
     Raises:
         ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs. Also raised if response branching is
-            enabled without the required async checkpoint implementations,
-            with steering enabled, or with an external ``app``.
+            ``messages`` field, or if ``app=None`` and
+            ``resilient_background=True`` is configured without a LangGraph
+            checkpointer. Override this class to host custom-state graphs.
+            Also raised if response branching is enabled without the required
+            async checkpoint implementations, with steering enabled, or with
+            an external ``app``.
     """
 
     def __init__(
@@ -496,7 +504,7 @@ class ResponsesHostServer:
 
     @property
     def app(self) -> ResponsesAgentServerHost:
-        """The underlying :class:`ResponsesAgentServerHost`."""
+        """The supplied or internally created :class:`ResponsesAgentServerHost`."""
         return self._app
 
     @property
