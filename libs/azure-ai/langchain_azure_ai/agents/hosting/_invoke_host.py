@@ -42,6 +42,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
+from urllib.parse import urlencode
 
 try:
     from azure.ai.agentserver.core import (
@@ -87,7 +88,7 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import experimental
+from langchain_azure_ai._api.base import deprecated, experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -428,9 +429,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             ``sse_keep_alive_interval_seconds`` and
             ``shutdown_grace_period_seconds``) have no effect here. Enabling
             either flag switches invocation execution (including foreground
-            JSON and SSE requests) to the task-backed path configured by
-            :meth:`build_task_runnable_config` instead of
-            :meth:`build_runnable_config`; ``background=True`` requests still
+            JSON and SSE requests) to the task-backed path. Both paths use
+            :meth:`build_runnable_config`, unless a legacy override of
+            :meth:`build_task_runnable_config` takes precedence for task
+            execution. ``background=True`` requests still
             require ``resilient_background=True``.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
@@ -708,29 +710,44 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return background, previous_invocation_id
 
     def build_runnable_config(self, request: Request) -> RunnableConfig:
-        """Build a ``RunnableConfig`` for a direct-execution invocation.
+        """Build a ``RunnableConfig`` for an invocation attempt.
 
-        Called only when both ``options.resilient_background`` and
-        ``options.steerable_conversations`` are ``False``. When either option
-        is enabled, invocation execution—including foreground JSON and SSE
-        requests—uses :meth:`build_task_runnable_config` instead; the two
-        methods do not call each other.
+        Override this method to customize direct and task-backed execution,
+        including foreground JSON and SSE, background work, and active
+        recovered attempts. Existing overrides of the deprecated
+        :meth:`build_task_runnable_config` take precedence for task execution.
 
-        Sets ``configurable.thread_id`` from a user-scoped internal form of
-        ``request.state.session_id`` so checkpointed conversations cannot
-        collide across users that choose the same public session ID.
-        Subclasses overriding this method should call
-        ``super().build_runnable_config(request)`` to preserve ``thread_id``,
-        and also override :meth:`build_task_runnable_config` if custom
-        callbacks, metadata, or ``configurable`` entries must apply when
-        recovery or steering is enabled.
+        The default uses a user-scoped internal session ID as
+        ``configurable.thread_id``. Task execution also supplies the current
+        ``invocation_context`` and ``invocation_cancellation_signal`` under
+        ``configurable``. These are execution-scoped, not checkpointed graph
+        state. Call ``super().build_runnable_config(request)`` and preserve
+        these entries when adding callbacks, metadata, or other configuration.
+
+        Return a mutable config mapping. When recovering from a saved
+        checkpoint, the host updates ``configurable`` in place with the
+        persisted ``thread_id``, ``checkpoint_id``, and ``checkpoint_ns``
+        after this method returns.
 
         Args:
-            request: The Starlette request.
+            request: The Starlette request. Task-backed attempts receive a
+                reconstructed request with persisted session, user, and call
+                identity in ``request.state`` and the task context in
+                ``request.state.invocation_context``. Original HTTP headers,
+                body, and arbitrary request state are not reconstructed.
 
         Returns:
-            A ``RunnableConfig`` dict.
+            A mutable ``RunnableConfig`` dict.
         """
+        context = getattr(request.state, "invocation_context", None)
+        if isinstance(context, TaskContext):
+            return {
+                "configurable": {
+                    "thread_id": context.task_id,
+                    "invocation_context": context,
+                    "invocation_cancellation_signal": context.cancel,
+                }
+            }
         session_id = getattr(request.state, "session_id", None)
         public_session_id = session_id if isinstance(session_id, str) else "default"
         return {
@@ -742,18 +759,23 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             }
         }
 
+    @deprecated("1.3.1", alternative="build_runnable_config")
     def build_task_runnable_config(
         self,
         session_id: str,
         context: TaskContext[dict[str, Any]],
     ) -> RunnableConfig:
-        """Build a ``RunnableConfig`` for a task-backed invocation attempt.
+        """Build task configuration for a legacy subclass override.
 
-        Used for task-backed execution whenever
+        Deprecated: override :meth:`build_runnable_config` instead to customize
+        all execution modes with one method. Existing overrides of this method
+        remain active for task-backed execution whenever
         ``options.resilient_background`` or
         ``options.steerable_conversations`` is ``True``, including foreground
         JSON and SSE requests as well as background and active recovered
-        attempts. This method does not call :meth:`build_runnable_config`.
+        attempts. If both methods are overridden, this method takes precedence
+        for task execution. Calling ``super()`` here returns the default task
+        config without calling a subclass's :meth:`build_runnable_config`.
 
         By default, ``configurable.thread_id`` is set to ``context.task_id``,
         the user-partitioned internal ID for the session; the public
@@ -1339,7 +1361,30 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return result
             raise
 
-        config = self.build_task_runnable_config(session_id, context)
+        if (
+            type(self).build_task_runnable_config
+            is not InvocationsHostServer.build_task_runnable_config
+        ):
+            config = self.build_task_runnable_config(session_id, context)
+        else:
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/invocations",
+                    "query_string": urlencode(
+                        {"agent_session_id": session_id}
+                    ).encode("ascii"),
+                    "headers": [],
+                    "state": {
+                        "session_id": session_id,
+                        "user_id": task_input.get("user_id") or "",
+                        "call_id": task_input.get("call_id") or "",
+                        "invocation_context": context,
+                    },
+                }
+            )
+            config = self.build_runnable_config(request)
         recovery_checkpoint = (
             _checkpoint_from_recovery_state(recovery_state)
             if context.entry_mode == "recovered"

@@ -10,6 +10,7 @@ import errno
 import json
 import threading
 import uuid
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,9 @@ from azure.ai.agentserver.responses import (
     ResponsesAgentServerHost,
     ResponsesServerOptions,
 )
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.testclient import TestClient
@@ -88,6 +90,162 @@ def test_internal_session_id_is_stable_and_user_partitioned() -> None:
     assert first != _internal_session_id("shared-session", "user-b")
     assert first.startswith("session-")
     assert len(first) <= 128
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "options",
+    [
+        None,
+        ResponsesServerOptions(resilient_background=True),
+        ResponsesServerOptions(steerable_conversations=True),
+    ],
+)
+def test_runnable_config_hook_applies_to_every_execution_mode(
+    options: ResponsesServerOptions | None,
+    stream: bool,
+) -> None:
+    callback = BaseCallbackHandler()
+    hook_inputs: list[Request] = []
+
+    class ConfiguredHost(InvocationsHostServer):
+        def build_runnable_config(self, request: Request) -> RunnableConfig:
+            hook_inputs.append(request)
+            config = super().build_runnable_config(request)
+            config["callbacks"] = [callback]
+            config["tags"] = ["unified-config"]
+            config["metadata"] = {"config_source": "unified-config"}
+            config["recursion_limit"] = 33
+            return config
+
+    graph = make_checkpointed_echo_graph()
+    server = ConfiguredHost(graph, options=options)
+    with (
+        warnings.catch_warnings(record=True) as emitted_warnings,
+        patch.object(graph, "astream", wraps=graph.astream) as graph_stream,
+        _client(server) as client,
+    ):
+        warnings.simplefilter("always", DeprecationWarning)
+        response = client.post(
+            "/invocations?agent_session_id=unified-config-session",
+            json={"message": "hello", "stream": stream},
+            headers={"x-agent-user-id": "unified-config-user"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert len(hook_inputs) == 1
+    assert isinstance(hook_inputs[0], Request)
+    assert hook_inputs[0].state.session_id == "unified-config-session"
+    assert hook_inputs[0].query_params["agent_session_id"] == "unified-config-session"
+    assert hook_inputs[0].state.user_id == "unified-config-user"
+    assert not any(
+        "build_task_runnable_config" in str(warning.message)
+        for warning in emitted_warnings
+    )
+    graph_stream.assert_called_once()
+    config = graph_stream.call_args.kwargs["config"]
+    assert config["callbacks"] == [callback]
+    assert config["tags"] == ["unified-config"]
+    assert config["metadata"] == {"config_source": "unified-config"}
+    assert config["recursion_limit"] == 33
+    configurable = config["configurable"]
+    expected_thread_id = _internal_session_id(
+        "unified-config-session", "unified-config-user"
+    )
+    if options is None:
+        assert configurable == {"thread_id": expected_thread_id}
+    else:
+        context = hook_inputs[0].state.invocation_context
+        assert isinstance(context, TaskContext)
+        assert context.task_id == expected_thread_id
+        assert configurable == {
+            "thread_id": context.task_id,
+            "invocation_context": context,
+            "invocation_cancellation_signal": context.cancel,
+        }
+
+
+@pytest.mark.parametrize("call_super", [False, True])
+@pytest.mark.parametrize(
+    "options",
+    [
+        None,
+        ResponsesServerOptions(resilient_background=True),
+        ResponsesServerOptions(steerable_conversations=True),
+    ],
+)
+def test_legacy_task_runnable_config_override_keeps_precedence(
+    options: ResponsesServerOptions | None,
+    call_super: bool,
+) -> None:
+    unified_calls: list[Request] = []
+    legacy_calls: list[tuple[str, TaskContext[dict[str, Any]]]] = []
+
+    class LegacyHost(InvocationsHostServer):
+        def build_runnable_config(self, request: Request) -> RunnableConfig:
+            unified_calls.append(request)
+            config = super().build_runnable_config(request)
+            config["tags"] = ["direct-config"]
+            return config
+
+        def build_task_runnable_config(
+            self,
+            session_id: str,
+            context: TaskContext[dict[str, Any]],
+        ) -> RunnableConfig:
+            legacy_calls.append((session_id, context))
+            config: RunnableConfig = (
+                super().build_task_runnable_config(session_id, context)
+                if call_super
+                else {"configurable": {}}
+            )
+            config["configurable"].update(
+                thread_id="legacy-thread", legacy_session=session_id
+            )
+            config["tags"] = ["legacy-config"]
+            return config
+
+    class InheritedLegacyHost(LegacyHost):
+        pass
+
+    graph = make_checkpointed_echo_graph()
+    server = InheritedLegacyHost(graph, options=options)
+    with (
+        warnings.catch_warnings(record=True) as emitted_warnings,
+        patch.object(graph, "astream", wraps=graph.astream) as graph_stream,
+        _client(server) as client,
+    ):
+        warnings.simplefilter("always", DeprecationWarning)
+        response = client.post(
+            "/invocations?agent_session_id=legacy-session",
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 200, response.text
+    graph_stream.assert_called_once()
+    config = graph_stream.call_args.kwargs["config"]
+    if options is None:
+        assert len(unified_calls) == 1
+        assert not legacy_calls
+        assert config["tags"] == ["direct-config"]
+    else:
+        assert not unified_calls
+        assert len(legacy_calls) == 1
+        session_id, context = legacy_calls[0]
+        assert session_id == "legacy-session"
+        assert config["tags"] == ["legacy-config"]
+        assert config["configurable"]["thread_id"] == "legacy-thread"
+        assert config["configurable"]["legacy_session"] == session_id
+        if call_super:
+            assert config["configurable"]["invocation_context"] is context
+            assert (
+                config["configurable"]["invocation_cancellation_signal"]
+                is context.cancel
+            )
+            assert sum(
+                "build_task_runnable_config" in str(warning.message)
+                for warning in emitted_warnings
+            ) == 1
 
 
 def test_constructor_registers_invocations_feature() -> None:
@@ -737,12 +895,24 @@ def test_constructor_accepts_resilient_background_with_checkpointer() -> None:
 
 def test_resilient_background_invocation_can_be_retrieved() -> None:
     options = ResponsesServerOptions(resilient_background=True)
-    server = InvocationsHostServer(
-        make_checkpointed_echo_graph(),
-        options=options,
-    )
+    hook_inputs: list[TaskContext[dict[str, Any]]] = []
 
-    with _client(server) as client:
+    class ConfiguredHost(InvocationsHostServer):
+        def build_runnable_config(self, request: Request) -> RunnableConfig:
+            assert isinstance(request, Request)
+            context = request.state.invocation_context
+            assert isinstance(context, TaskContext)
+            hook_inputs.append(context)
+            config = super().build_runnable_config(request)
+            config["metadata"] = {"config_source": "background-config"}
+            return config
+
+    graph = make_checkpointed_echo_graph()
+    server = ConfiguredHost(graph, options=options)
+    with (
+        patch.object(graph, "astream", wraps=graph.astream) as graph_stream,
+        _client(server) as client,
+    ):
         accepted = client.post(
             "/invocations",
             json={"message": "hi", "background": True},
@@ -761,6 +931,11 @@ def test_resilient_background_invocation_can_be_retrieved() -> None:
     assert result.status_code == 200, result.text
     assert result.json()["status"] == "completed"
     assert result.json()["response"] == "Echo: hi"
+    assert len(hook_inputs) == 1
+    graph_stream.assert_called_once()
+    config = graph_stream.call_args.kwargs["config"]
+    assert config["metadata"] == {"config_source": "background-config"}
+    assert config["configurable"]["invocation_context"] is hook_inputs[0]
 
 
 @pytest.mark.asyncio
@@ -1124,7 +1299,23 @@ async def test_recovered_background_invocation_resumes_checkpoint(
 ) -> None:
     captured: dict[str, object] = {}
     options = ResponsesServerOptions(resilient_background=True)
-    server = InvocationsHostServer(
+
+    class ConfiguredHost(InvocationsHostServer):
+        def build_runnable_config(self, request: Request) -> RunnableConfig:
+            assert isinstance(request, Request)
+            context = request.state.invocation_context
+            assert isinstance(context, TaskContext)
+            assert context.entry_mode == "recovered"
+            config = super().build_runnable_config(request)
+            config["metadata"] = {"config_source": "recovered-config"}
+            config["configurable"].update(
+                thread_id="hook-thread",
+                checkpoint_id="hook-checkpoint",
+                checkpoint_ns="hook-namespace",
+            )
+            return config
+
+    server = ConfiguredHost(
         make_recovery_probe_graph(captured),
         options=options,
     )
@@ -1154,9 +1345,15 @@ async def test_recovered_background_invocation_resumes_checkpoint(
     result = await server._execute_task_invocation(context)
 
     assert captured["input"] is None
-    configurable = captured["config"]["configurable"]  # type: ignore[index]
+    config = captured["config"]
+    assert isinstance(config, dict)
+    configurable = config["configurable"]
     assert configurable["thread_id"] == session_id
     assert configurable["checkpoint_id"] == "checkpoint-1"
+    assert configurable["checkpoint_ns"] == ""
+    assert configurable["invocation_context"] is context
+    assert configurable["invocation_cancellation_signal"] is context.cancel
+    assert config["metadata"] == {"config_source": "recovered-config"}
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
 
