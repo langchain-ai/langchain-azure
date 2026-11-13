@@ -270,19 +270,19 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         start = state.get("azure_ai_memory_processed_message_count")
         unsent_index = state.get("azure_ai_memory_unsent_message_index")
         batch_id = state.get("azure_ai_memory_pending_batch_id")
-        if (
+        # The thread's earlier unsent messages are still in the current batch.
+        queued = batch_id == self._pending_batch_id
+        if start is None or start > len(messages):
+            start = _latest_turn_start(messages)
+            unsent_index = start
+        elif (
             unsent_index is not None
             and batch_id is not None
             and not batch_id.startswith(f"{self._instance_id}:")
         ):
             # Queued by another instance, which may not have sent them.
             start = unsent_index
-        if start is None or start > len(messages):
-            start = _latest_turn_start(messages)
-
-        # The thread's earlier unsent messages are still in the current batch.
-        queued = batch_id == self._pending_batch_id
-        if not queued:
+        elif not queued:
             unsent_index = start
 
         new_items = self._collect_new_items(messages[start:])

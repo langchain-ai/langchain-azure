@@ -8,6 +8,7 @@ from langchain_core.messages import (
     AIMessage,
     ChatMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -240,6 +241,20 @@ def _create_memory_agent(
     return agent, mock_client
 
 
+def _summarize_messages(agent: Any, config: Any) -> None:
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
+    agent.update_state(
+        config,
+        {
+            "messages": [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                SystemMessage(content="summary"),
+            ]
+        },
+    )
+
+
 def _sent_contents(mock_client: Mock) -> list[str]:
     return [
         item["content"]
@@ -424,4 +439,55 @@ def test_memory_middleware_does_not_resend_turns_sent_with_another_thread() -> N
     ] == [
         ["a1", "reply a1", "b1", "reply b1"],
         ["a2", "reply a2", "b2", "reply b2"],
+    ]
+
+
+def test_memory_middleware_sends_latest_turn_after_failed_turns_are_summarized() -> (
+    None
+):
+    """Unsent turns that were summarized away shouldn't hide the latest turn."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(["reply 1", "reply 2"], checkpointer)
+    first_client.beta.memory_stores.begin_update_memories.side_effect = [
+        Mock(),
+        Exception("network"),
+    ]
+    for content in ["user 1", "user 2"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]}, config)
+    _summarize_messages(agent, config)
+
+    agent, second_client = _create_memory_agent(["reply 3"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 3")]}, config)
+
+    assert _sent_contents(second_client) == ["user 3", "reply 3"]
+
+
+def test_memory_middleware_sends_turns_queued_after_summarization() -> None:
+    """Turns queued after a summarization should be sent by a new instance."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(
+        ["reply 1", "reply 2", "reply 3", "reply 4", "reply 5"],
+        checkpointer,
+        update_every_n_turns=3,
+    )
+    for content in ["user 1", "user 2", "user 3", "user 4"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]}, config)
+    _summarize_messages(agent, config)
+    agent.invoke({"messages": [HumanMessage(content="user 5")]}, config)
+    assert first_client.beta.memory_stores.begin_update_memories.call_count == 1
+
+    agent, second_client = _create_memory_agent(["reply 6"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 6")]}, config)
+
+    assert _sent_contents(second_client) == [
+        "user 5",
+        "reply 5",
+        "user 6",
+        "reply 6",
     ]
