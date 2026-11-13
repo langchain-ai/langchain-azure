@@ -1,0 +1,12 @@
+# Run from the repository root; use the SDK checkout and sample runtime pins.
+-e ./libs/azure-ai[hosting,opentelemetry]
+pytest>=9,<10
+langchain==1.4.6
+langgraph==1.2.16
+langchain-openai==1.7.2
+deepagents==0.7.28
+langchain-mcp-adapters==0.3.2
+langgraph-checkpoint-sqlite>=3.1.0
+azure-storage-blob==12.31.0
+python-dotenv>=1.2.3,<2
+opentelemetry-exporter-otlp-proto-http>=1.37,<2
