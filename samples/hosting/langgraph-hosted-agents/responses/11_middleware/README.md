@@ -67,6 +67,7 @@ installing this sample's [requirements.txt](requirements.txt) and configuring
 python main.py
 ```
 
+See the [shared tracing guide](../../README.md#tracing) for exporter setup. Both
 `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` and
 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` default to `false` here.
 Enabling either can export messages, tool arguments, and results.

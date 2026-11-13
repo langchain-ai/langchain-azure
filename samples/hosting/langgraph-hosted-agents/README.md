@@ -289,5 +289,8 @@ Once deployed, learn more about how to manage deployed agents in the
 
 ## Tracing
 
+The samples emit OpenTelemetry GenAI semantic-convention spans for agent,
+model, and tool calls.
+
 Tracing is enabled by default for Foundry hosted agents when the Foundry project
 is [connected to Application Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project).
