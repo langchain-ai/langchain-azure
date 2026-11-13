@@ -358,12 +358,25 @@ class ResponsesHostServer:
 
     Keyword Args:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
-            to (e.g. a multi-protocol mixin). In this mode the host-level
-            kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself. Response branching requires
-            ``app=None``.
-        options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            to (e.g. a multi-protocol mixin). When provided, ``app`` retains
+            its existing SDK configuration: host-level kwargs (``store``,
+            ``prefix``, ``applicationinsights_connection_string``, and
+            ``graceful_shutdown_timeout``) are ignored, and this wrapper
+            neither reconfigures ``app`` with ``options`` nor reads ``app``'s
+            effective options. Pass the same :class:`ResponsesServerOptions`
+            to both ``app`` and ``options`` so SDK behavior and
+            ``foundry.agent.steerable_conversation`` response metadata agree;
+            doing so does not restore the constructor check that
+            ``resilient_background=True`` has a LangGraph checkpointer
+            (skipped whenever ``app`` is provided, though durable background
+            recovery still requires one on ``graph``). Response branching
+            requires ``app=None``.
+        options: Optional :class:`ResponsesServerOptions`. Forwarded to the
+            internal :class:`ResponsesAgentServerHost` when ``app=None``, and
+            read independently by this wrapper for ``app=None`` constructor
+            validation and ``foundry.agent.steerable_conversation`` response
+            metadata. When attaching to an existing ``app``, pass the same
+            ``options`` configured on ``app``.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -389,11 +402,12 @@ class ResponsesHostServer:
 
     Raises:
         ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs. Also raised if response branching is
-            enabled without the required async checkpoint implementations,
-            with steering enabled, or with an external ``app``.
+            ``messages`` field, or if ``app=None`` and
+            ``resilient_background=True`` is configured without a LangGraph
+            checkpointer. Override this class to host custom-state graphs.
+            Also raised if response branching is enabled without the required
+            async checkpoint implementations, with steering enabled, or with
+            an external ``app``.
     """
 
     def __init__(
