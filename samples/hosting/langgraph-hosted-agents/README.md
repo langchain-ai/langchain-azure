@@ -297,8 +297,9 @@ model, and tool calls. Most call
 [`enable_auto_tracing()`](../../../libs/azure-ai/langchain_azure_ai/callbacks/tracers/auto_instrument.py)
 to attach `AzureAIOpenTelemetryTracer`. The two resilient samples,
 [Responses](responses/10_resilient/) and
-[Invocations](invocations/04_resilient/), use Agent Server's built-in Microsoft
-OpenTelemetry instrumentation instead. Internal graph nodes may be omitted.
+[Invocations](invocations/04_resilient/), use the built-in Microsoft OpenTelemetry
+instrumentation in Agent Server (`azure-ai-agentserver-core`) instead. Internal
+graph nodes may be omitted.
 
 Tracing is enabled by default for Foundry hosted agents when the Foundry project
 is [connected to Application Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project).
