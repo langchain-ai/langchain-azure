@@ -103,10 +103,10 @@ class TestGetV2ToolDefinitions:
 class TestDeclarativeV2Helpers:
     """Tests for helper functions in declarative_v2."""
 
-    def test_function_call_to_ai_message(self) -> None:
+    def test_function_calls_to_ai_message(self) -> None:
         """Test converting a FunctionToolCallItemResource to AIMessage."""
         from langchain_azure_ai.agents._v2.base import (
-            _function_call_to_ai_message,
+            _function_calls_to_ai_message,
         )
 
         mock_fc = MagicMock()
@@ -114,7 +114,7 @@ class TestDeclarativeV2Helpers:
         mock_fc.name = "my_func"
         mock_fc.arguments = '{"x": 42}'
 
-        msg = _function_call_to_ai_message(mock_fc)
+        msg = _function_calls_to_ai_message([mock_fc])
         assert isinstance(msg, AIMessage)
         assert msg.content == ""
         assert len(msg.tool_calls) == 1
@@ -170,10 +170,10 @@ class TestDeclarativeV2Helpers:
         with pytest.raises(ValueError, match="Unsupported block type"):
             _content_from_human_message(msg)
 
-    def test_mcp_approval_to_ai_message(self) -> None:
+    def test_mcp_approvals_to_ai_message(self) -> None:
         """Test converting an MCPApprovalRequestItemResource to AIMessage."""
         from langchain_azure_ai.agents._v2.base import (
-            _mcp_approval_to_ai_message,
+            _mcp_approvals_to_ai_message,
         )
 
         mock_ar = MagicMock()
@@ -182,7 +182,7 @@ class TestDeclarativeV2Helpers:
         mock_ar.name = "read_file"
         mock_ar.arguments = '{"path": "/README.md"}'
 
-        msg = _mcp_approval_to_ai_message(mock_ar)
+        msg = _mcp_approvals_to_ai_message([mock_ar])
         assert isinstance(msg, AIMessage)
         assert msg.content == ""
         assert len(msg.tool_calls) == 1
@@ -585,6 +585,95 @@ class TestPromptBasedAgentModelV2:
         # Verify the model tracks pending approvals
         assert len(model.pending_mcp_approvals) == 1
         assert len(model.pending_function_calls) == 0
+
+    def test_multiple_function_calls_response(self) -> None:
+        """Test that all function calls are returned in one AIMessage."""
+        from langchain_azure_ai.agents._v2.base import (
+            _AzureAIAgentApiProxyModel,
+        )
+
+        mock_fc1 = MagicMock()
+        mock_fc1.type = "function_call"
+        mock_fc1.call_id = "call_1"
+        mock_fc1.name = "tool_a"
+        mock_fc1.arguments = '{"x": 1}'
+
+        mock_fc2 = MagicMock()
+        mock_fc2.type = "function_call"
+        mock_fc2.call_id = "call_2"
+        mock_fc2.name = "tool_b"
+        mock_fc2.arguments = '{"y": 2}'
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_multi_fc"
+        mock_response.status = "completed"
+        mock_response.output = [mock_fc1, mock_fc2]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="do both",
+        )
+        result = model.invoke([HumanMessage(content="do both")])
+        assert isinstance(result, AIMessage)
+        assert [tc["id"] for tc in result.tool_calls] == ["call_1", "call_2"]
+        assert [tc["name"] for tc in result.tool_calls] == ["tool_a", "tool_b"]
+        assert [tc["args"] for tc in result.tool_calls] == [{"x": 1}, {"y": 2}]
+        assert model.pending_function_calls == [mock_fc1, mock_fc2]
+
+    def test_multiple_mcp_approval_requests_response(self) -> None:
+        """Test that all MCP approval requests are returned in one AIMessage."""
+        from langchain_azure_ai.agents._v2.base import (
+            _AzureAIAgentApiProxyModel,
+        )
+
+        mock_ar1 = MagicMock()
+        mock_ar1.type = "mcp_approval_request"
+        mock_ar1.id = "approval_req_1"
+        mock_ar1.server_label = "api-specs"
+        mock_ar1.name = "read_file"
+        mock_ar1.arguments = '{"path": "/README.md"}'
+
+        mock_ar2 = MagicMock()
+        mock_ar2.type = "mcp_approval_request"
+        mock_ar2.id = "approval_req_2"
+        mock_ar2.server_label = "api-specs"
+        mock_ar2.name = "list_files"
+        mock_ar2.arguments = "{}"
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_multi_ar"
+        mock_response.status = "completed"
+        mock_response.output = [mock_ar1, mock_ar2]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="summarize specs",
+        )
+        result = model.invoke([HumanMessage(content="summarize specs")])
+        assert isinstance(result, AIMessage)
+        assert [tc["id"] for tc in result.tool_calls] == [
+            "approval_req_1",
+            "approval_req_2",
+        ]
+        assert [tc["args"]["name"] for tc in result.tool_calls] == [
+            "read_file",
+            "list_files",
+        ]
+        assert model.pending_mcp_approvals == [mock_ar1, mock_ar2]
 
 
 # ---------------------------------------------------------------------------
@@ -2066,6 +2155,93 @@ class TestResponsesAgentNode:
         # so the resolution is persisted in the conversation history.
         assert call_kwargs["conversation"] == "conv_mcp"
         assert "previous_response_id" not in call_kwargs
+
+    def test_func_submits_all_function_call_outputs(self) -> None:
+        """Test _func submits every ToolMessage answering the last AIMessage."""
+        node = self._make_node()
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock(spec=OpenAI)
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_tool"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Sunny, 10:00"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = self._make_response(mock_response)
+
+        state = {
+            "messages": [
+                HumanMessage(content="weather?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "call_old", "name": "get_weather", "args": {}}],
+                ),
+                ToolMessage(content="rainy", tool_call_id="call_old"),
+                AIMessage(content="It's rainy."),
+                HumanMessage(content="weather and time?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"id": "call_a", "name": "get_weather", "args": {}},
+                        {"id": "call_b", "name": "get_time", "args": {}},
+                    ],
+                ),
+                ToolMessage(content="sunny", tool_call_id="call_a"),
+                ToolMessage(content="10:00", tool_call_id="call_b"),
+            ],
+            "azure_ai_agents_conversation_id": "conv_123",
+            "azure_ai_agents_previous_response_id": "resp_prev",
+            "azure_ai_agents_pending_type": "function_call",
+        }
+        node._func(state, config, store=None)
+
+        mock_openai.responses.create.assert_called_once()
+        input_items = mock_openai.responses.create.call_args.kwargs["input"]
+        assert input_items == [
+            {"call_id": "call_a", "output": "sunny", "type": "function_call_output"},
+            {"call_id": "call_b", "output": "10:00", "type": "function_call_output"},
+        ]
+
+    def test_func_submits_all_mcp_approval_responses(self) -> None:
+        """Test _func submits a response for every pending MCP approval."""
+        node = self._make_node()
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock(spec=OpenAI)
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_approval"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Denied"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = self._make_response(mock_response)
+
+        state = {
+            "messages": [
+                ToolMessage(content='{"approve": false}', tool_call_id="approval_1"),
+                ToolMessage(content='{"approve": false}', tool_call_id="approval_2"),
+            ],
+            "azure_ai_agents_conversation_id": "conv_mcp",
+            "azure_ai_agents_previous_response_id": "resp_mcp_prev",
+            "azure_ai_agents_pending_type": "mcp_approval",
+        }
+        node._func(state, config, store=None)
+
+        mock_openai.responses.create.assert_called_once()
+        input_items = mock_openai.responses.create.call_args.kwargs["input"]
+        assert [item["approval_request_id"] for item in input_items] == [
+            "approval_1",
+            "approval_2",
+        ]
+        assert all(item["type"] == "mcp_approval_response" for item in input_items)
+        assert all(item["approve"] is False for item in input_items)
 
     def test_func_tool_message_no_pending_raises(self) -> None:
         """Test that ToolMessage without pending calls raises RuntimeError."""
