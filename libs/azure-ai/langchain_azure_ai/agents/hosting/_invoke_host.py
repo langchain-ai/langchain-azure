@@ -759,7 +759,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             }
         }
 
-    @deprecated("1.3.1", alternative="build_runnable_config")
+    @deprecated("1.3.2", alternative="build_runnable_config")
     def build_task_runnable_config(
         self,
         session_id: str,
