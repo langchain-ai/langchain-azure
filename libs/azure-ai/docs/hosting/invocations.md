@@ -77,8 +77,8 @@ methods are asynchronous.
 | --- | --- |
 | `async parse_request(request: Request) -> tuple[str \| list[dict[str, Any]], bool]` | Return `(message, stream)`. The default message is text or a list of HITL reply items. |
 | `async parse_execution_options(request: Request, *, stream: bool) -> tuple[bool, str \| None]` | Return `(background, previous_invocation_id)`. Override this alongside `parse_request` if a custom request layout moves these controls. Parsing methods raise `ValueError` for invalid input, which becomes HTTP 400. |
-| `build_runnable_config(request: Request) -> RunnableConfig` | Configure direct and task execution. The default derives a user-scoped graph thread and supplies `invocation_context` and `invocation_cancellation_signal` for tasks. |
-| `build_task_runnable_config(session_id: str, context: TaskContext[dict[str, Any]]) -> RunnableConfig` | Deprecated compatibility hook. Existing overrides retain precedence for task execution; use `build_runnable_config` for new customizations. |
+| `build_runnable_config(request: Request) -> RunnableConfig` | Configure direct execution. The default derives a user-scoped graph thread from the public session. |
+| `build_task_runnable_config(session_id: str, context: TaskContext[dict[str, Any]]) -> RunnableConfig` | Configure task execution, including foreground requests when either server option is enabled. The default uses `context.task_id` for the graph thread and supplies `invocation_context` and `invocation_cancellation_signal`. |
 | `build_input(message: str) -> GraphInputT` | Convert text to runnable input. The default creates a `messages` dictionary. Structured HITL replies are handled separately by the host. |
 | `parse_output(output: GraphOutputT) -> str` | Convert a non-streaming graph result to the `response` string, using `output_parser` when supplied. SSE tokens use the graph stream instead. |
 
@@ -87,23 +87,10 @@ Import `Request` from `starlette.requests`, `RunnableConfig` from
 and `Any` from `typing`. `GraphInputT` and `GraphOutputT` stand for the input and
 output types chosen for the host.
 
-For config changes in any execution mode, override `build_runnable_config`, call
-`super().build_runnable_config(request)`, and preserve its thread and task context
-entries. The argument is always a `Request`. For task execution, including
-foreground requests when either server option is enabled, the host reconstructs
-it from persisted task input. The invocation ID is in
-`request.state.invocation_id`. The public session ID is available through
-`request.query_params["agent_session_id"]` and `request.state.session_id`; user
-and call IDs are in `request.state.user_id` and `request.state.call_id`. The task
-context is in `request.state.invocation_context`. Original HTTP headers, body,
-and arbitrary request state are not reconstructed, including during recovery.
-
-Existing `build_task_runnable_config` overrides keep their original arguments
-and behavior. If both hooks are overridden, task execution calls only the legacy
-hook; its `super()` returns default task configuration without invoking the new
-override. To migrate, move the customization into `build_runnable_config` and
-remove the old override. The constructor validates the graph schema before any
-input conversion runs.
+For config changes, call the corresponding method on `super()` and preserve its
+thread and task context entries. If customization must work in both execution
+paths, override both config methods. The constructor validates the graph schema
+before any input conversion runs.
 
 ## 2. Calling modes and input/output
 

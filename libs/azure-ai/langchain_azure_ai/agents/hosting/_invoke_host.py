@@ -42,7 +42,6 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, cast
-from urllib.parse import urlencode
 
 try:
     from azure.ai.agentserver.core import (
@@ -88,7 +87,7 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import deprecated, experimental
+from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -420,27 +419,14 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         output_parser: Optional callable that converts the runnable result
             into response text for non-streaming requests. When omitted, the
             default parser reads the last AI message from a ``messages`` state.
-        options: Optional :class:`ResponsesServerOptions`. Only
-            ``resilient_background`` and ``steerable_conversations`` are read
-            by this host (configuring durable invocation recovery and
-            in-flight conversation steering respectively). The object is not
-            forwarded to :class:`InvocationAgentServerHost`, and all other
-            :class:`ResponsesServerOptions` fields (such as
-            ``sse_keep_alive_interval_seconds`` and
-            ``shutdown_grace_period_seconds``) have no effect here. Enabling
-            either flag switches invocation execution (including foreground
-            JSON and SSE requests) to the task-backed path. Both paths use
-            :meth:`build_runnable_config`, unless a legacy override of
-            :meth:`build_task_runnable_config` takes precedence for task
-            execution. ``background=True`` requests still
-            require ``resilient_background=True``.
+        options: Optional :class:`ResponsesServerOptions`. The
+            ``resilient_background`` and ``steerable_conversations`` values
+            configure durable invocation recovery and in-flight conversation
+            steering respectively.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). In this mode the
-            host-level kwargs (``applicationinsights_connection_string`` and
-            ``graceful_shutdown_timeout``) are ignored — the caller is
-            expected to have configured them on ``app`` itself — while
-            ``options`` is still read by this host to configure task-backed
-            invocation execution.
+            host-level kwargs are ignored — the caller is expected to
+            have configured them on ``app`` itself.
         applicationinsights_connection_string: Forwarded to
             :class:`AgentServerHost`.
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
@@ -710,44 +696,24 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return background, previous_invocation_id
 
     def build_runnable_config(self, request: Request) -> RunnableConfig:
-        """Build a ``RunnableConfig`` for an invocation attempt.
+        """Build a ``RunnableConfig`` for a direct invocation.
 
-        Override this method to customize direct and task-backed execution,
-        including foreground JSON and SSE, background work, and active
-        recovered attempts. Existing overrides of the deprecated
-        :meth:`build_task_runnable_config` take precedence for task execution.
+        Called for foreground JSON and SSE requests when neither
+        ``options.resilient_background`` nor
+        ``options.steerable_conversations`` is enabled. Task-backed execution
+        uses :meth:`build_task_runnable_config` instead and does not call
+        this method.
 
-        The default uses a user-scoped internal session ID as
-        ``configurable.thread_id``. Task execution also supplies the current
-        ``invocation_context`` and ``invocation_cancellation_signal`` under
-        ``configurable``. These are execution-scoped, not checkpointed graph
-        state. Call ``super().build_runnable_config(request)`` and preserve
-        these entries when adding callbacks, metadata, or other configuration.
-
-        Return a mutable config mapping. When recovering from a saved
-        checkpoint, the host updates ``configurable`` in place with the
-        persisted ``thread_id``, ``checkpoint_id``, and ``checkpoint_ns``
-        after this method returns.
+        Sets ``configurable.thread_id`` from a user-scoped internal form of
+        ``request.state.session_id`` so checkpointed conversations cannot
+        collide across users that choose the same public session ID.
 
         Args:
-            request: The Starlette request. Task-backed attempts receive a
-                reconstructed request with persisted invocation, session,
-                user, and call identity in ``request.state`` and the task context in
-                ``request.state.invocation_context``. Original HTTP headers,
-                body, and arbitrary request state are not reconstructed.
+            request: The original Starlette request.
 
         Returns:
-            A mutable ``RunnableConfig`` dict.
+            A ``RunnableConfig`` dict.
         """
-        context = getattr(request.state, "invocation_context", None)
-        if isinstance(context, TaskContext):
-            return {
-                "configurable": {
-                    "thread_id": context.task_id,
-                    "invocation_context": context,
-                    "invocation_cancellation_signal": context.cancel,
-                }
-            }
         session_id = getattr(request.state, "session_id", None)
         public_session_id = session_id if isinstance(session_id, str) else "default"
         return {
@@ -759,39 +725,25 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             }
         }
 
-    @deprecated("1.3.2", alternative="build_runnable_config")
     def build_task_runnable_config(
         self,
         session_id: str,
         context: TaskContext[dict[str, Any]],
     ) -> RunnableConfig:
-        """Build task configuration for a legacy subclass override.
+        """Build config for a task-backed invocation attempt.
 
-        Deprecated: override :meth:`build_runnable_config` instead to customize
-        all execution modes with one method. Existing overrides of this method
-        remain active for task-backed execution whenever
-        ``options.resilient_background`` or
-        ``options.steerable_conversations`` is ``True``, including foreground
-        JSON and SSE requests as well as background and active recovered
-        attempts. If both methods are overridden, this method takes precedence
-        for task execution. Calling ``super()`` here returns the default task
-        config without calling a subclass's :meth:`build_runnable_config`.
+        Called when ``options.resilient_background`` or
+        ``options.steerable_conversations`` is enabled, including foreground
+        JSON and SSE, background work, and active recovered attempts. This
+        path does not call :meth:`build_runnable_config`.
 
-        By default, ``configurable.thread_id`` is set to ``context.task_id``,
-        the user-partitioned internal ID for the session; the public
-        ``session_id`` is not used in ``thread_id`` or checkpointed graph
-        state.
+        The graph thread uses ``context.task_id``, the user-partitioned
+        internal ID for the public session. The public ``session_id`` remains
+        available in the invocation envelope and task input only.
 
         The task context is transport-scoped rather than checkpointed graph
         state. Nodes can use it to inspect recovery, cancellation, steering,
-        and shutdown signals for the current attempt. Subclasses overriding
-        this method should start from
-        ``super().build_task_runnable_config(session_id, context)``, return a
-        mutable config mapping, and preserve the returned ``thread_id``,
-        ``invocation_context``, and ``invocation_cancellation_signal`` entries
-        under ``configurable`` (when resuming from a saved recovery
-        checkpoint, the host updates ``configurable`` in place with the
-        persisted ``thread_id``, ``checkpoint_id``, and ``checkpoint_ns``).
+        and shutdown signals for the current attempt.
 
         Args:
             session_id: Public session ID for the invocation; unused by the
@@ -800,7 +752,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             context: Task execution context for the current attempt.
 
         Returns:
-            A mutable ``RunnableConfig`` dict.
+            A ``RunnableConfig`` with the thread ID, task context, and
+            cancellation signal under ``configurable``.
         """
         del session_id  # retained for subclass signature compatibility
         configurable: dict[str, Any] = {
@@ -1361,32 +1314,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return result
             raise
 
-        task_config_builder = self.build_task_runnable_config
-        if (
-            getattr(task_config_builder, "__func__", task_config_builder)
-            is not InvocationsHostServer.build_task_runnable_config
-        ):
-            config = task_config_builder(session_id, context)
-        else:
-            request = Request(
-                {
-                    "type": "http",
-                    "method": "POST",
-                    "path": "/invocations",
-                    "query_string": urlencode({"agent_session_id": session_id}).encode(
-                        "ascii"
-                    ),
-                    "headers": [],
-                    "state": {
-                        "invocation_id": invocation_id,
-                        "session_id": session_id,
-                        "user_id": task_input.get("user_id") or "",
-                        "call_id": task_input.get("call_id") or "",
-                        "invocation_context": context,
-                    },
-                }
-            )
-            config = self.build_runnable_config(request)
+        config = self.build_task_runnable_config(session_id, context)
         recovery_checkpoint = (
             _checkpoint_from_recovery_state(recovery_state)
             if context.entry_mode == "recovered"
