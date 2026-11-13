@@ -134,8 +134,11 @@ azd provision
 ```
 
 This creates a new resource group containing a Foundry account, a
-Foundry project, the requested model deployment, an Application
-Insights instance, and a container registry for the agent image.
+Foundry project, the requested model deployment, and supporting resources.
+For both new and existing projects, [connect or verify Application
+Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
+before deploying. For local tracing, follow the sample's connection-string
+configuration in [Tracing](#tracing).
 
 #### Run the agent host
 
@@ -279,7 +282,7 @@ hosted-agent runtime.
 >   resource in their `agent.manifest.yaml` (e.g.
 >   [responses/04_foundry_toolbox](responses/04_foundry_toolbox/)).
 >
-> Each sample's `main.py` reads these names directly, so no code
+> The samples and hosting SDK consume these values, so no code
 > changes are required between local-dev and deployed.
 
 For the full deployment guide, see the [official deployment
@@ -289,50 +292,48 @@ Once deployed, learn more about how to manage deployed agents in the
 
 ## Tracing
 
-Each sample emits OpenTelemetry GenAI semantic-convention spans for every
-LangGraph node, model call, and tool call via
-[`AzureAIOpenTelemetryTracer`](../../../libs/azure-ai/langchain_azure_ai/callbacks/tracers/inference_tracing.py).
-The destination is picked **purely from environment variables** — no code
-edits needed. First matching rule wins:
+The samples enable OpenTelemetry tracing for agent, model, and tool calls.
+Most call
+[`enable_auto_tracing()`](../../../libs/azure-ai/langchain_azure_ai/callbacks/tracers/auto_instrument.py)
+to attach `AzureAIOpenTelemetryTracer`. The two resilient samples,
+[Responses](responses/10_resilient/) and
+[Invocations](invocations/04_resilient/), use Agent Server's built-in Microsoft
+OpenTelemetry instrumentation instead. Internal graph nodes may be omitted.
 
-| # | Env var(s) set | Where spans go |
-|---|----------------|----------------|
-| 0 | `OTEL_SDK_DISABLED=true` | nowhere — OTel SDK no-ops |
-| 1 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) | OTLP/HTTP collector at that URL |
-| 2 | `APPLICATION_INSIGHTS_CONNECTION_STRING` | Azure Monitor directly |
-| 3 | `FOUNDRY_PROJECT_ENDPOINT` (always set for the samples) | Foundry project's managed App Insights (connection string auto-resolved over the Foundry control plane; needs `az login` + Reader on the project) |
-| 4 | none of the above | tracer attached but no exporter |
+For traces in Foundry, [connect Application Insights to the
+project](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
+and grant the caller permission to query traces. Verify this after provisioning
+a new project or selecting an existing one, before deploying the agent.
 
-Set `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` to also record
-message content, tool arguments, and tool results on the spans (default:
-redacted).
+The connection-string variable depends on which instrumentation the sample uses:
 
-The selection logic in every sample's `main()`:
+| Destination | Samples calling `enable_auto_tracing()` | The two resilient samples |
+| --- | --- | --- |
+| OTLP/HTTP collector | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` | Same variables |
+| Azure Monitor directly | `APPLICATION_INSIGHTS_CONNECTION_STRING` | `APPLICATIONINSIGHTS_CONNECTION_STRING` |
+| Project-connected App Insights | Auto-resolved from `FOUNDRY_PROJECT_ENDPOINT` when no direct connection string is set; requires project read access | Foundry injects the connection string when hosted; set it explicitly for local runs |
 
-```python
-if os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(
-    "OTEL_EXPORTER_OTLP_ENDPOINT"
-):
-    provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(provider)
-    enable_auto_tracing()
-else:
-    # auto_configure_azure_monitor resolves App Insights from
-    # APPLICATION_INSIGHTS_CONNECTION_STRING first, then falls back to
-    # FOUNDRY_PROJECT_ENDPOINT (project-managed App Insights).
-    enable_auto_tracing(auto_configure_azure_monitor=True)
-```
+In samples calling `enable_auto_tracing()`, an OTLP endpoint selects the
+OTLP exporter instead of automatically configuring Azure Monitor. Agent Server
+can export to both destinations when both are configured. These settings choose
+where recorded spans are sent; they do not disable tracing.
+
+The samples retain the SDK's default sampling policy. Sampling may omit some
+spans while tracing remains enabled. Set
+`OTEL_SDK_DISABLED=true` to disable tracing; no sample sets it by default.
+
+Content capture is separate from tracing. For `AzureAIOpenTelemetryTracer`, use
+`AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED`; for Agent Server's Microsoft
+instrumentation, use `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`.
+See each sample for its content-capture defaults.
 
 ### Quick recipes
 
-**Foundry project's managed App Insights** (default for the samples,
-because `FOUNDRY_PROJECT_ENDPOINT` is required for the chat model
-anyway):
+**Project-connected App Insights for samples calling `enable_auto_tracing()`**:
 
 ```bash
 az login
-# FOUNDRY_PROJECT_ENDPOINT already set in .env — nothing else to do.
+# Set FOUNDRY_PROJECT_ENDPOINT in .env and connect App Insights to that project.
 python main.py
 ```
 
@@ -343,6 +344,9 @@ python main.py
 export APPLICATION_INSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
 python main.py
 ```
+
+For either resilient sample, use `APPLICATIONINSIGHTS_CONNECTION_STRING`
+(without the underscore between `APPLICATION` and `INSIGHTS`) instead.
 
 **Local OTel Collector**:
 
@@ -359,9 +363,24 @@ export OTEL_SDK_DISABLED=true
 python main.py
 ```
 
-Inside the **Foundry hosted-agent sandbox**, `azure-ai-agentserver-core`
-has already configured the `TracerProvider` + Azure Monitor exporter for
-its per-request server span; the langchain GenAI spans then nest under
-that existing span. `enable_auto_tracing(auto_configure_azure_monitor=True)`
-detects the existing provider and skips reconfiguring it, so the same
-branch still works.
+After invoking a deployed agent, check **Build > Agents > Traces** in Foundry.
+Open the new trace and check its agent, model, and tool spans. For a resilient
+sample, approve the booking and confirm that the resumed turn includes the
+`book_trip` tool call. Allow a few minutes for ingestion.
+
+The local exporter regression check exercises every hosted sample through
+HTTP with real Azure Monitor and OTLP exporters. It checks model spans, tool
+spans for tool-using scenarios, and approval/resume spans where applicable.
+The test explicitly sets `OTEL_TRACES_SAMPLER=always_on` to check all expected
+spans; it does not verify full retention under the default sampling policy:
+
+```bash
+python -m pip install -r samples/hosting/tests/requirements.txt
+python -m pytest samples/hosting/tests/test_tracing.py -q
+```
+
+Run these commands from the repository root. See the
+[test guide](../tests/README.md) for coverage and adding new samples. The test
+substitutes remote models, MCP/Toolbox services, and cloud storage and receives
+exports locally; Azure ingestion and Foundry visibility require the
+deployed-agent check above.

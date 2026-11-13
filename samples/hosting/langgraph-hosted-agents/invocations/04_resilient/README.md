@@ -58,6 +58,9 @@ continue the latest completed checkpoint in that session.
 - Azure CLI authenticated with `az login`
 - A Microsoft Foundry project and model deployment accessible through
   `DefaultAzureCredential`
+- An Application Insights resource [connected to the Foundry
+  project](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project),
+  with permission to query its traces
 
 See the [parent sample guide](../../README.md#running-the-agent-host-locally)
 for general Foundry setup options.
@@ -69,7 +72,14 @@ Create a `.env` file in this directory:
 ```dotenv
 FOUNDRY_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<project>"
 AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
+APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
 ```
+
+Tracing is enabled by default through Agent Server. For local Azure Monitor
+tracing, copy the connection string from the Application Insights resource
+connected to your project. Foundry injects `APPLICATIONINSIGHTS_CONNECTION_STRING`
+when the agent is hosted. See the [shared tracing guide](../../README.md#tracing)
+for OTLP collector setup. Set `OTEL_SDK_DISABLED=true` to disable tracing.
 
 ### Start the host
 
@@ -269,14 +279,16 @@ and use durable stores for any additional application state.
 
 ## Configuration
 
-| Variable                         | Default              | Purpose                                                                                   |
-| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
-| `PORT`                           | `8088`               | HTTP port for the agent host.                                                             |
-| `AGENTSERVER_STATE_ROOT`         | `~/.agentserver`     | Local durable task, invocation, and protocol-event state. Reuse it across local restarts. |
-| `CHECKPOINT_DB`                  | `checkpoints.sqlite` | Local LangGraph checkpoint database. Ignored when hosted on Foundry.                      |
-| `STEERABLE_CONVERSATIONS`        | `false`              | Enable server-side active-turn steering support.                                          |
-| `FOUNDRY_PROJECT_ENDPOINT`       | None                 | Required Foundry project endpoint.                                                        |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | None                 | Required Foundry model deployment name.                                                   |
+| Variable                                | Default              | Purpose                                                                                    |
+| --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------ |
+| `PORT`                                  | `8088`               | HTTP port for the agent host.                                                              |
+| `AGENTSERVER_STATE_ROOT`                | `~/.agentserver`     | Local durable task, invocation, and protocol-event state. Reuse it across local restarts.  |
+| `CHECKPOINT_DB`                         | `checkpoints.sqlite` | Local LangGraph checkpoint database. Ignored when hosted on Foundry.                       |
+| `STEERABLE_CONVERSATIONS`               | `false`              | Enable server-side active-turn steering support.                                           |
+| `FOUNDRY_PROJECT_ENDPOINT`              | None                 | Required Foundry project endpoint.                                                         |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME`        | None                 | Required Foundry model deployment name.                                                    |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | None                 | Application Insights connection string for local tracing. Injected by Foundry when hosted. |
+| `OTEL_SDK_DISABLED`                     | Not set              | Set to `true` to disable tracing.                                                          |
 
 Hosted checkpoint items use Foundry State Store's default 30-day sliding TTL.
 Local checkpoints remain in the configured SQLite database.
@@ -325,16 +337,18 @@ azd env set --file .\.env
 ```
 
 To create a new Foundry project and the model declared in `azure.yaml`, provision
-them before deploying:
+them:
 
 ```powershell
 azd provision
-azd deploy
 ```
 
-If `.env` targets an existing Foundry project, do not run `azd provision`.
-The project and selected model deployment must already exist; deploy the agents
-directly:
+If `.env` targets an existing Foundry project, skip `azd provision`.
+The project and selected model deployment must already exist.
+
+For both new and existing projects, [connect or verify Application
+Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
+and confirm you have permission to query traces before deploying:
 
 ```powershell
 azd deploy
@@ -346,3 +360,14 @@ Run CUI against a deployed Microsoft Foundry agent with Azure authentication:
 cd client
 uv run python client.py --url "https://<account>.services.ai.azure.com/api/projects/<project>/agents/<agent-name>/endpoint/protocols/invocations?api-version=v1" --auth
 ```
+
+### Verify tracing
+
+After invoking the deployed agent, open **Build > Agents > Traces** in the
+Foundry project and open the new trace. Confirm it includes model and search
+tool spans. Approve the booking and check that the resumed turn includes the
+`book_trip` tool span and final model call. Allow a few minutes for ingestion.
+You can also inspect the connected Application Insights resource
+under **Investigate > Transaction search**. If traces are missing, check the
+project's Application Insights connection and that `OTEL_SDK_DISABLED` is not
+set to `true`.
