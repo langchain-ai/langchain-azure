@@ -28,11 +28,7 @@ For using tools, including Azure AI Document Intelligence, Azure AI Text Analyti
 pip install -U langchain-azure-ai[tools]
 ```
 
-For using tracing capabilities with OpenTelemetry, you need to add the extras `opentelemetry`:
-
-```bash
-pip install -U langchain-azure-ai[opentelemetry]
-```
+OpenTelemetry tracing dependencies are included in the default installation.
 
 For hosting LangGraph agents with the Responses or Invocations protocol,
 install the `hosting` extra:
@@ -137,10 +133,10 @@ document_vectors = embeddings.embed_documents(
 
 Create a managed Foundry agent and add it as a LangGraph node.
 
-For local development, install the required extra and sign in:
+For local development, install the package and sign in:
 
 ```bash
-pip install -U "langchain-azure-ai[opentelemetry]"
+pip install -U langchain-azure-ai
 az login
 ```
 
@@ -352,13 +348,7 @@ rather than a checkpointer for that purpose.
 
 ### Tracing with Azure Application Insights
 
-To trace your LangChain / LangGraph applications with Azure Application Insights, first install the OpenTelemetry extras:
-
-```bash
-pip install -U langchain-azure-ai[opentelemetry]
-```
-
-Then enable auto tracing in your application. Every `BaseCallbackManager` and LangGraph callback manager created after this call will automatically include the Azure tracer:
+To trace your LangChain / LangGraph applications with Azure Application Insights, enable auto tracing in your application. Every `BaseCallbackManager` and LangGraph callback manager created after this call will automatically include the Azure tracer:
 
 ```python
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
