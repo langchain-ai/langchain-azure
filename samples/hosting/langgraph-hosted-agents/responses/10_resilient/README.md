@@ -355,14 +355,3 @@ Run CUI against a deployed Microsoft Foundry agent with Azure authentication:
 cd client
 uv run python client.py --url "https://<account>.services.ai.azure.com/api/projects/<project>/agents/<agent-name>/endpoint/protocols/openai/responses?api-version=v1" --auth
 ```
-
-### Verify tracing
-
-After invoking the deployed agent, open **Build > Agents > Traces** in the
-Foundry project and open the new trace. Confirm it includes model and search
-tool spans. Approve the booking and check that the resumed turn includes the
-`book_trip` tool span and final model call. Allow a few minutes for ingestion.
-You can also inspect the connected Application Insights resource
-under **Investigate > Transaction search**. If traces are missing, check the
-project's Application Insights connection and that `OTEL_SDK_DISABLED` is not
-set to `true`.
