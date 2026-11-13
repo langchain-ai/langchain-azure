@@ -7,8 +7,9 @@ model call, and tool call.
 
 The agent itself is intentionally trivial (one `create_agent` with no
 custom tools) so the focus is on **how to wire observability** rather
-than agent behavior. This sample makes the tracing wiring discoverable
-as a standalone, deployable scenario.
+than agent behavior. The full tracing wiring is also documented in the
+parent README's [Tracing](../../README.md#tracing) section; this sample
+makes it discoverable as a standalone, deployable scenario.
 
 ## How It Works
 

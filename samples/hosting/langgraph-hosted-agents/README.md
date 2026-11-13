@@ -71,7 +71,9 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 13 | [Branching](responses/13_branching/) | Remember a number to demonstrate branching, rewind, and regeneration with `previous_response_id`. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
-> folder structure and naming style.
+> folder structure and naming style. Observability coverage for the
+> existing samples is documented in the [Tracing](#tracing) section
+> below.
 
 ### Invocations protocol
 
@@ -135,7 +137,8 @@ This creates a new resource group containing a Foundry account, a
 Foundry project, the requested model deployment, and supporting resources.
 For both new and existing projects, [connect or verify Application
 Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
-before deploying.
+before deploying. For local tracing, follow the sample's connection-string
+configuration in [Tracing](#tracing).
 
 #### Run the agent host
 
@@ -290,7 +293,68 @@ Once deployed, learn more about how to manage deployed agents in the
 ## Tracing
 
 The samples emit OpenTelemetry GenAI semantic-convention spans for agent,
-model, and tool calls.
+model, and tool calls. Most call
+[`enable_auto_tracing()`](../../../libs/azure-ai/langchain_azure_ai/callbacks/tracers/auto_instrument.py)
+to attach `AzureAIOpenTelemetryTracer`. The two resilient samples,
+[Responses](responses/10_resilient/) and
+[Invocations](invocations/04_resilient/), use Agent Server's built-in Microsoft
+OpenTelemetry instrumentation instead. Internal graph nodes may be omitted.
 
 Tracing is enabled by default for Foundry hosted agents when the Foundry project
 is [connected to Application Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project).
+
+The connection-string variable depends on which instrumentation the sample uses:
+
+| Destination | Samples calling `enable_auto_tracing()` | The two resilient samples |
+| --- | --- | --- |
+| OTLP/HTTP collector | `OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` |
+| Azure Monitor directly | `APPLICATION_INSIGHTS_CONNECTION_STRING` | `APPLICATIONINSIGHTS_CONNECTION_STRING` |
+| Project-connected App Insights | Auto-resolved from `FOUNDRY_PROJECT_ENDPOINT` when no direct connection string is set; requires project read access | Foundry injects the connection string when hosted; set it explicitly for local runs |
+
+In samples calling `enable_auto_tracing()`, an OTLP endpoint selects the
+OTLP exporter instead of automatically configuring Azure Monitor. Agent Server
+can export to both destinations when both are configured. These settings choose
+where recorded spans are sent; they do not disable tracing.
+
+The samples retain the SDK's default sampling policy. Sampling may omit some
+spans while tracing remains enabled. Set
+`OTEL_SDK_DISABLED=true` to disable tracing; no sample sets it by default.
+
+Content capture is separate from tracing. For `AzureAIOpenTelemetryTracer`, use
+`AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED`; for Agent Server's Microsoft
+instrumentation, use `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`.
+See each sample for its content-capture defaults.
+
+### Quick recipes
+
+**Project-connected App Insights for samples calling `enable_auto_tracing()`**:
+
+```bash
+az login
+# Set FOUNDRY_PROJECT_ENDPOINT in .env and connect App Insights to that project.
+python main.py
+```
+
+**Direct App Insights connection string** (bypasses the Foundry resolver):
+
+```bash
+export APPLICATION_INSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
+python main.py
+```
+
+For either resilient sample, use `APPLICATIONINSIGHTS_CONNECTION_STRING`
+(without the underscore between `APPLICATION` and `INSIGHTS`) instead.
+
+**Local OTel Collector** (with an OTLP/HTTP collector listening on port 4318):
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+python main.py
+```
+
+**Off**:
+
+```bash
+export OTEL_SDK_DISABLED=true
+python main.py
+```
