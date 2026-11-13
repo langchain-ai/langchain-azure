@@ -35,6 +35,7 @@ body:
       options:
         - langchain-azure-ai
         - langchain-azure-dynamic-sessions
+        - langchain-azure-kusto
         - langchain-azure-postgresql
         - langchain-azure-storage
         - langchain-sqlserver
@@ -67,6 +68,8 @@ body:
         - Tracer (AzureAIOpenTelemetryTracer)
         - Chat Message History (CosmosDBChatMessageHistory)
         - Document Loader (AzureBlobStorageLoader)
+        - Document Loader (KustoLoader)
+        - Tools (KustoToolkit)
         - Other
     validations:
       required: true
@@ -145,7 +148,7 @@ body:
 
         ```bash
         python --version
-        pip show langchain-azure-ai langchain-azure-dynamic-sessions langchain-azure-postgresql langchain-azure-storage langchain-sqlserver 2>/dev/null
+        pip show langchain-azure-ai langchain-azure-dynamic-sessions langchain-azure-kusto langchain-azure-postgresql langchain-azure-storage langchain-sqlserver 2>/dev/null
         pip freeze | grep -E "^(azure-|opentelemetry-|langchain)"
         ```
       placeholder: |
