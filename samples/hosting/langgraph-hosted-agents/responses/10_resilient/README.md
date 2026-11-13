@@ -60,8 +60,7 @@ continue the latest completed checkpoint.
 - A Microsoft Foundry project and model deployment accessible through
   `DefaultAzureCredential`
 - An Application Insights resource [connected to the Foundry
-  project](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project),
-  with permission to query its traces
+  project](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
 
 See the [parent sample guide](../../README.md#running-the-agent-host-locally)
 for general Foundry setup options.
@@ -282,8 +281,7 @@ and use durable stores for any additional application state.
 | `STEERABLE_CONVERSATIONS`               | `false`          | Advertise and enable active-turn steering.                                                 |
 | `FOUNDRY_PROJECT_ENDPOINT`              | None             | Required Foundry project endpoint.                                                         |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME`        | None             | Required Foundry model deployment name.                                                    |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | None             | Application Insights connection string for local tracing. Injected by Foundry when hosted. |
-| `OTEL_SDK_DISABLED`                     | Not set          | Set to `true` to disable tracing.                                                          |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | None             | Application Insights connection string for local tracing.                                 |
 
 Hosted checkpoint items use Foundry State Store's default 30-day sliding TTL.
 Local checkpoints remain in `checkpoints.sqlite` in the working directory.
@@ -341,9 +339,8 @@ azd provision
 If `.env` targets an existing Foundry project, skip `azd provision`.
 The project and selected model deployment must already exist.
 
-For both new and existing projects, [connect or verify Application
-Insights](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project)
-and confirm you have permission to query traces before deploying:
+Before deploying, [connect Application Insights to the Foundry
+project](https://learn.microsoft.com/azure/foundry/observability/how-to/trace-agent-setup#connect-application-insights-to-your-foundry-project):
 
 ```powershell
 azd deploy
