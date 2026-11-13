@@ -148,6 +148,10 @@ def _mcp_approval_resume_schema(
     class _McpApprovalResume(RootModel[_McpApprovalResumeValue]):
         """Resume value accepted by ``_mcp_approval_node``."""
 
+        # Strict, so a tuple or other sequence isn't coerced into a list
+        # after the echo check.
+        model_config = ConfigDict(strict=True)
+
         @model_validator(mode="before")
         @classmethod
         def _check_echo(cls, value: Any) -> Any:

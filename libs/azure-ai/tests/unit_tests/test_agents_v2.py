@@ -401,6 +401,24 @@ class TestDeclarativeV2Helpers:
                     "approve": False,
                 }
             ],
+            (),
+            (
+                {
+                    "id": "approval_req_other",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                },
+            ),
+            (
+                {
+                    "id": "approval_req_444",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                    "approve": False,
+                },
+            ),
         ],
     )
     def test_mcp_approval_node_rejects_invalid_resume_decision(
