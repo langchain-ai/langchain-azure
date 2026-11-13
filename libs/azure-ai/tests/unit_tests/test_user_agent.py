@@ -16,7 +16,7 @@ from langchain_azure_ai import _user_agent
 
 
 @pytest.fixture(autouse=True)
-def _isolate_ua_state() -> Iterator[None]:
+def _isolate_ua_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Snapshot and restore the module-level prefix registry per test.
 
     The hosting subpackage registers its prefix at import time. Since
@@ -26,6 +26,8 @@ def _isolate_ua_state() -> Iterator[None]:
     """
     saved_prefixes = dict(_user_agent._user_agent_prefixes)
     saved_detected = _user_agent._hosted_env_detected
+    # Keep prefix tests independent of the test environment's installed packages.
+    monkeypatch.setattr(_user_agent, "_FRAMEWORK_USER_AGENT", "")
     try:
         _user_agent._user_agent_prefixes.clear()
         _user_agent._hosted_env_detected = False
@@ -124,6 +126,70 @@ class TestVersionResolution:
                 # Restore the live module so subsequent tests see the real
                 # version and the shared prefix registry.
                 importlib.reload(_user_agent)
+
+
+class TestFrameworkVersions:
+    @pytest.mark.parametrize("missing", [None, "deepagents", "langgraph", "langchain"])
+    def test_installed_versions_compose_with_existing_headers(
+        self, missing: str | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        versions = {
+            "langchain": "1.2.12",
+            "langgraph": "1.2.16",
+            "deepagents": "0.7.28",
+        }
+
+        def version(package: str) -> str:
+            if package == missing:
+                raise importlib.metadata.PackageNotFoundError(package)
+            return versions[package]
+
+        with patch("importlib.metadata.version", side_effect=version) as lookup:
+            frameworks = _user_agent._get_framework_user_agent()
+        assert lookup.call_count == 3
+        expected = " ".join(
+            f"{package}/{value}"
+            for package, value in versions.items()
+            if package != missing
+        )
+        assert frameworks == expected
+        monkeypatch.setattr(_user_agent, "_FRAMEWORK_USER_AGENT", frameworks)
+        _user_agent.set_user_agent_prefix("hosting", "hosting/1.0 (features=5)")
+
+        with patch("importlib.metadata.version", side_effect=AssertionError("reread")):
+            headers = _user_agent.with_user_agent(
+                {"User-Agent": "app/1.0", "X-Test": "ok"}
+            )
+            assert _user_agent.get_user_agent() in headers["User-Agent"]
+        assert headers == {
+            "User-Agent": (
+                f"hosting/1.0 (features=5) {expected} "
+                f"{_user_agent.BASE_USER_AGENT} app/1.0"
+            ),
+            "X-Test": "ok",
+        }
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            importlib.metadata.PackageNotFoundError("missing"),
+            ValueError("bad metadata"),
+        ],
+    )
+    def test_unavailable_versions_are_omitted(self, error: Exception) -> None:
+        with patch("importlib.metadata.version", side_effect=error):
+            assert _user_agent._get_framework_user_agent() == ""
+
+    def test_opt_out_omits_framework_versions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_user_agent, "_FRAMEWORK_USER_AGENT", "deepagents/0.7.28")
+        monkeypatch.setenv(_user_agent.USER_AGENT_TELEMETRY_DISABLED_ENV_VAR, "1")
+
+        assert _user_agent.get_user_agent() == ""
+        assert _user_agent.with_user_agent({"User-Agent": "app/1.0"}) == {
+            "User-Agent": "app/1.0"
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -363,11 +429,11 @@ class TestHostingAzureHttpUserAgent:
                 sys.modules.pop("langchain_azure_ai.agents.hosting", None)
 
     def test_env_var_is_set_on_import(self) -> None:
-        """With no pre-existing env var, hosting injects its prefix."""
+        """With no pre-existing env var, hosting injects the shared UA."""
         with self._reload_hosting_with_env(None) as hosting:
+            assert os.environ["AZURE_HTTP_USER_AGENT"] == _user_agent.get_user_agent()
             assert (
-                os.environ.get("AZURE_HTTP_USER_AGENT")
-                == hosting.get_hosting_user_agent()
+                hosting.get_hosting_user_agent() in os.environ["AZURE_HTTP_USER_AGENT"]
             )
 
     def test_feature_registration_updates_managed_value(self) -> None:
@@ -379,7 +445,12 @@ class TestHostingAzureHttpUserAgent:
             assert hosting.get_hosting_features() == 0x3
             assert hosting.get_hosting_user_agent().endswith("(features=3)")
             assert _user_agent.get_user_agent().count("(features=3)") == 1
-            assert os.environ["AZURE_HTTP_USER_AGENT"].endswith("(features=3)")
+            assert "(features=3)" in os.environ["AZURE_HTTP_USER_AGENT"]
+
+    def test_import_respects_opt_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(_user_agent.USER_AGENT_TELEMETRY_DISABLED_ENV_VAR, "1")
+        with self._reload_hosting_with_env(None):
+            assert os.environ["AZURE_HTTP_USER_AGENT"] == ""
 
     def test_feature_mask_expands_beyond_sixteen_bits(self) -> None:
         with self._reload_hosting_with_env(None) as hosting:
