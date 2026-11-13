@@ -5,8 +5,10 @@ hosted using the **Responses protocol**, configured to emit
 OpenTelemetry GenAI semantic-convention spans for every LangGraph node,
 model call, and tool call.
 
-The agent uses a single `create_agent` with no custom tools so the sample
-focuses on tracing setup.
+The agent itself is intentionally trivial (one `create_agent` with no
+custom tools) so the focus is on **how to wire observability** rather
+than agent behavior. This sample makes the tracing wiring discoverable
+as a standalone, deployable scenario.
 
 ## How It Works
 
