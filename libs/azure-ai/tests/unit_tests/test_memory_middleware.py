@@ -4,7 +4,13 @@ from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from langchain_azure_ai.agents.middleware import AzureAIMemoryMiddleware
 
@@ -207,7 +213,7 @@ def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
 
 
 def _create_memory_agent(
-    responses: list[str], checkpointer: Any = None
+    responses: list[str], checkpointer: Any = None, **kwargs: Any
 ) -> tuple[Any, Mock]:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -224,6 +230,7 @@ def _create_memory_agent(
             scope="user:test",
             project_endpoint="https://test.api.azureml.ms",
             roles=["user", "assistant"],
+            **kwargs,
         )
     agent = create_agent(
         model=FakeListChatModel(responses=responses),
@@ -315,4 +322,106 @@ def test_memory_middleware_without_checkpointer_skips_passed_history() -> None:
         "reply 2",
         "user 3",
         "reply 3",
+    ]
+
+
+def test_memory_middleware_without_checkpointer_skips_passed_chat_messages() -> None:
+    """History passed back as ``ChatMessage`` shouldn't be sent again."""
+    agent, mock_client = _create_memory_agent(["reply 1", "reply 2", "reply 3"])
+
+    messages: list[Any] = []
+    for content in ["user 1", "user 2", "user 3"]:
+        result = agent.invoke(
+            {"messages": [*messages, ChatMessage(role="user", content=content)]}
+        )
+        messages = result["messages"]
+
+    assert _sent_contents(mock_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
+    ]
+
+
+def test_memory_middleware_sends_queued_turns_after_recreation() -> None:
+    """Turns queued by an earlier instance should be sent by the new one."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(
+        ["reply 1"], checkpointer, update_every_n_turns=2
+    )
+    agent.invoke({"messages": [HumanMessage(content="user 1")]}, config)
+    first_client.beta.memory_stores.begin_update_memories.assert_not_called()
+
+    agent, second_client = _create_memory_agent(
+        ["reply 2", "reply 3"], checkpointer, update_every_n_turns=2
+    )
+    agent.invoke({"messages": [HumanMessage(content="user 2")]}, config)
+    agent.invoke({"messages": [HumanMessage(content="user 3")]}, config)
+
+    assert _sent_contents(second_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
+    ]
+
+    agent, third_client = _create_memory_agent(["reply 4"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 4")]}, config)
+
+    assert _sent_contents(third_client) == ["user 4", "reply 4"]
+
+
+def test_memory_middleware_sends_failed_turns_after_recreation() -> None:
+    """Turns from a failed update should be sent by a new instance."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(["reply 1"], checkpointer)
+    first_client.beta.memory_stores.begin_update_memories.side_effect = Exception(
+        "network"
+    )
+    agent.invoke({"messages": [HumanMessage(content="user 1")]}, config)
+
+    agent, second_client = _create_memory_agent(["reply 2"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 2")]}, config)
+
+    assert _sent_contents(second_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+    ]
+
+
+def test_memory_middleware_does_not_resend_turns_sent_with_another_thread() -> None:
+    """Turns sent in a batch flushed by another thread shouldn't be sent again."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    agent, mock_client = _create_memory_agent(
+        ["reply a1", "reply b1", "reply a2", "reply b2"],
+        InMemorySaver(),
+        update_every_n_turns=2,
+    )
+
+    for content, thread_id in [("a1", "a"), ("b1", "b"), ("a2", "a"), ("b2", "b")]:
+        agent.invoke(
+            {"messages": [HumanMessage(content=content)]},
+            {"configurable": {"thread_id": thread_id}},
+        )
+
+    update_calls = mock_client.beta.memory_stores.begin_update_memories.call_args_list
+    assert [
+        [item["content"] for item in call.kwargs["items"]] for call in update_calls
+    ] == [
+        ["a1", "reply a1", "b1", "reply b1"],
+        ["a2", "reply a2", "b2", "reply b2"],
     ]
