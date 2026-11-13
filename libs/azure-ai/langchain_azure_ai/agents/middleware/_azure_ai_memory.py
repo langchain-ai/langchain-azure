@@ -3,20 +3,46 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, Optional, Sequence
+from typing import Annotated, Any, Literal, Optional, Sequence
 
 from azure.ai.projects import AIProjectClient
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain.agents.middleware import AgentMiddleware, AgentState, Runtime
+from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import BaseTool
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from openai.types.responses import EasyInputMessageParam
+from typing_extensions import NotRequired
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.utils.env import get_from_env
 
 logger = logging.getLogger(__name__)
+
+
+class _AzureAIMemoryState(AgentState[Any]):
+    """Agent state with the number of messages already sent to Azure AI Memory."""
+
+    azure_ai_memory_processed_message_count: NotRequired[
+        Annotated[int, PrivateStateAttr]
+    ]
+
+
+def _latest_turn_start(messages: Sequence[Any]) -> int:
+    """Return the index of the first message after the last completed turn.
+
+    That's right after the last AI message before the latest human message.
+    """
+    human_indexes = [
+        i for i, message in enumerate(messages) if isinstance(message, HumanMessage)
+    ]
+    if not human_indexes:
+        return 0
+    for i in range(human_indexes[-1] - 1, -1, -1):
+        if isinstance(messages[i], AIMessage):
+            return i + 1
+    return 0
 
 
 def _map_message_to_memory_item(
@@ -42,7 +68,7 @@ def _map_message_to_memory_item(
 
 
 @experimental()
-class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
+class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
     """Middleware that periodically extracts memories from turns into Azure AI Memory.
 
     This middleware collects messages from the agent's state after each turn and
@@ -51,6 +77,10 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
     configuration to control which memories are stored and how. To retrieve those
     memories back into your agent, use the :class:`AzureAIMemoryRetrieverTool`
     in your agent.
+
+    The number of messages already sent is kept in the agent state, so with a
+    checkpointer each thread only sends its new messages. Without a checkpointer,
+    each invocation sends the messages of its latest turn.
 
     Example usage:
 
@@ -81,6 +111,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
     """
 
     name: str = "azure_ai_memory"
+    state_schema = _AzureAIMemoryState
     tools: list = []
 
     def __init__(
@@ -140,7 +171,6 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
         self._update_delay = update_delay
         self._pending_turns = 0
         self._pending_items: list[EasyInputMessageParam] = []
-        self._processed_message_count = 0
         self._previous_update_id: Optional[str] = None
         self._roles = set(roles)
         self._messages_key = messages_key
@@ -171,20 +201,15 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
             **kwargs,
         )
 
-    def _collect_new_items(self, state: AgentState[Any]) -> list[EasyInputMessageParam]:
-        """Collect new user/assistant messages since the previous middleware run."""
-        messages = state.get(self._messages_key)
-        if not isinstance(messages, list):
-            return []
-
-        if self._processed_message_count > len(messages):
-            self._processed_message_count = 0
-
-        new_messages = messages[self._processed_message_count :]
-        self._processed_message_count = len(messages)
+    def _collect_new_items(
+        self, messages: list[Any], processed_message_count: Optional[int]
+    ) -> list[EasyInputMessageParam]:
+        """Collect user/assistant messages that haven't been sent yet."""
+        if processed_message_count is None or processed_message_count > len(messages):
+            processed_message_count = _latest_turn_start(messages)
 
         items: list[EasyInputMessageParam] = []
-        for message in new_messages:
+        for message in messages[processed_message_count:]:
             if not isinstance(message, BaseMessage):
                 continue
             item = _map_message_to_memory_item(message)
@@ -216,21 +241,25 @@ class AzureAIMemoryMiddleware(AgentMiddleware[AgentState[Any], Any]):
             )
 
     def after_agent(
-        self, state: AgentState[Any], runtime: Runtime[Any]
+        self, state: _AzureAIMemoryState, runtime: Runtime[Any]
     ) -> dict[str, Any] | None:
         """Queue memory updates from the latest turn and flush periodically."""
-        new_items = self._collect_new_items(state)
-        if not new_items:
+        messages = state.get(self._messages_key)
+        if not isinstance(messages, list):
             return None
 
-        self._pending_items.extend(new_items)
-        self._pending_turns += 1
-        if self._pending_turns >= self._update_every_n_turns:
-            self._flush_pending_updates()
-        return None
+        new_items = self._collect_new_items(
+            messages, state.get("azure_ai_memory_processed_message_count")
+        )
+        if new_items:
+            self._pending_items.extend(new_items)
+            self._pending_turns += 1
+            if self._pending_turns >= self._update_every_n_turns:
+                self._flush_pending_updates()
+        return {"azure_ai_memory_processed_message_count": len(messages)}
 
     async def aafter_agent(
-        self, state: AgentState[Any], runtime: Runtime[Any]
+        self, state: _AzureAIMemoryState, runtime: Runtime[Any]
     ) -> dict[str, Any] | None:
         """Async hook equivalent of :meth:`after_agent`."""
         return self.after_agent(state, runtime)

@@ -115,14 +115,25 @@ def test_memory_middleware_retries_after_failed_flush() -> None:
             update_every_n_turns=1,
         )
 
-    middleware.after_agent({"messages": [HumanMessage(content="first")]}, Mock())
+    update = middleware.after_agent(
+        {"messages": [HumanMessage(content="first")]}, Mock()
+    )
     first_call = mock_client.beta.memory_stores.begin_update_memories.call_args_list[0][
         1
     ]
     assert [item["content"] for item in first_call["items"]] == ["first"]
 
     middleware.after_agent(
-        {"messages": [HumanMessage(content="first"), HumanMessage(content="second")]},
+        cast(
+            Any,
+            {
+                **(update or {}),
+                "messages": [
+                    HumanMessage(content="first"),
+                    HumanMessage(content="second"),
+                ],
+            },
+        ),
         Mock(),
     )
     update_calls = mock_client.beta.memory_stores.begin_update_memories.call_args_list
@@ -193,3 +204,115 @@ def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
         mock_project_client.call_args_list[0][1]["endpoint"]
         == "https://foundry.endpoint"
     )
+
+
+def _create_memory_agent(
+    responses: list[str], checkpointer: Any = None
+) -> tuple[Any, Mock]:
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    mock_client = Mock()
+    mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
+
+    with patch(
+        "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
+        return_value=mock_client,
+    ):
+        middleware = AzureAIMemoryMiddleware(
+            store_name="test_store",
+            scope="user:test",
+            project_endpoint="https://test.api.azureml.ms",
+            roles=["user", "assistant"],
+        )
+    agent = create_agent(
+        model=FakeListChatModel(responses=responses),
+        middleware=[middleware],
+        checkpointer=checkpointer,
+    )
+    return agent, mock_client
+
+
+def _sent_contents(mock_client: Mock) -> list[str]:
+    return [
+        item["content"]
+        for call in mock_client.beta.memory_stores.begin_update_memories.call_args_list
+        for item in call.kwargs["items"]
+    ]
+
+
+def test_memory_middleware_tracks_each_thread() -> None:
+    """Messages from every thread should be sent, not only the first one."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    agent, mock_client = _create_memory_agent(
+        ["reply a1", "reply b1", "reply a2", "reply b2"], InMemorySaver()
+    )
+
+    for content, thread_id in [("a1", "a"), ("b1", "b"), ("a2", "a"), ("b2", "b")]:
+        agent.invoke(
+            {"messages": [HumanMessage(content=content)]},
+            {"configurable": {"thread_id": thread_id}},
+        )
+
+    assert _sent_contents(mock_client) == [
+        "a1",
+        "reply a1",
+        "b1",
+        "reply b1",
+        "a2",
+        "reply a2",
+        "b2",
+        "reply b2",
+    ]
+
+
+def test_memory_middleware_does_not_resend_checkpointed_messages() -> None:
+    """A new middleware instance shouldn't resend a thread's earlier turns."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, _ = _create_memory_agent(["reply 1"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 1")]}, config)
+
+    agent, mock_client = _create_memory_agent(["reply 2"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 2")]}, config)
+
+    assert _sent_contents(mock_client) == ["user 2", "reply 2"]
+
+
+def test_memory_middleware_without_checkpointer_sends_each_turn() -> None:
+    """Each invocation's turn should be sent when there is no checkpointer."""
+    agent, mock_client = _create_memory_agent(["reply 1", "reply 2", "reply 3"])
+
+    for content in ["user 1", "user 2", "user 3"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]})
+
+    assert _sent_contents(mock_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
+    ]
+
+
+def test_memory_middleware_without_checkpointer_skips_passed_history() -> None:
+    """History passed back in by the caller shouldn't be sent again."""
+    agent, mock_client = _create_memory_agent(["reply 1", "reply 2", "reply 3"])
+
+    messages: list[Any] = []
+    for content in ["user 1", "user 2", "user 3"]:
+        result = agent.invoke({"messages": [*messages, HumanMessage(content=content)]})
+        messages = result["messages"]
+
+    assert _sent_contents(mock_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
+    ]
