@@ -75,11 +75,8 @@ AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4.1-mini"
 APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
 ```
 
-Tracing is enabled by default through Agent Server. For local Azure Monitor
-tracing, copy the connection string from the Application Insights resource
-connected to your project. Foundry injects `APPLICATIONINSIGHTS_CONNECTION_STRING`
-when the agent is hosted. See the [shared tracing guide](../../README.md#tracing)
-for OTLP collector setup. Set `OTEL_SDK_DISABLED=true` to disable tracing.
+Tracing is enabled by default for Foundry hosted agents when the Foundry project
+is connected to Application Insights.
 
 ### Start the host
 
