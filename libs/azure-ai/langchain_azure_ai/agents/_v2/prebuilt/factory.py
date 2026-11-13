@@ -12,6 +12,7 @@ from typing import (
     Callable,
     Dict,
     Hashable,
+    List,
     Literal,
     Optional,
     Sequence,
@@ -42,7 +43,7 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, RootModel, StrictStr, model_validator
 from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.base import (
@@ -50,6 +51,8 @@ from langchain_azure_ai.agents._v2.base import (
     AgentServiceAgentState,
     ResponsesAgentNode,
     _get_v2_tool_definitions,
+    _McpApprovalValue,
+    _parse_approval_decision,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
 from langchain_azure_ai.callbacks.tracers.inference_tracing import (
@@ -115,6 +118,50 @@ def external_tools_condition(
     return "__end__"
 
 
+class _McpApprovalInterruptItem(TypedDict):
+    """One approval request in the ``_mcp_approval_node`` interrupt value."""
+
+    id: StrictStr
+    server_label: Optional[StrictStr]
+    tool_name: Optional[StrictStr]
+    arguments: Optional[StrictStr]
+
+
+_McpApprovalResumeValue = Union[_McpApprovalValue, List[_McpApprovalInterruptItem]]
+
+
+def _mcp_approval_resume_schema(
+    interrupt_payload: List[Dict[str, Any]],
+) -> Type[RootModel[_McpApprovalResumeValue]]:
+    """Return the resume schema for an ``_mcp_approval_node`` interrupt.
+
+    A list resume value is only accepted when it equals ``interrupt_payload``,
+    which is how the Responses host approves.
+
+    Args:
+        interrupt_payload: The value passed to ``interrupt``.
+
+    Returns:
+        A model class to pass as ``response_schema``.
+    """
+
+    class _McpApprovalResume(RootModel[_McpApprovalResumeValue]):
+        """Resume value accepted by ``_mcp_approval_node``."""
+
+        # Strict, so a tuple or other sequence isn't coerced into a list
+        # after the echo check.
+        model_config = ConfigDict(strict=True)
+
+        @model_validator(mode="before")
+        @classmethod
+        def _check_echo(cls, value: Any) -> Any:
+            if isinstance(value, list) and value != interrupt_payload:
+                raise ValueError("A list resume value must equal the interrupt value.")
+            return value
+
+    return _McpApprovalResume
+
+
 def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     r"""Pause execution for human approval of MCP tool calls.
 
@@ -143,6 +190,10 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     Returns:
         A dict with ``messages`` containing ``ToolMessage`` instances for
         each approval request, ready for the agent to continue.
+
+    Raises:
+        pydantic.ValidationError: If the resume value is not one of the shapes
+            above. Nothing is saved, so the interrupt can be answered again.
     """
     ai_message = state["messages"][-1]
     approval_requests = [
@@ -164,17 +215,20 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
         }
         for tc in approval_requests
     ]
-    decision = interrupt(interrupt_payload)
+    decision = interrupt(
+        interrupt_payload,
+        response_schema=_mcp_approval_resume_schema(interrupt_payload),
+    ).root
 
-    # Convert the human decision into a content string.
-    if isinstance(decision, bool):
-        content = json.dumps({"approve": decision})
-    elif isinstance(decision, dict):
-        content = json.dumps(decision)
-    elif isinstance(decision, str):
-        content = decision
+    if isinstance(decision, list):
+        # The Responses host approves by echoing the interrupt value back.
+        approve, reason = True, None
     else:
-        content = json.dumps({"approve": bool(decision)})
+        approve, reason = _parse_approval_decision(decision)
+    response: Dict[str, Any] = {"approve": approve}
+    if reason is not None:
+        response["reason"] = reason
+    content = json.dumps(response)
 
     tool_messages = [
         ToolMessage(content=content, tool_call_id=tc["id"]) for tc in approval_requests

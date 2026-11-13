@@ -1,6 +1,6 @@
 """Unit tests for Azure AI Foundry V2 agent classes."""
 
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, Optional, Union
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 from openai import OpenAI
+from pydantic import ValidationError
 
 try:
     from langchain_azure_ai.agents._v2.prebuilt.tools import (
@@ -245,15 +246,197 @@ class TestDeclarativeV2Helpers:
         output = _approval_message_to_output(tool_msg)
         assert output["approve"] is False
 
-    def test_approval_message_to_output_string_deny(self) -> None:
-        """Test converting a plain string 'deny' ToolMessage."""
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "deny",
+            "reject",
+            "yes",
+            "TRUE",
+            "1",
+            "",
+            "null",
+            '{"approved": false}',
+            '{"approve": "false"}',
+            '{"reason": "not allowed"}',
+            '{"approve": false, "reason": 1}',
+            '{"approve": true, "reasons": "typo"}',
+            [{"approve": False}],
+        ],
+    )
+    def test_approval_message_to_output_rejects_invalid_decision(
+        self, content: Union[str, list]
+    ) -> None:
+        """A decision outside the approval contract raises instead of submitting."""
         from langchain_azure_ai.agents._v2.base import (
             _approval_message_to_output,
         )
 
-        tool_msg = ToolMessage(content="deny", tool_call_id="approval_req_111")
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_222")
+        with pytest.raises(ValidationError):
+            _approval_message_to_output(tool_msg)
+
+    @pytest.mark.parametrize(
+        ("content", "approve"),
+        [
+            ('{"approve": true}', True),
+            ('{"approve": false, "reason": null}', False),
+            ([{"type": "text", "text": '{"approve": false}'}], False),
+        ],
+    )
+    def test_approval_message_to_output_accepts_valid_decision(
+        self, content: Union[str, list], approve: bool
+    ) -> None:
+        """Decisions in the approval contract are submitted as given."""
+        from langchain_azure_ai.agents._v2.base import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_333")
         output = _approval_message_to_output(tool_msg)
-        assert output["approve"] is False
+        assert output["approve"] is approve
+
+    @staticmethod
+    def _mcp_approval_graph() -> Any:
+        """Compile a graph that pauses in ``_mcp_approval_node``."""
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.graph import END, START, MessagesState, StateGraph
+
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            _mcp_approval_node,
+        )
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("mcp_approval", _mcp_approval_node)
+        builder.add_edge(START, "mcp_approval")
+        builder.add_edge("mcp_approval", END)
+        return builder.compile(checkpointer=InMemorySaver())
+
+    @staticmethod
+    def _mcp_approval_request() -> AIMessage:
+        from langchain_azure_ai.agents._v2.base import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+        )
+
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "approval_req_444",
+                    "name": MCP_APPROVAL_REQUEST_TOOL_NAME,
+                    "args": {
+                        "server_label": "github",
+                        "name": "delete_repo",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("decision", "approve", "reason"),
+        [
+            (True, True, None),
+            (False, False, None),
+            ("true", True, None),
+            ("false", False, None),
+            ({"approve": True}, True, None),
+            ({"approve": False, "reason": "risky"}, False, "risky"),
+        ],
+    )
+    def test_mcp_approval_node_resume_decision(
+        self, decision: Any, approve: bool, reason: Optional[str]
+    ) -> None:
+        """The resume value reaches the approval response as given."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+        result = graph.invoke(Command(resume=decision), config)
+
+        output = _approval_message_to_output(result["messages"][-1])
+        assert output["approve"] is approve
+        assert output.get("reason") == reason
+
+    def test_mcp_approval_node_approves_echoed_interrupt_value(self) -> None:
+        """The Responses host approves by resuming with the interrupt value."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        paused = graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+        (pending,) = paused["__interrupt__"]
+        result = graph.invoke(Command(resume=pending.value), config)
+
+        output = _approval_message_to_output(result["messages"][-1])
+        assert output["approve"] is True
+
+    @pytest.mark.parametrize(
+        "decision",
+        [
+            "reject",
+            "yes",
+            "TRUE",
+            1,
+            {"approved": False},
+            {"approve": "false"},
+            {"approve": False, "reason": 1},
+            [{"approve": False}],
+            [],
+            [
+                {
+                    "id": "approval_req_other",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                }
+            ],
+            [
+                {
+                    "id": "approval_req_444",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                    "approve": False,
+                }
+            ],
+            (),
+            (
+                {
+                    "id": "approval_req_other",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                },
+            ),
+            (
+                {
+                    "id": "approval_req_444",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                    "approve": False,
+                },
+            ),
+        ],
+    )
+    def test_mcp_approval_node_rejects_invalid_resume_decision(
+        self, decision: Any
+    ) -> None:
+        """An invalid resume raises and leaves the interrupt open for a retry."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+
+        with pytest.raises(ValidationError):
+            graph.invoke(Command(resume=decision), config)
+        assert graph.get_state(config).next == ("mcp_approval",)
+
+        result = graph.invoke(Command(resume=False), config)
+        assert _approval_message_to_output(result["messages"][-1])["approve"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -983,7 +1166,7 @@ class TestDeclarativeV2HelpersAdditional:
         )
 
         tool_msg = ToolMessage(
-            content=[{"type": "text", "text": "yes please"}],  # type: ignore[arg-type]
+            content=[{"type": "text", "text": "true"}],  # type: ignore[arg-type]
             tool_call_id="approval_req_list2",
         )
         output = _approval_message_to_output(tool_msg)

@@ -18,7 +18,19 @@ import binascii
 import json
 import logging
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -61,7 +73,7 @@ from openai.types.responses.response_input_item_param import (
 from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -256,6 +268,43 @@ def _get_v2_tool_definitions(
     return tool_definitions
 
 
+class _McpApprovalObject(BaseModel):
+    """An MCP approval decision with an optional reason."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    approve: bool
+    reason: Optional[str] = None
+
+
+_McpApprovalValue = Union[StrictBool, Literal["true", "false"], _McpApprovalObject]
+
+
+class _McpApprovalDecision(RootModel[_McpApprovalValue]):
+    """``True`` / ``False``, ``"true"`` / ``"false"``, or an approval object."""
+
+
+def _parse_approval_decision(decision: Any) -> Tuple[bool, Optional[str]]:
+    """Validate an MCP approval decision.
+
+    Args:
+        decision: ``True`` / ``False``, ``"true"`` / ``"false"``, or a dict with
+            a boolean ``approve`` and an optional string ``reason``.
+
+    Returns:
+        The ``approve`` value and the ``reason``, if any.
+
+    Raises:
+        pydantic.ValidationError: If ``decision`` has any other shape or value.
+    """
+    value = _McpApprovalDecision.model_validate(decision).root
+    if isinstance(value, _McpApprovalObject):
+        return value.approve, value.reason
+    if isinstance(value, bool):
+        return value, None
+    return value == "true", None
+
+
 def _approval_message_to_output(
     tool_message: ToolMessage,
 ) -> McpApprovalResponse:
@@ -273,33 +322,26 @@ def _approval_message_to_output(
 
     Returns:
         A ``McpApprovalResponse`` ready to be sent back to the Responses API.
-    """
-    content = tool_message.content
-    approve = True
-    reason: Optional[str] = None
 
+    Raises:
+        pydantic.ValidationError: If the content isn't one of the accepted
+            shapes.
+        ValueError: If the message has no ``tool_call_id``.
+    """
+    content: Any = tool_message.content
+
+    if isinstance(content, list):
+        # E.g. [{"type": "text", "text": "true"}]
+        content = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
     if isinstance(content, str):
         try:
-            parsed = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            parsed = content
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            pass
 
-        if isinstance(parsed, dict):
-            approve = bool(parsed.get("approve", True))
-            reason = parsed.get("reason")
-        else:
-            # Plain string: "true"/"false" (case-insensitive)
-            approve = str(parsed).lower() not in ("false", "0", "no", "deny")
-    elif isinstance(content, dict):
-        approve = bool(content.get("approve", True))
-        reason = content.get("reason")
-    elif isinstance(content, list):
-        # E.g. [{"type": "text", "text": "true"}]
-        text_parts = [
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        ]
-        combined = " ".join(text_parts).strip().lower()
-        approve = combined not in ("false", "0", "no", "deny")
+    approve, reason = _parse_approval_decision(content)
 
     if tool_message.tool_call_id is None:
         raise ValueError(
