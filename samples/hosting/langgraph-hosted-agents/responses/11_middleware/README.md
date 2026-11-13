@@ -58,10 +58,12 @@ when deployed. Local checkpoints survive host restarts.
 
 ## Running the Agent Host
 
-Use Python 3.11 or later and follow the parent's
-[local setup instructions](../../README.md#running-the-agent-host-locally),
-configuring [.env.example](.env.example). In the virtual environment, upgrade
-to pip 26 or later before installing this sample's [requirements.txt](requirements.txt).
+From this sample's directory, use Python 3.11 or later and follow the parent's
+[local setup instructions](../../README.md#running-the-agent-host-locally) to
+create and activate a virtual environment and configure [.env.example](.env.example).
+Skip the parent's dependency-install step. Instead, run the commands below in
+the activated virtual environment to upgrade to pip 26 or later before installing
+this sample's [requirements.txt](requirements.txt).
 Older pip versions can fail when parsing the SDK's extras.
 
 ```bash
