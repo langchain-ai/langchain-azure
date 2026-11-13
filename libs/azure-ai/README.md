@@ -137,12 +137,14 @@ document_vectors = embeddings.embed_documents(
 
 Create a managed Foundry agent and add it as a LangGraph node.
 
-For local development, install the required extra and sign in:
+For local development, install the package and sign in:
 
 ```bash
-pip install -U "langchain-azure-ai[opentelemetry]"
+pip install -U langchain-azure-ai
 az login
 ```
+
+Using `create_prompt_agent(..., trace=True)` also requires the `opentelemetry` extra.
 
 Set your project endpoint and model deployment name. This creates a version
 of `my-echo-agent` in your project:
