@@ -1372,9 +1372,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     "type": "http",
                     "method": "POST",
                     "path": "/invocations",
-                    "query_string": urlencode(
-                        {"agent_session_id": session_id}
-                    ).encode("ascii"),
+                    "query_string": urlencode({"agent_session_id": session_id}).encode(
+                        "ascii"
+                    ),
                     "headers": [],
                     "state": {
                         "session_id": session_id,
