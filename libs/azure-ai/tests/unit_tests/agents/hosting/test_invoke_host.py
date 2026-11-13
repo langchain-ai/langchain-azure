@@ -13,6 +13,7 @@ import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import MethodType
 from typing import Any
 from unittest.mock import patch
 
@@ -135,6 +136,9 @@ def test_runnable_config_hook_applies_to_every_execution_mode(
     assert response.status_code == 200, response.text
     assert len(hook_inputs) == 1
     assert isinstance(hook_inputs[0], Request)
+    assert (
+        hook_inputs[0].state.invocation_id == response.headers["x-agent-invocation-id"]
+    )
     assert hook_inputs[0].state.session_id == "unified-config-session"
     assert hook_inputs[0].query_params["agent_session_id"] == "unified-config-session"
     assert hook_inputs[0].state.user_id == "unified-config-user"
@@ -242,10 +246,65 @@ def test_legacy_task_runnable_config_override_keeps_precedence(
                 config["configurable"]["invocation_cancellation_signal"]
                 is context.cancel
             )
-            assert sum(
-                "build_task_runnable_config" in str(warning.message)
-                for warning in emitted_warnings
-            ) == 1
+            assert (
+                sum(
+                    "build_task_runnable_config" in str(warning.message)
+                    for warning in emitted_warnings
+                )
+                == 1
+            )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ResponsesServerOptions(resilient_background=True),
+        ResponsesServerOptions(steerable_conversations=True),
+    ],
+)
+def test_instance_bound_task_runnable_config_override_is_preserved(
+    options: ResponsesServerOptions,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_calls: list[tuple[str, TaskContext[dict[str, Any]]]] = []
+    graph = make_checkpointed_echo_graph()
+    server = InvocationsHostServer(graph, options=options)
+
+    def legacy_config(
+        host: InvocationsHostServer,
+        session_id: str,
+        context: TaskContext[dict[str, Any]],
+    ) -> RunnableConfig:
+        legacy_calls.append((session_id, context))
+        config = InvocationsHostServer.build_task_runnable_config(
+            host, session_id, context
+        )
+        config["configurable"]["thread_id"] = "instance-legacy-thread"
+        config["tags"] = ["instance-legacy-config"]
+        return config
+
+    monkeypatch.setattr(
+        server, "build_task_runnable_config", MethodType(legacy_config, server)
+    )
+    with (
+        patch.object(graph, "astream", wraps=graph.astream) as graph_stream,
+        _client(server) as client,
+    ):
+        response = client.post(
+            "/invocations?agent_session_id=instance-legacy-session",
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert len(legacy_calls) == 1
+    session_id, context = legacy_calls[0]
+    assert session_id == "instance-legacy-session"
+    graph_stream.assert_called_once()
+    config = graph_stream.call_args.kwargs["config"]
+    assert config["tags"] == ["instance-legacy-config"]
+    assert config["configurable"]["thread_id"] == "instance-legacy-thread"
+    assert config["configurable"]["invocation_context"] is context
+    assert config["configurable"]["invocation_cancellation_signal"] is context.cancel
 
 
 def test_constructor_registers_invocations_feature() -> None:
@@ -1307,7 +1366,10 @@ async def test_recovered_background_invocation_resumes_checkpoint(
             assert isinstance(context, TaskContext)
             assert context.entry_mode == "recovered"
             config = super().build_runnable_config(request)
-            config["metadata"] = {"config_source": "recovered-config"}
+            config["metadata"] = {
+                "config_source": "recovered-config",
+                "invocation_id": getattr(request.state, "invocation_id", None),
+            }
             config["configurable"].update(
                 thread_id="hook-thread",
                 checkpoint_id="hook-checkpoint",
@@ -1353,7 +1415,10 @@ async def test_recovered_background_invocation_resumes_checkpoint(
     assert configurable["checkpoint_ns"] == ""
     assert configurable["invocation_context"] is context
     assert configurable["invocation_cancellation_signal"] is context.cancel
-    assert config["metadata"] == {"config_source": "recovered-config"}
+    assert config["metadata"] == {
+        "config_source": "recovered-config",
+        "invocation_id": invocation_id,
+    }
     assert result["status"] == "completed"
     assert result["response"] == "Recovered"
 

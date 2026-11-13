@@ -731,8 +731,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
         Args:
             request: The Starlette request. Task-backed attempts receive a
-                reconstructed request with persisted session, user, and call
-                identity in ``request.state`` and the task context in
+                reconstructed request with persisted invocation, session,
+                user, and call identity in ``request.state`` and the task context in
                 ``request.state.invocation_context``. Original HTTP headers,
                 body, and arbitrary request state are not reconstructed.
 
@@ -1361,11 +1361,12 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                 return result
             raise
 
+        task_config_builder = self.build_task_runnable_config
         if (
-            type(self).build_task_runnable_config
+            getattr(task_config_builder, "__func__", task_config_builder)
             is not InvocationsHostServer.build_task_runnable_config
         ):
-            config = self.build_task_runnable_config(session_id, context)
+            config = task_config_builder(session_id, context)
         else:
             request = Request(
                 {
@@ -1377,6 +1378,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
                     ),
                     "headers": [],
                     "state": {
+                        "invocation_id": invocation_id,
                         "session_id": session_id,
                         "user_id": task_input.get("user_id") or "",
                         "call_id": task_input.get("call_id") or "",

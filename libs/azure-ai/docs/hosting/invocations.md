@@ -91,7 +91,8 @@ For config changes in any execution mode, override `build_runnable_config`, call
 `super().build_runnable_config(request)`, and preserve its thread and task context
 entries. The argument is always a `Request`. For task execution, including
 foreground requests when either server option is enabled, the host reconstructs
-it from persisted task input. The public session ID is available through
+it from persisted task input. The invocation ID is in
+`request.state.invocation_id`. The public session ID is available through
 `request.query_params["agent_session_id"]` and `request.state.session_id`; user
 and call IDs are in `request.state.user_id` and `request.state.call_id`. The task
 context is in `request.state.invocation_context`. Original HTTP headers, body,
