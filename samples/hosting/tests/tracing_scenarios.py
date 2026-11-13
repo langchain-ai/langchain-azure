@@ -32,6 +32,10 @@ CASES = {
     ]
 }
 FINAL_TEXT = "Tracing test completed"
+CONTENT_RECORDING_FLAGS = (
+    "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+)
 
 
 def model_responses(scenario: str) -> list[AIMessage]:

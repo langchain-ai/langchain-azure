@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from tracing_scenarios import CASES, model_responses
+from tracing_scenarios import CASES, CONTENT_RECORDING_FLAGS, model_responses
 
 SAMPLES = Path(__file__).resolve().parents[2]
 
@@ -28,6 +30,7 @@ def _start_sample(sample: str) -> None:
     from langchain_core.language_models.fake_chat_models import (
         FakeMessagesListChatModel,
     )
+    from langchain_core.messages import messages_to_dict
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import MemorySaver
     from pydantic import Field
@@ -61,9 +64,34 @@ def _start_sample(sample: str) -> None:
     class Model(FakeMessagesListChatModel):
         root_client: Any = Field(default_factory=nullcontext)
         root_async_client: Any = Field(default_factory=nullcontext)
+        calls: list[dict[str, Any]] = Field(default_factory=list)
 
         def bind_tools(self, *_: Any, **__: Any) -> Model:
             return self
+
+        def _generate(self, messages: Any, *args: Any, **kwargs: Any) -> Any:
+            result = super()._generate(messages, *args, **kwargs)
+            self.calls.append(
+                {
+                    "inputs": messages_to_dict(messages),
+                    "output": messages_to_dict([result.generations[0].message])[0],
+                }
+            )
+            Path("model-calls.json").write_text(
+                json.dumps(
+                    {
+                        "sample": sample,
+                        "content_recording": {
+                            name: os.environ.get(name)
+                            for name in CONTENT_RECORDING_FLAGS
+                        },
+                        "calls": self.calls,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            return result
 
     @tool
     def web_search(query: str) -> str:

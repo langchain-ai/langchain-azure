@@ -32,3 +32,13 @@ jobs:
           uv pip install -r samples/hosting/tests/requirements.txt
       - name: Check all hosted samples
         run: .venv/bin/python -m pytest samples/hosting/tests/test_tracing.py -q --basetemp="${{ runner.temp }}/hosted-tracing"
+      - name: Upload exported spans and model calls
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosted-tracing-${{ matrix.python-version }}
+          path: |
+            ${{ runner.temp }}/hosted-tracing/**/exported-spans.json
+            ${{ runner.temp }}/hosted-tracing/**/model-calls.json
+            ${{ runner.temp }}/hosted-tracing/**/host.log
+          retention-days: 7

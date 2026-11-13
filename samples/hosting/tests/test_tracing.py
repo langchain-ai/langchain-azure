@@ -32,10 +32,16 @@ from typing import Any
 import httpx
 import pytest
 from dotenv import dotenv_values
-from tracing_scenarios import CASES, FINAL_TEXT, model_responses
+from tracing_scenarios import (
+    CASES,
+    CONTENT_RECORDING_FLAGS,
+    FINAL_TEXT,
+    model_responses,
+)
 
 SAMPLES = Path(__file__).resolve().parents[2]
 TRACE_ID = "1234567890abcdef1234567890abcdef"
+USER_TEXT = "Exercise the sample's tools"
 
 
 def discover_samples(root: Path) -> list[str]:
@@ -88,6 +94,8 @@ def _decode_spans(received: list[tuple[str, bytes]]) -> list[dict[str, Any]]:
                 if data["baseType"] in ("RequestData", "RemoteDependencyData"):
                     spans.append(
                         {
+                            "name": data["baseData"]["name"],
+                            "span_id": data["baseData"]["id"],
                             "trace_id": envelope.get("tags", {}).get("ai.operation.id"),
                             "parent": envelope.get("tags", {}).get(
                                 "ai.operation.parentId"
@@ -102,6 +110,8 @@ def _decode_spans(received: list[tuple[str, bytes]]) -> list[dict[str, Any]]:
                     for span in scope.spans:
                         spans.append(
                             {
+                                "name": span.name,
+                                "span_id": span.span_id.hex(),
                                 "trace_id": span.trace_id.hex(),
                                 "parent": span.parent_span_id.hex(),
                                 "attributes": {
@@ -141,6 +151,94 @@ def _invoke(
         result = response.json()
     assert result["status"] == "completed", result
     return result
+
+
+def _content_strings(value: Any) -> list[str]:
+    """Read text from both JSON-encoded attributes and nested message parts."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _content_strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _content_strings(item)]
+    return [str(value)]
+
+
+def _assert_recorded_content(
+    spans: list[dict[str, Any]], calls: list[dict[str, Any]]
+) -> None:
+    chats = [
+        s["attributes"]
+        for s in spans
+        if s["attributes"]["gen_ai.operation.name"] == "chat"
+    ]
+    tools = [
+        s["attributes"]
+        for s in spans
+        if s["attributes"]["gen_ai.operation.name"] == "execute_tool"
+    ]
+    tool_names = {
+        tool["id"]: tool["name"]
+        for call in calls
+        for tool in call["output"]["data"].get("tool_calls", [])
+    }
+
+    def contains(records: list[dict[str, Any]], attribute: str, expected: Any) -> bool:
+        actual = [
+            text
+            for record in records
+            for text in _content_strings(record.get(attribute, ""))
+        ]
+        return all(
+            any(text in value for value in actual)
+            for text in _content_strings(expected)
+        )
+
+    assert contains(chats, "gen_ai.input.messages", USER_TEXT), (
+        "User prompt was not exported"
+    )
+    assert contains(chats, "gen_ai.output.messages", FINAL_TEXT), (
+        "Assistant reply was not exported"
+    )
+    for call in calls:
+        for message in call["inputs"]:
+            data = message["data"]
+            if message["type"] == "system":
+                assert contains(chats, "gen_ai.system_instructions", data["content"]), (
+                    "System prompt was not exported"
+                )
+            elif message["type"] == "tool":
+                name = tool_names[data["tool_call_id"]]
+                matching = [
+                    tool for tool in tools if tool.get("gen_ai.tool.name") == name
+                ]
+                assert contains(matching, "gen_ai.tool.call.result", data["content"]), (
+                    "Tool result was not exported",
+                    name,
+                )
+                assert contains(chats, "gen_ai.input.messages", data["content"]), (
+                    "Tool response message was not exported",
+                    name,
+                )
+        output = call["output"]["data"]
+        if output["content"]:
+            assert contains(chats, "gen_ai.output.messages", output["content"]), (
+                "Assistant message was not exported"
+            )
+        for tool_call in output.get("tool_calls", []):
+            assert any(
+                tool.get("gen_ai.tool.name") == tool_call["name"]
+                and json.loads(tool.get("gen_ai.tool.call.arguments", "null"))
+                == tool_call["args"]
+                for tool in tools
+            ), ("Tool arguments were not exported", tool_call)
+            assert contains(chats, "gen_ai.output.messages", tool_call["args"]), (
+                "Tool call message was not exported",
+                tool_call,
+            )
 
 
 def test_all_hosted_samples_have_a_scenario() -> None:
@@ -199,9 +297,18 @@ def test_sample_defaults_keep_tracing_enabled(sample: str) -> None:
 
 
 @pytest.mark.parametrize("sample", discover_samples(SAMPLES))
-@pytest.mark.parametrize("destination", ["azure", "otlp", "disabled"])
+@pytest.mark.parametrize(
+    ("destination", "content_recording"),
+    [
+        pytest.param("azure", False, id="azure-default"),
+        pytest.param("otlp", False, id="otlp-default"),
+        pytest.param("disabled", False, id="disabled"),
+        pytest.param("azure", True, id="azure-content"),
+        pytest.param("otlp", True, id="otlp-content"),
+    ],
+)
 def test_hosted_sample_exports_traces(
-    sample: str, destination: str, tmp_path: Path
+    sample: str, destination: str, content_recording: bool, tmp_path: Path
 ) -> None:
     assert sample in CASES, "Add a scenario in tracing_scenarios.py"
     protocol, scenario = CASES[sample]
@@ -248,6 +355,7 @@ def test_hosted_sample_exports_traces(
                 "APPLICATION_INSIGHTS_",
                 "FOUNDRY_",
                 "AZURE_AI_",
+                "AZURE_TRACING_",
                 "LANGSMITH_",
                 "LANGCHAIN_",
             )
@@ -268,6 +376,11 @@ def test_hosted_sample_exports_traces(
         REPORT_STORAGE_ACCOUNT_URL="https://example.invalid",
         REPORT_STORAGE_CONTAINER="reports",
     )
+    defaults = dotenv_values(SAMPLES / sample / ".env.example", interpolate=False)
+    for name in CONTENT_RECORDING_FLAGS:
+        value = "true" if content_recording else defaults.get(name)
+        if value is not None:
+            env[name] = value
     with ThreadingHTTPServer(("127.0.0.1", 0), Collector) as collector:
         threading.Thread(target=collector.serve_forever, daemon=True).start()
         target = f"http://127.0.0.1:{collector.server_port}"
@@ -314,14 +427,14 @@ def test_hosted_sample_exports_traces(
                         pytest.fail("Sample startup timed out")
                     payload = (
                         {
-                            "input": "Exercise the sample's tools",
+                            "input": USER_TEXT,
                             "conversation": "trace-demo",
                             "background": scenario == "resilient",
                             "store": True,
                         }
                         if protocol == "responses"
                         else {
-                            "message": "Exercise the sample's tools",
+                            "message": USER_TEXT,
                             "background": scenario == "resilient",
                         }
                     )
@@ -346,6 +459,13 @@ def test_hosted_sample_exports_traces(
                         ] = first["id"]
                         first = _invoke(client, protocol, payload)
                     assert FINAL_TEXT in json.dumps(first)
+                    observed = json.loads(
+                        (tmp_path / "model-calls.json").read_text(encoding="utf-8")
+                    )
+                    for name in CONTENT_RECORDING_FLAGS:
+                        if name in env:
+                            assert observed["content_recording"][name] == env[name]
+                    records_content = "true" in observed["content_recording"].values()
                     for _ in range(10 if destination == "disabled" else 100):
                         spans = _decode_spans(received)
                         counts = {
@@ -356,6 +476,12 @@ def test_hosted_sample_exports_traces(
                             for op in expected
                         }
                         if all(counts[op] >= count for op, count in expected.items()):
+                            if records_content:
+                                try:
+                                    _assert_recorded_content(spans, observed["calls"])
+                                except AssertionError:
+                                    time.sleep(0.1)
+                                    continue
                             break
                         time.sleep(0.1)
                     if destination == "disabled":
@@ -371,7 +497,34 @@ def test_hosted_sample_exports_traces(
                         assert all(
                             s["trace_id"] == TRACE_ID and s["parent"] for s in spans
                         )
+                        if records_content:
+                            _assert_recorded_content(spans, observed["calls"])
+                        elif set(observed["content_recording"].values()) == {"false"}:
+                            attributes = [s["attributes"] for s in spans]
+                            for attribute in (
+                                "gen_ai.input.messages",
+                                "gen_ai.output.messages",
+                            ):
+                                recorded = _content_strings(
+                                    [a.get(attribute, "") for a in attributes]
+                                )
+                                assert not any(
+                                    USER_TEXT in text or FINAL_TEXT in text
+                                    for text in recorded
+                                ), "Disabled content capture exported message text"
             finally:
                 proc.terminate()
                 proc.wait(timeout=15)
                 collector.shutdown()
+                (tmp_path / "exported-spans.json").write_text(
+                    json.dumps(
+                        {
+                            "sample": sample,
+                            "destination": destination,
+                            "content_recording_requested": content_recording,
+                            "spans": _decode_spans(received),
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )

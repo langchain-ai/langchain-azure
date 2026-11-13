@@ -15,16 +15,36 @@ fail the coverage check. Tests never skip an unregistered sample.
 
 Each sample runs in a fresh process using its own startup code, graph, tracing
 setup, and HTTP server. Configuration-driven samples use the SDK runner. Each
-scenario checks three configurations:
+scenario checks five configurations:
 
-- Azure Monitor export to a local ingestion endpoint.
-- OTLP/HTTP export to a local collector.
+- Azure Monitor export to a local ingestion endpoint, with the sample's defaults.
+- OTLP/HTTP export to a local collector, with the sample's defaults.
 - `OTEL_SDK_DISABLED=true`, with no exported GenAI spans.
+- Azure Monitor export with both content-recording flags explicitly enabled.
+- OTLP/HTTP export with both content-recording flags explicitly enabled.
 
 Assertions cover model spans, tool names and spans for tool-using scenarios,
 incoming W3C trace correlation, and parent IDs. Approval scenarios also execute
 the approved tool and final model call after resuming. No-tool samples check
 model and agent spans. Full sampling is enabled only in the test process.
+
+Content-enabled cases compare the actual model inputs and tool responses against
+exported `gen_ai.input.messages`, `gen_ai.output.messages`,
+`gen_ai.system_instructions`, `gen_ai.tool.call.arguments`, and
+`gen_ai.tool.call.result`. They require user prompts, system prompts when present,
+assistant replies, tool-call arguments, and tool results to contain the original
+test content. Span names and tool names alone do not satisfy these checks.
+
+Default cases read content flags from `.env.example` and respect startup defaults;
+they do not read a developer's local `.env` file. Deep Agents and middleware
+currently default both content-recording flags to `false`; these cases must still
+export spans while omitting the user prompt and assistant reply text. Passing an
+opt-in case does not mean that a sample records content by default.
+
+Each runtime case saves `exported-spans.json` from the local receiver and
+`model-calls.json` from the substituted model, including the effective content
+flags. GitHub Actions uploads these files and host logs for each Python version,
+so the exported content can be inspected on both passing and failing runs.
 
 Remote chat models and MCP/Toolbox services are substituted. Cloud checkpoint
 stores use an in-memory saver; resilient samples retain their local SQLite
