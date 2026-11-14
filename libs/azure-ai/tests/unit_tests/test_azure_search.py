@@ -440,6 +440,64 @@ def test_ids_used_correctly() -> None:
 
 
 @pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_ids_used_correctly_async(use_async: bool) -> None:
+    """Provided ids must come back untouched, the same way for sync and async.
+
+    aadd_embeddings used to base64-encode every key, including ones the
+    caller supplied, while add_embeddings only encoded auto-generated
+    UUIDs. A document added through aadd_documents(..., ids=[...]) was
+    stored under an encoded key that delete(ids=[...]) could never match.
+    """
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+    from langchain_core.documents import Document
+
+    class Response:
+        def __init__(self) -> None:
+            self.succeeded: bool = True
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    documents = [
+        Document(
+            page_content="page zero Lorem Ipsum",
+            metadata={"source": "document.pdf", "page": 0, "id": "ID-document-1"},
+        ),
+        Document(
+            page_content="page one Lorem Ipsum",
+            metadata={"source": "document.pdf", "page": 1, "id": "ID-document-2"},
+        ),
+    ]
+    ids_provided = [i.metadata.get("id") for i in documents]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        if use_async:
+            ids_used_at_upload = await vector_store.aadd_documents(
+                documents, ids=ids_provided
+            )
+        else:
+            ids_used_at_upload = vector_store.add_documents(documents, ids=ids_provided)
+        assert ids_used_at_upload == ids_provided
+
+
+@pytest.mark.requires("azure.search.documents")
 def test_custom_field_names_set_after_import(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
