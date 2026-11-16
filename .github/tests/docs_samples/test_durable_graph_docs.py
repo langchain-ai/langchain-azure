@@ -7,6 +7,7 @@ import __future__
 import ast
 import importlib.util
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -56,9 +57,12 @@ def test_sample_requirements_match_supported_minor_series():
     assert len(requirements) == 10
     for path in requirements:
         lines = path.read_text().splitlines()
-        assert "langgraph>=1.2.0,<1.3" in lines
-        assert "durabletask>=1.13.0,<1.14" in lines
-        assert "durabletask-azuremanaged>=1.13.0,<1.14" in lines
+        for pattern in (
+            r"langgraph>=1\.2\.\d+,<1\.3",
+            r"durabletask>=1\.13\.\d+,<1\.14",
+            r"durabletask-azuremanaged>=1\.13\.\d+,<1\.14",
+        ):
+            assert any(re.fullmatch(pattern, line) for line in lines), path
         assert len([line for line in lines if line.startswith("azure-functions")]) <= 1
 
 

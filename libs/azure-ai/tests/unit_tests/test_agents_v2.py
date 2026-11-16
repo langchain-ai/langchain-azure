@@ -3057,6 +3057,133 @@ class TestMiddlewareSupport:
         assert "my_custom_field" in hints
         assert "messages" in hints
 
+    def test_private_middleware_state_is_not_in_graph_schemas(self) -> None:
+        """Fields omitted from the input or output schema stay out of them."""
+        from typing import Annotated
+
+        from langchain.agents.middleware.types import (
+            AgentMiddleware,
+            AgentState,
+            OmitFromInput,
+            OmitFromOutput,
+            PrivateStateAttr,
+        )
+        from typing_extensions import NotRequired
+
+        class CustomState(AgentState):
+            private_field: NotRequired[Annotated[int, PrivateStateAttr]]
+            input_field: NotRequired[Annotated[int, OmitFromOutput]]
+            output_field: NotRequired[Annotated[int, OmitFromInput]]
+            public_field: NotRequired[int]
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        input_fields = set(graph.get_input_jsonschema()["properties"])
+        output_fields = set(graph.get_output_jsonschema()["properties"])
+        assert {
+            "messages",
+            "azure_ai_agents_conversation_id",
+            "input_field",
+            "public_field",
+        } <= input_fields
+        assert (
+            not {
+                "jump_to",
+                "structured_response",
+                "private_field",
+                "output_field",
+            }
+            & input_fields
+        )
+        assert {
+            "messages",
+            "azure_ai_agents_conversation_id",
+            "structured_response",
+            "output_field",
+            "public_field",
+        } <= output_fields
+        assert not {"jump_to", "private_field", "input_field"} & output_fields
+
+    def test_private_middleware_state_is_kept_in_graph_state(self) -> None:
+        """Private fields reach later nodes and the checkpoint, not the result."""
+        from typing import Annotated
+
+        from langchain.agents.middleware.types import (
+            AgentMiddleware,
+            AgentState,
+            PrivateStateAttr,
+        )
+        from langgraph.checkpoint.memory import InMemorySaver
+        from typing_extensions import NotRequired
+
+        class CustomState(AgentState):
+            private_field: NotRequired[Annotated[int, PrivateStateAttr]]
+
+        seen: list[Any] = []
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state: dict, runtime: object) -> dict:  # type: ignore[override]
+                return {"private_field": 1}
+
+            def after_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
+                seen.append(state.get("private_field"))
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_001"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Hello from the agent"
+        mock_response.usage = None
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+        mock_openai.conversations.create.return_value = MagicMock(id="conv_001")
+
+        factory, mock_client = self._make_factory_and_client()
+        mock_client.agents.get_version.return_value = (
+            mock_client.agents.create_version.return_value
+        )
+        mock_client.get_openai_client.return_value = mock_openai
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+                checkpointer=InMemorySaver(),
+            )
+            config: Any = {"configurable": {"thread_id": "thread"}}
+            result = graph.invoke({"messages": [HumanMessage(content="hi")]}, config)
+
+        assert seen == [1]
+        assert "private_field" not in result
+        assert result["messages"][-1].content == "Hello from the agent"
+        assert graph.get_state(config).values["private_field"] == 1
+
     def test_middleware_tools_added_to_tool_node(self) -> None:
         """Test that tools from middleware are included in the ToolNode."""
         from langchain.agents.middleware.types import AgentMiddleware
