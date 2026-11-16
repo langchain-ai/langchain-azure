@@ -395,13 +395,14 @@ class ResponsesHostServer:
         graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
 
     Raises:
-        ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``app=None`` and
-            ``resilient_background=True`` is configured without a LangGraph
-            checkpointer.
-            Also raised if response branching is enabled without the required
-            async checkpoint implementations, with steering enabled, or with
-            an external ``app``.
+        ValueError: If any of the following conditions holds:
+
+            1. The graph's state schema does not declare a ``messages`` field.
+            2. ``app=None`` and ``resilient_background=True`` are configured
+               without a LangGraph checkpointer.
+            3. Response branching is enabled without the required async
+               checkpoint implementations, with steering enabled, or with
+               an external ``app``.
     """
 
     def __init__(
