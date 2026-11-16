@@ -45,6 +45,12 @@ from `langchain_azure_ai.agents.hosting`. Import `Runnable` from
 types describe the runnable; request parsing and output conversion still use
 the defaults below unless customized.
 
+> [!WARNING]
+> Conversation steering (`options.steerable_conversations=True`) and long-running
+> crash recovery (`options.resilient_background=True`) are experimental. Each
+> emits its own `ExperimentalWarning` when enabled. Both are disabled by default;
+> ordinary host construction does not emit an experimental warning.
+
 > [!NOTE]
 > When `app=None`, pass `applicationinsights_connection_string` and
 > `graceful_shutdown_timeout` directly to `InvocationsHostServer`. When supplying

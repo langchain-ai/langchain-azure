@@ -46,6 +46,13 @@ The host, options, provider, and conversation-chain protocol types are available
 from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
 `langgraph.graph.state`.
 
+> [!WARNING]
+> Response branching (`enable_response_branching=True`), conversation steering
+> (`options.steerable_conversations=True`), and long-running crash recovery
+> (`options.resilient_background=True`) are experimental. Each emits its own
+> `ExperimentalWarning` when enabled. All are disabled by default; ordinary
+> host construction does not emit an experimental warning.
+
 > [!NOTE]
 > When `app=None`, pass `store`, `prefix`,
 > `applicationinsights_connection_string`, and `graceful_shutdown_timeout`
