@@ -12,8 +12,6 @@ If your application needs state across turns, configure a durable checkpointer. 
 
 Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
 
-Inspect the documented original launch path as well as graph construction. LangGraph development/server runtimes can supply checkpointing outside the exported graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. A graph loaded by another host does not inherit that runtime service. Preserve framework- and tool-managed state as well as messages, and assign each required capability a target owner with the needed lifetime. Verify that this owner applies to the graph actually serving requests. Small construction or lifecycle adaptations can be necessary to preserve behavior; they are not permission to redesign business logic, replace an established backend or migrate historical checkpoints without user intent. Keep development and hosted construction separate where their ownership rules differ.
-
 Choose a storage service based on what the agent needs to retain:
 
 | Storage service | What to store | How the application uses it |

@@ -10,7 +10,37 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need separate adaptation. See the [Responses hosting limitations](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point).
 
-Before choosing a hosting path, identify capabilities supplied by the application's original runtime, not only by its exported graph. These can include session management, checkpoints, tool-managed state and resource lifetimes. If existing behavior depends on continuity, plan its target owner before local hosting or deployment; the [persistence guidance](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) is then part of the migration, not an optional feature to add afterward. Do not introduce state or recovery requirements that the application did not have.
+## Preserve runtime-owned state
+
+Inspect the documented original launch path as well as graph construction. LangGraph development/server runtimes can supply checkpointing outside the exported graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. A graph loaded by another host does not inherit that runtime service. Preserve framework- and tool-managed state as well as messages, and assign each required capability a target owner with the needed lifetime. Verify that this owner applies to the graph actually serving requests. Small construction or lifecycle adaptations can be necessary to preserve behavior; they are not permission to redesign business logic, replace an established backend or migrate historical checkpoints without user intent. Keep development and hosted construction separate where their ownership rules differ.
+
+Preserve the existing backend and state semantics, including tool-managed state, not just conversation messages. Assign an explicit target owner with the required lifetime before hosting; apply it to the graph that actually serves requests. A conversation/thread identifier is a key, not a persistence implementation, and a boundary runnable does not automatically make its delegated graphs stateful. For Invocations, reusing a session does not reconstruct transcript history without a checkpointer; see [conversation and state](invocations.md#3-conversation-and-state). Follow [persistence configuration](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) when existing behavior requires it. Do not introduce storage, recovery requirements or historical checkpoint migration that the application did not have.
+
+## Map the application interface
+
+Map every existing public operation to its input, caller configuration, output or side effect, and usable target access path. Include supporting workflows used before or between conversations. Selecting one exported graph does not expose the others, and retaining `langgraph.json` does not deliver the original server API.
+
+The runner selects and loads a graph. Its default Responses conversion supplies conversation messages; the default Invocations conversion also builds message-shaped graph input. Neither automatically decodes a JSON string into arbitrary graph state or forwards caller-supplied `RunnableConfig.configurable` fields. A `messages` field alone therefore does not establish compatibility. Inspect the installed SDK's request parser, input/configuration builders and output parser against the original interface before relying on the defaults.
+
+Use configuration-only hosting when those mappings preserve the required interface. Otherwise adapt request parsing, operation routing, configuration propagation and output serialization at the hosting boundary, delegating business execution to the existing graphs. Resolve the actual exported runnable or factory rather than assuming a similarly named module attribute. Validate adapted input against the original schema; changing the protocol name or disabling a compatibility check does not implement a missing conversion. Deliver and document any separately required entry points or companion services.
+
+Keep application configuration separate from platform authentication. Preserve per-request parameter semantics and validation; an authenticated user, session key or environment-wide fallback does not automatically replace an application-defined partition/configuration value. Resolve necessary mappings explicitly without inventing a new business or authorization policy.
+
+When customizing a host, keep its documented hook contracts. In particular, Invocations `build_input` converts text to graph input; structured parser results have HITL semantics and are not an arbitrary graph-state transport. Use the supported input/configuration/output hooks rather than changing parser return types to bypass conversion. Read the [Invocations hook contracts](invocations.md#overridable-methods) or [Responses hosting interface](responses.md) for the installed package before adapting the boundary.
+
+## Package the build inputs
+
+This example uses a root `requirements.txt` for its remote build. Other Python projects can use a different supported dependency-resolution path: Oryx distinguishes requirements, uv and Poetry builds using files present in the upload. A uv project must retain its matching `pyproject.toml` and `uv.lock`, or intentionally package a validated replacement manifest. See the [Oryx Python build implementation](https://github.com/microsoft/Oryx/blob/84c15f84129d698b408161ed143742b386ee42a0/src/BuildScriptGenerator/Python/PythonBashBuildSnippet.sh.tpl). Do not assume a local editable install or `uv sync` proves that the remote archive will install the same application.
+
+Inspect the archive after applying ignore rules, and verify installation from that archive in a clean environment. Keep runtime source, configuration, resources and all build inputs consumed by the selected builder. Dependency manifests and lockfiles are not caches; exclude one only when a validated replacement dependency-resolution path is packaged.
+
+Treat [upload exclusions](langgraph-to-foundry/03-prepare-deployment.md#configure-upload-exclusions) as part of that choice. Do not copy a sample's lockfile/manifests exclusions into a different dependency-resolution path.
+
+## Verify the delivered workflow
+
+Installation, sustained host startup and successful application execution are separate gates. Use the actual deployment entry point and effective configuration, not an independently constructed graph. Exercise every preserved operation and the workflow connecting them through the delivered interface, including follow-up requests when continuity matters. Check actual downstream effects, not only HTTP success or an acknowledgement: dropped input can produce a plausible success response without performing the requested operation.
+
+When model, tool or external-service credentials are unavailable, use disposable, external-only substitutes to check a successful local request. Keep the submitted adapter, graph construction, routing, configuration propagation and application execution real; do not stub the delegate or return expected results from the host. Keep substitutes outside production code and remove them before delivery. This verifies the hosting boundary, not cloud integration or real-provider behavior; report unavailable checks and prerequisites separately.
 
 ## Why host your LangGraph application on Foundry?
 
@@ -27,8 +57,6 @@ Microsoft Foundry combines agent hosting with application interfaces, enterprise
 - **Diagnostics and evaluation integrated with your deployment.** Foundry connects hosted-agent execution with model and tool tracing, Application Insights, and managed evaluation. Teams can use data from real user interactions to assess execution behavior and output quality, investigate failures, validate changes, and continuously optimize their agents before and after release.
 
 ## Before you start
-
-Before applying the example, read the [application interface mapping](langgraph-to-foundry/02-run-locally.md#preserve-the-public-application-interface) and [deployment packaging](langgraph-to-foundry/03-prepare-deployment.md#prepare-runtime-dependencies) guidance, plus [state ownership](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) when the original runtime supplies required state. Do not select configuration-only hosting until the required operations, inputs and caller configuration fit its actual mappings. The example's single graph and request shape are not a replacement for your application's public interface.
 
 ### Model choice
 
@@ -57,7 +85,7 @@ Your local `.env` must remain outside source control and source uploads. See [Co
 
 ## Migration steps
 
-Complete the first four articles to prepare, test, and deploy your application. Then use the remaining articles for persistence and recovery, diagnostics, and evaluation as your application requires.
+Plan required state ownership before local hosting or deployment, then complete the first four articles to prepare, test and deploy the application. Apply persistence where existing behavior requires it; unfinished-request recovery, diagnostics and evaluation remain requirements-dependent.
 
 | Stage | Article | Outcome |
 | --- | --- | --- |
