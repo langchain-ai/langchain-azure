@@ -354,7 +354,6 @@ async def _close_async_iterator(iterator: AsyncIterator[Any]) -> None:
         await close()
 
 
-@experimental()
 class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     """Host a LangChain ``Runnable`` as the Invocations API.
 

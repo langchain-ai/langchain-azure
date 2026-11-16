@@ -313,7 +313,6 @@ def _response_root_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-@experimental()
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
