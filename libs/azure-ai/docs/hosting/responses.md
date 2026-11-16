@@ -19,7 +19,7 @@ See also [Invocations hosting](invocations.md).
 
 Install `langchain-azure-ai[hosting]`. It includes
 [LangChain](https://docs.langchain.com/oss/python/langchain/overview), LangGraph,
-and the Agent Server SDK. Dependency ranges are declared inz
+and the Agent Server SDK. Dependency ranges are declared in
 [the package manifest](../../pyproject.toml).
 
 [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) is optional
