@@ -8,6 +8,7 @@ import itertools
 import json
 import logging
 from typing import (
+    Annotated,
     Any,
     Callable,
     Dict,
@@ -19,6 +20,8 @@ from typing import (
     Set,
     Type,
     Union,
+    get_args,
+    get_origin,
     get_type_hints,
 )
 
@@ -29,7 +32,7 @@ from azure.ai.projects.models import (
 )
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
-from langchain.agents.middleware.types import AgentMiddleware
+from langchain.agents.middleware.types import AgentMiddleware, OmitFromSchema
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
@@ -44,7 +47,7 @@ from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
 from pydantic import BaseModel, ConfigDict, RootModel, StrictStr, model_validator
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
@@ -63,9 +66,22 @@ from langchain_azure_ai.utils.env import get_project_endpoint
 logger = logging.getLogger(__package__)
 
 
+def _is_omitted(field_type: Any, omit_flag: Literal["input", "output"]) -> bool:
+    """Return whether a field is marked with ``OmitFromSchema`` for ``omit_flag``."""
+    if get_origin(field_type) in {Required, NotRequired}:
+        field_type = get_args(field_type)[0]
+    if get_origin(field_type) is not Annotated:
+        return False
+    return any(
+        isinstance(meta, OmitFromSchema) and getattr(meta, omit_flag) is True
+        for meta in get_args(field_type)[1:]
+    )
+
+
 def _resolve_state_schema(
     state_schemas: "set[type]",
     schema_name: str,
+    omit_flag: Optional[Literal["input", "output"]] = None,
 ) -> "type":
     """Merge multiple TypedDict schemas into a single TypedDict.
 
@@ -77,6 +93,9 @@ def _resolve_state_schema(
         state_schemas: A set of TypedDict (or dataclass-like) types whose
             fields should be merged.
         schema_name: The ``__name__`` to give to the resulting TypedDict.
+        omit_flag: If set, leave out the fields marked with
+            ``OmitFromSchema`` for ``"input"`` or ``"output"``, such as
+            ``PrivateStateAttr`` fields.
 
     Returns:
         A new TypedDict type that contains all fields from all schemas.
@@ -85,6 +104,12 @@ def _resolve_state_schema(
     for schema in state_schemas:
         hints = get_type_hints(schema, include_extras=True)
         all_annotations.update(hints)
+    if omit_flag is not None:
+        all_annotations = {
+            field_name: field_type
+            for field_name, field_type in all_annotations.items()
+            if not _is_omitted(field_type, omit_flag)
+        }
     return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
 
 
@@ -744,12 +769,18 @@ ResponsesAgentNode`
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
-        input_schema = resolved_state_schema
+        input_schema = _resolve_state_schema(state_schemas, "InputSchema", "input")
+        output_schema = _resolve_state_schema(state_schemas, "OutputSchema", "output")
 
         # ------------------------------------------------------------------ #
         # 4. Build the graph
         # ------------------------------------------------------------------ #
-        builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
+        builder = StateGraph(  # type: ignore[var-annotated]
+            resolved_state_schema,
+            context_schema=context_schema,
+            input_schema=input_schema,
+            output_schema=output_schema,
+        )
 
         logger.info("Adding ResponsesAgentNode")
         prompt_node = self.create_prompt_agent_node(
@@ -765,7 +796,7 @@ ResponsesAgentNode`
         builder.add_node(
             "foundryAgent",
             prompt_node,
-            input_schema=input_schema,
+            input_schema=resolved_state_schema,
             metadata=prompt_node.get_metadata(),
         )
         logger.info("ResponsesAgentNode added")
@@ -835,7 +866,7 @@ ResponsesAgentNode`
                 builder.add_node(
                     f"{m.name}.before_agent",
                     before_node,
-                    input_schema=input_schema,
+                    input_schema=resolved_state_schema,
                 )
 
             if (
@@ -856,7 +887,7 @@ ResponsesAgentNode`
                 builder.add_node(
                     f"{m.name}.after_agent",
                     after_node,
-                    input_schema=input_schema,
+                    input_schema=resolved_state_schema,
                 )
 
         # ------------------------------------------------------------------ #
