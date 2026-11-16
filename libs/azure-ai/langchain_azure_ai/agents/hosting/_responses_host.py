@@ -358,19 +358,31 @@ class ResponsesHostServer:
 
     Keyword Args:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
-            to (e.g. a multi-protocol mixin). Its SDK configuration is retained:
-            ``store``, ``prefix``, ``applicationinsights_connection_string``,
-            and ``graceful_shutdown_timeout`` are ignored, and ``options``
-            neither reconfigures ``app`` nor is inferred from it. Pass matching
-            ``options`` to this adapter and ``app`` so SDK behavior and
-            ``foundry.agent.steerable_conversation`` metadata agree. The
-            resilient-background/checkpointer constructor check is skipped
-            when ``app`` is supplied; durable graph recovery still requires a
-            checkpointer. Response branching requires ``app=None``.
-        options: Optional :class:`ResponsesServerOptions`, forwarded to the
-            SDK host only when ``app=None``. Also read independently by this
-            adapter for hosting feature flags and steering metadata, including
-            when attaching to an existing ``app``.
+            to (e.g. a multi-protocol mixin). When supplied, the app's existing
+            SDK configuration remains in effect. Host-level kwargs passed to
+            this adapter (``store``, ``prefix``,
+            ``applicationinsights_connection_string``, and
+            ``graceful_shutdown_timeout``) are ignored; configure them on
+            ``app`` itself.
+
+            Response branching requires ``app=None``.
+        options: Optional :class:`ResponsesServerOptions`. When ``app=None``,
+            these options are forwarded to the SDK host created by this adapter.
+
+            When an existing ``app`` is supplied, its own options control SDK
+            runtime behavior. This adapter independently reads
+            ``resilient_background`` and ``steerable_conversations`` from the
+            options passed here to set hosting feature flags and report
+            steering support in ``foundry.agent.steerable_conversation``
+            response metadata.
+
+            These two fields must have matching values in the app's options
+            and this adapter's options. Passing the same options instance to
+            both is the simplest way to keep them aligned. The adapter does
+            not read options from the supplied app or validate that they match.
+
+            ``resilient_background=True`` requires a LangGraph checkpointer,
+            including when an existing ``app`` is supplied.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -398,8 +410,8 @@ class ResponsesHostServer:
         ValueError: If any of the following conditions holds:
 
             1. The graph's state schema does not declare a ``messages`` field.
-            2. ``app=None`` and ``resilient_background=True`` are configured
-               without a LangGraph checkpointer.
+            2. ``resilient_background=True`` is configured without a LangGraph
+               checkpointer.
             3. Response branching is enabled without the required async
                checkpoint implementations, with steering enabled, or with
                an external ``app``.
@@ -444,8 +456,7 @@ class ResponsesHostServer:
             else FoundryConversationChainStore()
         )
         if (
-            app is None
-            and options is not None
+            options is not None
             and options.resilient_background
             and not self._graph_has_checkpointer
         ):

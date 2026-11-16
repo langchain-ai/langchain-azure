@@ -710,6 +710,10 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         uses :meth:`build_task_runnable_config` instead and does not call
         this method.
 
+        If your customization must apply to both direct and task-backed
+        execution, override both this method and
+        :meth:`build_task_runnable_config`.
+
         Sets ``configurable.thread_id`` from a user-scoped internal form of
         ``request.state.session_id`` so checkpointed conversations cannot
         collide across users that choose the same public session ID.
@@ -742,6 +746,9 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         ``options.steerable_conversations`` is enabled, including foreground
         JSON and SSE, background work, and active recovered attempts. This
         path does not call :meth:`build_runnable_config`.
+
+        If your customization must apply to both direct and task-backed
+        execution, override both this method and :meth:`build_runnable_config`.
 
         The graph thread uses ``context.task_id``, the user-partitioned
         internal ID for the public session. The public ``session_id`` remains
