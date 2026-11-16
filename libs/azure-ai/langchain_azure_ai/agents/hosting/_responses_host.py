@@ -63,7 +63,6 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -313,7 +312,6 @@ def _response_root_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-@experimental()
 class ResponsesHostServer:
     """Host a LangGraph ``CompiledStateGraph`` as the Azure AI Responses API.
 
@@ -382,6 +380,9 @@ class ResponsesHostServer:
 
             ``resilient_background=True`` requires a LangGraph checkpointer,
             including when an existing ``app`` is supplied.
+            Both ``resilient_background`` and ``steerable_conversations`` are
+            experimental and emit a feature-level ``ExperimentalWarning`` when
+            enabled.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
@@ -402,6 +403,7 @@ class ResponsesHostServer:
             ``aput``, and ``aput_writes`` implementations, steering disabled,
             and ``app=None``.
             Branching from paused graphs is not supported.
+            Experimental; enabling it emits an ``ExperimentalWarning``.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
             Used only when ``app=None``. Otherwise, configure this setting when
             creating ``app``; passing it here has no effect.
@@ -480,10 +482,26 @@ class ResponsesHostServer:
         )
         self._hosting_features = HostingFeature.RESPONSES
         if options is not None and options.resilient_background:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental("ResponsesHostServer.resilient_background", stacklevel=3)
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+
         if self._steerable_conversations:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "ResponsesHostServer.steerable_conversations", stacklevel=3
+            )
+
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         if enable_response_branching:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "ResponsesHostServer.enable_response_branching", stacklevel=3
+            )
+
             self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 

@@ -256,6 +256,10 @@ The graph's input state must include a `messages` field.
 It supports JSON and streaming responses, background execution, conversation
 steering, and human-in-the-loop interrupts.
 
+Conversation steering (`steerable_conversations=True`) and crash recovery
+(`resilient_background=True`) are experimental and emit feature-level
+`ExperimentalWarning` warnings when enabled.
+
 For current feature support and configuration combinations, see the
 [Responses hosting overview](docs/hosting/responses.md).
 
@@ -272,7 +276,7 @@ the latest LangGraph checkpoint for subsequent turns.
 
 **[Experimental] Response branching:** Enable `enable_response_branching=True`
 with a history-preserving checkpointer to branch from a completed response
-using `previous_response_id`. See the
+using `previous_response_id`. Enabling it emits an `ExperimentalWarning`. See the
 [branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md)
 for branching, rewind, regeneration, and setup requirements.
 
@@ -297,6 +301,9 @@ background turns, or `steerable_conversations=True` to let a new turn supersede 
 active turn in the same `agent_session_id`. Resilient background execution requires
 a LangGraph checkpointer; use a durable checkpointer for hosted production
 deployments.
+
+Steering and durable background recovery are experimental and emit feature-level
+`ExperimentalWarning` warnings when enabled.
 
 See the [Invocations hosting overview](docs/hosting/invocations.md) for
 configuration, request formats, polling, cancellation, and interrupt handling, and the

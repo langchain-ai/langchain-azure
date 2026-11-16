@@ -87,7 +87,6 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -354,7 +353,6 @@ async def _close_async_iterator(iterator: AsyncIterator[Any]) -> None:
         await close()
 
 
-@experimental()
 class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     """Host a LangChain ``Runnable`` as the Invocations API.
 
@@ -427,6 +425,8 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             automatically. Either flag enables task-backed execution, including
             foreground JSON and SSE requests.
             ``background=True`` still requires ``resilient_background=True``.
+            Both options are experimental and emit a feature-level
+            ``ExperimentalWarning`` when enabled.
         app: Optional existing :class:`InvocationAgentServerHost` to
             attach to (e.g. a multi-protocol mixin). When ``app=None``, pass
             ``applicationinsights_connection_string`` and
@@ -464,9 +464,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
         if options is not None and options.resilient_background:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "InvocationsHostServer.resilient_background", stacklevel=3
+            )
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+
         if options is not None and options.steerable_conversations:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "InvocationsHostServer.steerable_conversations", stacklevel=3
+            )
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
+
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None
