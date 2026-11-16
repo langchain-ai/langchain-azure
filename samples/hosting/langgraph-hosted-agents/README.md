@@ -18,6 +18,8 @@ protocol: both Responses and Invocations hosts can use either model API.
 
 Each sample has its own code, dependencies, and README for local runs.
 
+For instructions on writing or updating samples, see [AGENTS.md](AGENTS.md).
+
 ## Setup paths
 
 Choose its `azd` setup path before running or deploying:
