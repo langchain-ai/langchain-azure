@@ -28,6 +28,8 @@ Microsoft Foundry combines agent hosting with application interfaces, enterprise
 
 ## Before you start
 
+Before applying the example, read the [application interface mapping](langgraph-to-foundry/02-run-locally.md#preserve-the-public-application-interface) and [deployment packaging](langgraph-to-foundry/03-prepare-deployment.md#prepare-runtime-dependencies) guidance, plus [state ownership](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) when the original runtime supplies required state. Do not select configuration-only hosting until the required operations, inputs and caller configuration fit its actual mappings. The example's single graph and request shape are not a replacement for your application's public interface.
+
 ### Model choice
 
 Hosting on Foundry does not require changing your model provider. You can keep your application's existing model, with its provider dependencies and credentials configured for both local and hosted execution.
