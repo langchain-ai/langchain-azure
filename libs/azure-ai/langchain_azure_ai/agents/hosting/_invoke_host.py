@@ -419,23 +419,29 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         output_parser: Optional callable that converts the runnable result
             into response text for non-streaming requests. When omitted, the
             default parser reads the last AI message from a ``messages`` state.
-        options: Optional :class:`ResponsesServerOptions` reused by this
-            adapter. Only ``resilient_background`` (durable recovery) and
-            ``steerable_conversations`` (in-flight steering) are read. The
-            object is not forwarded to :class:`InvocationAgentServerHost`;
-            other fields have no effect here. Either flag enables task-backed
-            execution, including foreground JSON and SSE requests.
+        options: Optional :class:`ResponsesServerOptions`. Only
+            ``resilient_background`` (durable recovery) and
+            ``steerable_conversations`` (in-flight steering) are used; other
+            fields have no effect. These options configure
+            ``InvocationsHostServer`` whether ``app`` is supplied or created
+            automatically. Either flag enables task-backed execution, including
+            foreground JSON and SSE requests.
             ``background=True`` still requires ``resilient_background=True``.
         app: Optional existing :class:`InvocationAgentServerHost` to
-            attach to (e.g. a multi-protocol mixin). In this mode the
-            adapter registers its invocation handlers on the supplied host.
-            Host-level kwargs (``applicationinsights_connection_string`` and
-            ``graceful_shutdown_timeout``) are ignored; configure them on
-            ``app`` itself. ``options`` still configures this adapter's
-            task-backed execution and checkpointer requirement.
-        applicationinsights_connection_string: Forwarded to
-            :class:`AgentServerHost`.
-        graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+            attach to (e.g. a multi-protocol mixin). When ``app=None``, pass
+            ``applicationinsights_connection_string`` and
+            ``graceful_shutdown_timeout`` to ``InvocationsHostServer``. When
+            supplying an existing ``app``, configure these settings when creating
+            :class:`InvocationAgentServerHost`. Passing them to
+            ``InvocationsHostServer`` does not change the supplied app.
+            ``options`` still configures invocation execution and the
+            checkpointer requirement.
+        applicationinsights_connection_string: Application Insights connection
+            string. Used only when ``app=None``. Otherwise, configure this setting
+            when creating ``app``; passing it here has no effect.
+        graceful_shutdown_timeout: Graceful shutdown timeout. Used only when
+            ``app=None``. Otherwise, configure this setting when creating ``app``;
+            passing it here has no effect.
 
     Raises:
         ValueError: If the graph's state schema does not declare a
