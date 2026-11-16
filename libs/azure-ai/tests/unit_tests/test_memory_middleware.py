@@ -340,6 +340,16 @@ def test_memory_middleware_without_checkpointer_skips_passed_history() -> None:
     ]
 
 
+def test_memory_middleware_without_checkpointer_skips_continued_turn() -> None:
+    """A run without a new user message shouldn't resend the previous turn."""
+    agent, mock_client = _create_memory_agent(["reply 1", "reply 2"])
+
+    result = agent.invoke({"messages": [HumanMessage(content="user 1")]})
+    agent.invoke({"messages": result["messages"]})
+
+    assert _sent_contents(mock_client) == ["user 1", "reply 1", "reply 2"]
+
+
 def test_memory_middleware_without_checkpointer_skips_passed_chat_messages() -> None:
     """History passed back as ``ChatMessage`` shouldn't be sent again."""
     agent, mock_client = _create_memory_agent(["reply 1", "reply 2", "reply 3"])

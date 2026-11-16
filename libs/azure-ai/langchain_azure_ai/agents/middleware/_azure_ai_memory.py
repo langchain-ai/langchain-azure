@@ -67,6 +67,18 @@ def _latest_turn_start(messages: Sequence[Any]) -> int:
     return 0
 
 
+def _new_input_start(messages: Sequence[Any]) -> int:
+    """Return the index of the first new message in an agent's input.
+
+    That's the start of the latest turn, or the end of the input when no user
+    message comes after the last assistant message.
+    """
+    roles = [role for role in map(_message_role, messages) if role is not None]
+    if roles and roles[-1] == "assistant":
+        return len(messages)
+    return _latest_turn_start(messages)
+
+
 def _map_message_to_memory_item(
     message: BaseMessage,
 ) -> Optional[EasyInputMessageParam]:
@@ -94,7 +106,8 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
 
     The number of messages already sent is kept in the agent state, so with a
     checkpointer each thread only sends its new messages. Without a checkpointer,
-    each invocation sends the messages of its latest turn. If the middleware is
+    each invocation sends the messages of its latest turn, or only the messages
+    it adds when its input has no new user message. If the middleware is
     created again (for example, after a restart) while a thread's messages are
     still waiting to be sent, the new instance sends them with its next update.
 
@@ -258,6 +271,24 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
                 ex,
                 exc_info=False,
             )
+
+    def before_agent(
+        self, state: _AzureAIMemoryState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
+        """Mark where the new messages start when the state has no count yet."""
+        messages = state.get(self._messages_key)
+        if (
+            not isinstance(messages, list)
+            or state.get("azure_ai_memory_processed_message_count") is not None
+        ):
+            return None
+        return {"azure_ai_memory_processed_message_count": _new_input_start(messages)}
+
+    async def abefore_agent(
+        self, state: _AzureAIMemoryState, runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
+        """Async hook equivalent of :meth:`before_agent`."""
+        return self.before_agent(state, runtime)
 
     def after_agent(
         self, state: _AzureAIMemoryState, runtime: Runtime[Any]
