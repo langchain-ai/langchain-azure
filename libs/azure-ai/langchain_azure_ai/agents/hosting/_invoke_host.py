@@ -87,7 +87,6 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
