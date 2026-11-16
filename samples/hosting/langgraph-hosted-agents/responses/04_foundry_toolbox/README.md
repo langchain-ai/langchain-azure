@@ -1,109 +1,162 @@
-# What this sample demonstrates
+# Foundry Toolbox tools and skills
 
-A [LangGraph](https://langchain-ai.github.io/langgraph/) agent whose
-tools are loaded from an **Azure AI Foundry Toolbox** — a managed
-multi-MCP gateway that aggregates many tool servers (custom MCP, OpenAPI
-tools, SharePoint search, etc.) behind one URL. The toolbox tools are
-fetched once at startup and bound to a `create_agent` graph hosted using
-the **Responses protocol**.
+A LangChain agent that loads tools and skills from the same **Foundry Toolbox**
+and serves the **Responses protocol**. The included `source-brief` skill guides
+the agent through a research task: search for primary sources with `web_search`,
+check any arithmetic with `code_interpreter`, then write a brief with citations.
 
-## How It Works
+## How it works
 
-### Model Integration
+At startup, [main.py](main.py) uses `AzureAIProjectToolbox.get_tools()` to load
+LangChain tools and `aget_skills(backend=...)` to download skill files into a
+temporary `FilesystemBackend`. Both use the Toolbox's default version. Set
+`toolbox_version` on `AzureAIProjectToolbox` to pin a specific version.
 
-The agent uses `langchain_openai.ChatOpenAI` with an Azure bearer token
-provider from `DefaultAzureCredential` and an OpenAI-compatible endpoint
-from `azure.ai.projects.AIProjectClient`.
+The existing `create_agent` graph uses two Deep Agents middleware components:
 
-See [main.py](main.py) for the full implementation.
+- `SkillsMiddleware` advertises skill names and descriptions in the system
+  prompt. Full instructions enter the conversation when the agent reads a skill.
+- `FilesystemMiddleware`, restricted to `read_file`, lets the agent read the
+  downloaded skills and their references. Paths stay inside the temporary
+  directory. Conversation and tool-output offloading are disabled so this shared
+  directory contains only Toolbox skills.
 
-### Tools — loaded from a Foundry Toolbox
+For a research request, the expected sequence is **read the skill → search →
+calculate if needed → write the brief**. The procedure lives in the skill;
+the agent code discovers it and provides the tools to carry it out. A numerical
+comparison uses `code_interpreter`; a brief with no arithmetic only needs search.
 
-[`langchain_azure_ai.tools.AzureAIProjectToolbox`](../../../../../libs/azure-ai/langchain_azure_ai/tools):
+Skill content is downloaded from Foundry once per host process. Restart the host
+after publishing a Toolbox or skill update. If no skills are attached, startup
+logs show `Loaded 0 skill file(s)` and ordinary Toolbox tool calls still work.
 
-- authenticates with `DefaultAzureCredential` (`az login` works),
-- injects the required `Foundry-Features` header,
-- sanitizes the tool schemas, and
-- returns standard LangChain `BaseTool` instances ready to plug into any
-  LangGraph / LangChain agent.
+The model remains `langchain_openai.ChatOpenAI`, authenticated with
+`DefaultAzureCredential` through the Foundry project endpoint. The compiled graph
+is hosted by `ResponsesHostServer`.
 
-By default, `AzureAIProjectToolbox` uses the toolbox's default version.
-To pin a specific version when constructing the toolbox:
+## Configure the Toolbox
 
-```python
-toolbox = AzureAIProjectToolbox(toolbox_name="agent-tools", toolbox_version="1")
+Use a Foundry project with a model deployment and a Toolbox containing
+`web_search` and `code_interpreter`. The caller needs **Foundry User** on that
+project. The [agent manifest](agent.manifest.yaml) declares these two tools;
+skill creation and attachment are separate steps below.
+
+From this sample directory, with `FOUNDRY_PROJECT_ENDPOINT` and `TOOLBOX_NAME`
+set in your shell, upload the included [source-brief skill](skill-src/source-brief/SKILL.md):
+
+```bash
+az login
+azd extension install microsoft.foundry
+azd ai skill create source-brief \
+  --file ./skill-src/source-brief \
+  --project-endpoint "$FOUNDRY_PROJECT_ENDPOINT" --no-prompt
+azd ai toolbox show "$TOOLBOX_NAME" \
+  --project-endpoint "$FOUNDRY_PROJECT_ENDPOINT" --output json
 ```
 
-Because `AzureAIProjectToolbox.get_tools()` is asynchronous, this sample
-fetches the tools once at startup with `asyncio.run(...)` and then
-builds the `create_agent` graph synchronously — the same shape as
-[`responses/02_tools`](../02_tools/) but with Foundry-managed tools
-instead of a local `@tool`.
+Attach it to a new version based on your Toolbox's current `default_version`.
+Replace `<default-version>` with that value from `show`:
 
-The set of tools available is whatever you configured on the toolbox
-named `TOOLBOX_NAME` (default `agent-tools`). The shipped
-[agent.manifest.yaml](agent.manifest.yaml) declares two managed tools to
-get you started:
-
-```yaml
-resources:
-  - kind: toolbox
-    name: agent-tools
-    tools:
-      - type: web_search
-        name: web_search
-      - type: code_interpreter
-        name: code_interpreter
+```bash
+azd ai toolbox skill add "$TOOLBOX_NAME" source-brief \
+  --from-version "<default-version>" \
+  --project-endpoint "$FOUNDRY_PROJECT_ENDPOINT" --no-prompt
 ```
 
-Edit the manifest to add or remove tools before deploying.
+This retains that version's tools and creates a new Toolbox version. Publish
+the version returned by `skill add` so the sample can discover it:
 
-### Agent Hosting
+```bash
+azd ai toolbox publish "$TOOLBOX_NAME" "<new-version>" \
+  --project-endpoint "$FOUNDRY_PROJECT_ENDPOINT" --no-prompt
+```
 
-The agent is hosted using
-[`langchain_azure_ai.agents.hosting.ResponsesHostServer`](../../../../../libs/azure-ai/langchain_azure_ai/agents/hosting),
-which adapts the compiled LangGraph runnable into a REST endpoint
-compatible with the OpenAI Responses protocol.
+If the skill already exists, create a new skill version:
 
-## Running the Agent Host
+```bash
+azd ai skill update source-brief --file ./skill-src/source-brief \
+  --project-endpoint "$FOUNDRY_PROJECT_ENDPOINT" --no-prompt
+```
 
-Follow the instructions in the [Running the Agent Host
-Locally](../../README.md#running-the-agent-host-locally) section of the README in the
-parent directory. This sample additionally requires `TOOLBOX_NAME` to be
-set to a toolbox configured in your Foundry project.
+An unpinned reference follows the skill's default version. To pin one, attach
+`source-brief@<skill-version>` instead. Skills must be in the same project as
+the Toolbox. See the Foundry guides for
+[skills](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/skills)
+and [attaching them to a Toolbox](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox#attach-skills-to-a-toolbox).
+The files in `skill-src/` are upload sources; the host reads skills from the
+Toolbox and has no local fallback.
 
-## Interacting with the agent
+## Run locally
 
-> Depending on how you run the agent host, you can invoke the agent
-> using `curl` (`Invoke-WebRequest` in PowerShell) or `azd`. Please
-> refer to the [parent README](../../README.md) for more details. Use
-> this README for sample queries you can send to the agent.
+Follow the parent's [local setup](../../README.md#running-the-agent-host-locally),
+then install this sample's [requirements](requirements.txt) and run `python main.py`.
+This sample requires `langchain-azure-ai>=1.3.1` and
+`deepagents==0.7.28`. If the SDK version is not available on your package index,
+install the repository SDK before the sample requirements (from the repo root):
 
-Ask the agent something that exercises one of your toolbox tools:
+```bash
+pip install "./libs/azure-ai[hosting,opentelemetry,tools]"
+pip install -r samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox/requirements.txt
+```
+
+Required environment variables:
+
+- `FOUNDRY_PROJECT_ENDPOINT`: your Foundry project endpoint.
+- `TOOLBOX_NAME`: the configured Toolbox name (`agent-tools` in the manifest).
+- `AZURE_AI_MODEL_DEPLOYMENT_NAME`: your model deployment (defaults to `gpt-4.1-mini`,
+  matching the manifest).
+
+Local runs use the developer's credential; the deployed agent identity also needs
+access to the project's model and Toolbox. Follow the shared deployment guidance
+for identity setup. Telemetry is enabled by default through the
+[shared tracing setup](../../README.md#tracing); message content, tool arguments,
+and tool results are redacted unless content recording is explicitly enabled.
+
+Startup lists the loaded tools and skill paths, including
+`/skills/source-brief/SKILL.md`.
+
+## Try the skill and tools together
+
+Send a research request:
 
 ```bash
 curl -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "What tools do you have available?"}'
+  -d '{"input":"Use the source-brief skill to compare Python 3.13 and 3.14 for a small web service. Find primary sources and include performance figures only when the measurements are comparable. Use code_interpreter for any percentage calculations."}'
 ```
+
+The response should include a `read_file` call for the skill, `web_search` calls,
+and a brief with **Recommendation**, **Evidence**, and **Open questions**. A
+`code_interpreter` call appears when the task needs a calculation.
+
+To exercise both remote tools with explicit calculation inputs, stream a request:
 
 ```bash
 curl -N -X POST http://127.0.0.1:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "<a question your toolbox can answer>", "stream": true}'
+  -d '{"input":"Use the source-brief skill to research Python 3.14 upgrade considerations for a web service. Our own comparable benchmark measured 250 ms on 3.13 and 200 ms on 3.14. Use web_search for release guidance and code_interpreter to calculate our latency reduction. Keep our measurements separate from published claims.","stream":true}'
 ```
 
-Intermediate `function_call` / `function_call_output` items are
-surfaced for every toolbox tool the agent invokes — same shape as the
-local-tools sample, but the tool execution happens inside the toolbox
-server.
+Here `code_interpreter` should calculate a **20% latency reduction** from the
+user's inputs. Intermediate reads and remote tool calls appear as
+`function_call` / `function_call_output` items over JSON or SSE. Ordinary tool
+requests such as `Use code_interpreter to calculate 17 * 25` still work.
 
-## Deploying the Agent to Foundry
+## Deploy to Foundry
 
-To host the agent on Foundry, follow the instructions in the [Deploying
-the Agent to
-Foundry](../../README.md#deploying-the-agent-to-foundry) section of
-the README in the parent directory. When you `azd provision`, the
-toolbox resource declared in [agent.manifest.yaml](agent.manifest.yaml)
-is created in your Foundry project and `TOOLBOX_NAME` is auto-injected
-into the container.
+Follow the parent's [deployment guide](../../README.md#deploying-the-agent-to-foundry).
+After `azd provision` creates the Toolbox, upload and attach the skill using the
+steps above, then deploy the agent. `TOOLBOX_NAME` is injected from the manifest.
+The image build needs access to a package index containing the required SDK
+version. To use an existing Toolbox instead, configure its name for the agent.
+
+## Local checks
+
+From the repository root, run the registered offline smoke checks:
+
+```bash
+uv run --project .github/tests --frozen pytest .github/tests --docs-samples-dir samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox
+```
+
+The tests use the real SDK resource loader, middleware, graph, and Responses
+host with a scripted model and a fake MCP boundary. They require no Azure calls.
