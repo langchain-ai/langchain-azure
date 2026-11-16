@@ -398,7 +398,7 @@ class ResponsesHostServer:
         ValueError: If the graph's state schema does not declare a
             ``messages`` field, or if ``app=None`` and
             ``resilient_background=True`` is configured without a LangGraph
-            checkpointer. Override this class to host custom-state graphs.
+            checkpointer.
             Also raised if response branching is enabled without the required
             async checkpoint implementations, with steering enabled, or with
             an external ``app``.
