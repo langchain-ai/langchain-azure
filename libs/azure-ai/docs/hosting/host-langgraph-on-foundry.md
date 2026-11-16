@@ -18,7 +18,7 @@ Preserve the existing backend and state semantics, including tool-managed state,
 
 ## Map the application interface
 
-Before choosing a hosting path, record a concrete contract map for every public operation in the application's original launch path, including workflows used before or between conversations. Graph importability and a `messages` field prove neither request nor response compatibility.
+Before choosing a hosting path, record a concrete contract map for every public operation in the application's original launch path, including workflows used before or between conversations. For each operation, identify the target artifact and an actual invocation, not only a graph symbol. Graph importability and a `messages` field prove neither request nor response compatibility.
 
 | Contract | Evidence required before choosing configuration-only hosting |
 | --- | --- |
@@ -27,7 +27,7 @@ Before choosing a hosting path, record a concrete contract map for every public 
 | Result | The caller can obtain the operation's original result or observable side effect through the delivered interface, not just model/tool events or an HTTP success. |
 | Access path | Every required operation has a runnable target command, supported endpoint and documented request. Keeping another graph in `langgraph.json` does not expose it through the selected host or preserve the original server API. |
 
-Use configuration-only hosting only when the installed SDK's defaults implement every required mapping. Otherwise adapt input, configuration, routing and output at the hosting boundary while delegating business execution to the original graphs. Resolve the actual runnable or factory and validate adapted input against its schema; changing the protocol name or disabling a compatibility check does not implement a conversion. A companion service is a valid access path only when its required runtime and invocation are delivered and verified, not assumed to remain available from the source environment.
+Use configuration-only hosting only when the installed SDK's defaults implement every required mapping. Otherwise adapt input, configuration, routing and output at the hosting boundary while delegating business execution to the original graphs. Resolve the actual runnable or factory and validate adapted input against its schema; changing the protocol name or disabling a compatibility check does not implement a conversion. A companion service is a valid access path only when its required runtime and invocation are delivered and verified, not assumed to remain available from the source environment. Do not silently narrow an application migration to its primary conversational operation: a required operation left available only in the old environment is unfinished migration work, unless the user explicitly accepts that split. Complete its target access path before declaring the application migrated.
 
 In particular, the default Responses converter maps message and tool events, not arbitrary terminal graph state. Overriding input conversion alone does not publish a structured graph result. When that result is part of the existing interface, implement its supported response/event conversion or a boundary that explicitly returns the delegated result. Check the client-visible final result as well as downstream execution.
 
