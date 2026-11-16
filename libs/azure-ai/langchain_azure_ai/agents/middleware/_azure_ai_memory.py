@@ -28,6 +28,9 @@ class _AzureAIMemoryState(AgentState[Any]):
     azure_ai_memory_processed_message_count: NotRequired[
         Annotated[int, PrivateStateAttr]
     ]
+    azure_ai_memory_processed_message_id: NotRequired[
+        Annotated[Optional[str], PrivateStateAttr]
+    ]
     azure_ai_memory_unsent_message_index: NotRequired[
         Annotated[Optional[int], PrivateStateAttr]
     ]
@@ -37,8 +40,13 @@ class _AzureAIMemoryState(AgentState[Any]):
 
 
 def _message_role(message: Any) -> Optional[Literal["user", "assistant"]]:
-    """Return the Azure AI Memory role of a message, if it has one."""
+    """Return the Azure AI Memory role of a message, if it has one.
+
+    Summaries added by ``SummarizationMiddleware`` don't have one.
+    """
     if not isinstance(message, BaseMessage):
+        return None
+    if message.additional_kwargs.get("lc_source") == "summarization":
         return None
     msg_type = getattr(message, "type", "") or message.__class__.__name__
     msg_type = msg_type.lower()
@@ -71,12 +79,54 @@ def _new_input_start(messages: Sequence[Any]) -> int:
     """Return the index of the first new message in an agent's input.
 
     That's the start of the latest turn, or the end of the input when no user
-    message comes after the last assistant message.
+    message comes after the last assistant answer. An assistant message with
+    tool calls isn't an answer, so its turn is still the latest one.
     """
-    roles = [role for role in map(_message_role, messages) if role is not None]
-    if roles and roles[-1] == "assistant":
+    last = next((m for m in reversed(messages) if _message_role(m) is not None), None)
+    if (
+        last is not None
+        and _message_role(last) == "assistant"
+        and not getattr(last, "tool_calls", None)
+    ):
         return len(messages)
     return _latest_turn_start(messages)
+
+
+def _last_message_id(messages: Sequence[Any]) -> Optional[str]:
+    """Return the ID of the last message, if there is one."""
+    return getattr(messages[-1], "id", None) if messages else None
+
+
+def _resume_index(
+    messages: Sequence[Any], count: Optional[int], message_id: Optional[str]
+) -> tuple[Optional[int], bool]:
+    """Return where the unprocessed messages start, and if the history changed.
+
+    The ID of the last processed message finds them again after earlier
+    messages are removed or replaced, for example by summarization during a run.
+
+    Args:
+        messages: The agent state's messages.
+        count: The number of messages already processed.
+        message_id: The ID of the last processed message.
+
+    Returns:
+        The index of the first unprocessed message, or ``None`` if it can't be
+        found, and whether the messages before it changed.
+    """
+    if count is None:
+        return None, False
+    if message_id is None:
+        return (count, False) if count <= len(messages) else (None, True)
+    if (
+        0 < count <= len(messages)
+        and getattr(messages[count - 1], "id", None) == message_id
+    ):
+        return count, False
+    for i, message in enumerate(messages):
+        if getattr(message, "id", None) == message_id:
+            return i + 1, True
+    return None, True
 
 
 def _map_message_to_memory_item(
@@ -104,8 +154,10 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
     memories back into your agent, use the :class:`AzureAIMemoryRetrieverTool`
     in your agent.
 
-    The number of messages already sent is kept in the agent state, so with a
-    checkpointer each thread only sends its new messages. Without a checkpointer,
+    The number of messages already sent and the ID of the last one are kept in
+    the agent state, so with a checkpointer each thread only sends its new
+    messages, even after earlier messages are summarized. Summaries added by
+    ``SummarizationMiddleware`` aren't sent. Without a checkpointer,
     each invocation sends the messages of its latest turn, or only the messages
     it adds when its input has no new user message. If the middleware is
     created again (for example, after a restart) while a thread's messages are
@@ -282,7 +334,11 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
             or state.get("azure_ai_memory_processed_message_count") is not None
         ):
             return None
-        return {"azure_ai_memory_processed_message_count": _new_input_start(messages)}
+        start = _new_input_start(messages)
+        return {
+            "azure_ai_memory_processed_message_count": start,
+            "azure_ai_memory_processed_message_id": _last_message_id(messages[:start]),
+        }
 
     async def abefore_agent(
         self, state: _AzureAIMemoryState, runtime: Runtime[Any]
@@ -298,13 +354,19 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         if not isinstance(messages, list):
             return None
 
-        start = state.get("azure_ai_memory_processed_message_count")
+        start, history_changed = _resume_index(
+            messages,
+            state.get("azure_ai_memory_processed_message_count"),
+            state.get("azure_ai_memory_processed_message_id"),
+        )
         unsent_index = state.get("azure_ai_memory_unsent_message_index")
         batch_id = state.get("azure_ai_memory_pending_batch_id")
         # The thread's earlier unsent messages are still in the current batch.
         queued = batch_id == self._pending_batch_id
-        if start is None or start > len(messages):
+        if start is None:
             start = _latest_turn_start(messages)
+            unsent_index = start
+        elif history_changed:
             unsent_index = start
         elif (
             unsent_index is not None
@@ -326,6 +388,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         unsent = bool(self._pending_items) and (queued or bool(new_items))
         return {
             "azure_ai_memory_processed_message_count": len(messages),
+            "azure_ai_memory_processed_message_id": _last_message_id(messages),
             "azure_ai_memory_unsent_message_index": unsent_index if unsent else None,
             "azure_ai_memory_pending_batch_id": (
                 self._pending_batch_id if unsent else None

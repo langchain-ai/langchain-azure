@@ -1,6 +1,6 @@
 """Unit tests for AzureAIMemoryMiddleware."""
 
-from typing import Any, cast
+from typing import Any, Sequence, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -214,7 +214,10 @@ def test_memory_middleware_resolves_project_endpoint_from_env_alias() -> None:
 
 
 def _create_memory_agent(
-    responses: list[str], checkpointer: Any = None, **kwargs: Any
+    responses: list[str],
+    checkpointer: Any = None,
+    other_middleware: Sequence[Any] = (),
+    **kwargs: Any,
 ) -> tuple[Any, Mock]:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -222,6 +225,7 @@ def _create_memory_agent(
     mock_client = Mock()
     mock_client.beta.memory_stores.begin_update_memories = Mock(return_value=Mock())
 
+    kwargs.setdefault("roles", ["user", "assistant"])
     with patch(
         "langchain_azure_ai.agents.middleware.azure_ai_memory.AIProjectClient",
         return_value=mock_client,
@@ -230,15 +234,25 @@ def _create_memory_agent(
             store_name="test_store",
             scope="user:test",
             project_endpoint="https://test.api.azureml.ms",
-            roles=["user", "assistant"],
             **kwargs,
         )
     agent = create_agent(
         model=FakeListChatModel(responses=responses),
-        middleware=[middleware],
+        middleware=[middleware, *other_middleware],
         checkpointer=checkpointer,
     )
     return agent, mock_client
+
+
+def _summarization_middleware(trigger: int, keep: int) -> Any:
+    from langchain.agents.middleware import SummarizationMiddleware
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    return SummarizationMiddleware(
+        model=FakeListChatModel(responses=["summary"]),
+        trigger=("messages", trigger),
+        keep=("messages", keep),
+    )
 
 
 def _summarize_messages(agent: Any, config: Any) -> None:
@@ -371,6 +385,49 @@ def test_memory_middleware_without_checkpointer_skips_passed_chat_messages() -> 
     ]
 
 
+def test_memory_middleware_without_checkpointer_sends_unanswered_tool_turn() -> None:
+    """A turn passed in with a pending tool round trip should be sent."""
+    agent, mock_client = _create_memory_agent(["reply 1"], roles=["user"])
+
+    agent.invoke(
+        {
+            "messages": [
+                HumanMessage(content="user 1"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "call_1"}],
+                ),
+                ToolMessage(content="result", tool_call_id="call_1"),
+            ]
+        }
+    )
+
+    assert _sent_contents(mock_client) == ["user 1"]
+
+
+def test_memory_middleware_without_checkpointer_sends_turn_kept_by_summary() -> None:
+    """The latest turn should be sent when its history is summarized in the run."""
+    agent, mock_client = _create_memory_agent(
+        ["reply 2"], other_middleware=[_summarization_middleware(trigger=3, keep=1)]
+    )
+
+    result = agent.invoke(
+        {
+            "messages": [
+                HumanMessage(content="user 1"),
+                AIMessage(content="reply 1"),
+                HumanMessage(content="user 2"),
+            ]
+        }
+    )
+
+    assert [message.content for message in result["messages"][1:]] == [
+        "user 2",
+        "reply 2",
+    ]
+    assert _sent_contents(mock_client) == ["user 2", "reply 2"]
+
+
 def test_memory_middleware_sends_queued_turns_after_recreation() -> None:
     """Turns queued by an earlier instance should be sent by the new one."""
     from langgraph.checkpoint.memory import InMemorySaver
@@ -500,4 +557,30 @@ def test_memory_middleware_sends_turns_queued_after_summarization() -> None:
         "reply 5",
         "user 6",
         "reply 6",
+    ]
+
+
+@pytest.mark.parametrize("keep", [1, 2])
+def test_memory_middleware_sends_turn_summarized_during_run(keep: int) -> None:
+    """Summarizing a thread during a run shouldn't drop or resend its turns."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, mock_client = _create_memory_agent(
+        ["reply 1", "reply 2", "reply 3"],
+        InMemorySaver(),
+        other_middleware=[_summarization_middleware(trigger=4, keep=keep)],
+    )
+
+    for content in ["user 1", "user 2", "user 3"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]}, config)
+
+    assert len(agent.get_state(config).values["messages"]) == keep + 2
+    assert _sent_contents(mock_client) == [
+        "user 1",
+        "reply 1",
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
     ]
