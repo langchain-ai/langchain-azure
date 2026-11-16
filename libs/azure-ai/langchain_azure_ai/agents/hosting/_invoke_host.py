@@ -87,7 +87,6 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import warn_experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -465,15 +464,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
         if options is not None and options.resilient_background:
+            from langchain_azure_ai._api.base import warn_experimental
+
             warn_experimental(
                 "InvocationsHostServer.resilient_background", stacklevel=3
             )
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+
         if options is not None and options.steerable_conversations:
+            from langchain_azure_ai._api.base import warn_experimental
+
             warn_experimental(
                 "InvocationsHostServer.steerable_conversations", stacklevel=3
             )
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
+
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None

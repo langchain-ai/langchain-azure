@@ -63,7 +63,6 @@ except ImportError as exc:
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from langchain_azure_ai._api.base import warn_experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -483,17 +482,26 @@ class ResponsesHostServer:
         )
         self._hosting_features = HostingFeature.RESPONSES
         if options is not None and options.resilient_background:
+            from langchain_azure_ai._api.base import warn_experimental
+
             warn_experimental("ResponsesHostServer.resilient_background", stacklevel=3)
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+
         if self._steerable_conversations:
+            from langchain_azure_ai._api.base import warn_experimental
+
             warn_experimental(
                 "ResponsesHostServer.steerable_conversations", stacklevel=3
             )
+
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
         if enable_response_branching:
+            from langchain_azure_ai._api.base import warn_experimental
+
             warn_experimental(
                 "ResponsesHostServer.enable_response_branching", stacklevel=3
             )
+
             self._hosting_features |= HostingFeature.RESPONSE_BRANCHING
         _add_process_hosting_features(self._hosting_features)
 
