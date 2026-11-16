@@ -10,6 +10,8 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need separate adaptation. See the [Responses hosting limitations](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point).
 
+Before choosing a hosting path, identify capabilities supplied by the application's original runtime, not only by its exported graph. These can include session management, checkpoints, tool-managed state and resource lifetimes. If existing behavior depends on continuity, plan its target owner before local hosting or deployment; the [persistence guidance](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) is then part of the migration, not an optional feature to add afterward. Do not introduce state or recovery requirements that the application did not have.
+
 ## Why host your LangGraph application on Foundry?
 
 Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform to help enterprises deliver production-quality AI agents.

@@ -35,6 +35,16 @@ The hosting package works with the existing graph, tools, and prompts, handling 
 
 > **Note:** The default host requires a graph state schema with a `messages` field. Check any custom state schema before choosing this path.
 
+### Preserve the public application interface
+
+Map every existing public operation to its input, caller configuration, output or side effect, and usable target access path. Include supporting workflows used before or between conversations. Selecting one exported graph does not expose the others, and retaining `langgraph.json` does not deliver the original server API.
+
+The runner selects and loads a graph. Its default Responses conversion supplies conversation messages; the default Invocations conversion also builds message-shaped graph input. Neither automatically decodes a JSON string into arbitrary graph state or forwards caller-supplied `RunnableConfig.configurable` fields. A `messages` field alone therefore does not establish compatibility. Inspect the installed SDK's request parser, input/configuration builders and output parser against the original interface before relying on the defaults.
+
+Use configuration-only hosting when those mappings preserve the required interface. Otherwise adapt request parsing, operation routing, configuration propagation and output serialization at the hosting boundary, delegating business execution to the existing graphs. Resolve the actual exported runnable or factory rather than assuming a similarly named module attribute. Validate adapted input against the original schema; changing the protocol name or disabling a compatibility check does not implement a missing conversion. Deliver and document any separately required entry points or companion services.
+
+Keep application configuration separate from platform authentication. Preserve per-request parameter semantics and validation; an authenticated user, session key or environment-wide fallback does not automatically replace an application-defined partition/configuration value. Resolve necessary mappings explicitly without inventing a new business or authorization policy.
+
 ## Prepare local configuration
 
 Make your application's configuration and credentials available before SDK and graph initialization. Create or update the root `.env` with the values your application reads. The startup command below loads it with uv's `--env-file` option rather than relying on the `env` field in `langgraph.json`.
@@ -81,6 +91,10 @@ uv run --no-sync --env-file .env python -m langchain_azure_ai.agents.hosting.run
 ```
 
 ## Verify local execution
+
+Installation, sustained host startup and successful application execution are separate gates. Use the actual deployment entry point and effective configuration, not an independently constructed graph. Exercise every preserved operation and the workflow connecting them through the delivered interface, including follow-up requests when continuity matters. Check actual downstream effects, not only HTTP success or an acknowledgement: dropped input can produce a plausible success response without performing the requested operation.
+
+When model, tool or external-service credentials are unavailable, use disposable, external-only substitutes to check a successful local request. Keep the submitted adapter, graph construction, routing, configuration propagation and application execution real; do not stub the delegate or return expected results from the host. Keep substitutes outside production code and remove them before delivery. This verifies the hosting boundary, not cloud integration or real-provider behavior; report unavailable checks and prerequisites separately.
 
 In another terminal, send a representative request to the local `/responses` endpoint. The default port is `8088`; adjust the URL if you configured a different port:
 

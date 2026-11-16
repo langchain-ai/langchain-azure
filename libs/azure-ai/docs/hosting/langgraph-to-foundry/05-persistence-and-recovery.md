@@ -1,6 +1,6 @@
 # Enable persistence and recovery
 
-Once the agent [runs in Foundry](04-deploy-and-verify.md), decide what state and work must survive across turns or host restarts. This article shows how to preserve messages, reports, and task progress with durable checkpoints. It then covers recovery for requests interrupted by a host failure. Apply the parts that match your application's requirements.
+Before selecting the hosting path, identify what state and work the original application retains across turns or host restarts. This article shows how to preserve messages, reports, and task progress with durable checkpoints. It then covers recovery for requests interrupted by a host failure. Plan required state ownership during migration; perform the hosted verification after the agent [runs in Foundry](04-deploy-and-verify.md). Apply only the parts that match the existing application's requirements.
 
 ## Before you start
 
@@ -11,6 +11,8 @@ Complete [Deploy and verify the agent](04-deploy-and-verify.md). Keep the deploy
 If your application needs state across turns, configure a durable checkpointer. In the Deep Research example, this state includes messages, reports, and task progress.
 
 Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
+
+Inspect the documented original launch path as well as graph construction. LangGraph development/server runtimes can supply checkpointing outside the exported graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. A graph loaded by another host does not inherit that runtime service. Preserve framework- and tool-managed state as well as messages, and assign each required capability a target owner with the needed lifetime. Verify that this owner applies to the graph actually serving requests. Small construction or lifecycle adaptations can be necessary to preserve behavior; they are not permission to redesign business logic, replace an established backend or migrate historical checkpoints without user intent. Keep development and hosted construction separate where their ownership rules differ.
 
 Choose a storage service based on what the agent needs to retain:
 

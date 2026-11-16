@@ -78,7 +78,9 @@ The Python runtime starts the file specified by `codeConfiguration.entryPoint`. 
 
 ### Prepare runtime dependencies
 
-The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
+This example uses a root `requirements.txt` for its remote build. Other Python projects can use a different supported dependency-resolution path: Oryx distinguishes requirements, uv and Poetry builds using files present in the upload. A uv project must retain its matching `pyproject.toml` and `uv.lock`, or intentionally package a validated replacement manifest. See the [Oryx Python build implementation](https://github.com/microsoft/Oryx/blob/84c15f84129d698b408161ed143742b386ee42a0/src/BuildScriptGenerator/Python/PythonBashBuildSnippet.sh.tpl). Do not assume a local editable install or `uv sync` proves that the remote archive will install the same application.
+
+Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
@@ -139,6 +141,8 @@ research_agent.ipynb
 Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`; the upload excludes the development `pyproject.toml` and lockfile.
 
 Review the upload contents before deployment. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
+
+Inspect the archive after applying ignore rules, and verify installation from that archive in a clean environment. Keep runtime source, configuration, resources and all build inputs consumed by the selected builder. Dependency manifests and lockfiles are not caches; exclude one only when a validated replacement dependency-resolution path is packaged.
 
 ## Configure project connections for third-party endpoints
 
