@@ -11,17 +11,20 @@ import openai
 import pytest
 from azure.core.credentials import AccessToken, AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
+from langchain_core.decisions import BaseDecisionModel, Box
+from langchain_core.exceptions import ModelRefusalError
 from langchain_core.load import dumps, loads
 from langchain_core.runnables import ConfigurableField, RunnableLambda
-from langchain_openai.decisions import OpenAIDecisions
+from langchain_openai.decisions import OpenAIClassifier
 from pydantic import SecretStr, ValidationError
 
 from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.decisions import (
     AzureAIOpenAIApiDecisions,
     Choice,
-    DecisionRequest,
-    Predicate,
+    ClassifierRequest,
+    ClassifierResponse,
+    Noul,
     Score,
 )
 
@@ -36,18 +39,18 @@ pytestmark = [
 
 ENDPOINT = "https://test.services.ai.azure.com/openai/v1"
 PROJECT = "https://test.services.ai.azure.com/api/projects/test-project"
-REQUEST: DecisionRequest = {
-    "input": "Checkout is broken. Please refund my payment.",
+REQUEST: ClassifierRequest = {
+    "state": "Checkout is broken. Please refund my payment.",
     "questions": {
-        "refund": Predicate(instructions="Is a refund requested?"),
+        "refund": Noul(instructions="Is a refund requested?"),
         "team": Choice(
             instructions="Who should handle this?",
-            choices={"billing": "Payments", "engineering": "Bugs"},
+            criteria={"billing": "Payments", "engineering": "Bugs"},
         ),
-        "severity": Score(instructions="How severe?", levels=["Minor", "Major"]),
+        "severity": Score(instructions="How severe?", criteria=["Minor", "Major"]),
     },
 }
-BODY = {
+BODY: dict[str, Any] = {
     "model": "gpt-6-luna",
     "answers": [
         {"type": "predicate", "name": "refund", "probability": 0.9},
@@ -157,10 +160,18 @@ def test_sync_contract(
     payload = json.loads(requests[0].content)
     assert payload["model"] == "custom-deployment"
     assert [q["type"] for q in payload["questions"]] == ["predicate", "choice", "score"]
-    assert answer.predicates["refund"].probability == 0.9
+    assert payload["questions"][1]["choices"] == [
+        {"value": "billing", "description": "Payments"},
+        {"value": "engineering", "description": "Bugs"},
+    ]
+    assert payload["questions"][2]["levels"] == [{"label": "Minor"}, {"label": "Major"}]
+    assert isinstance(answer, ClassifierResponse)
+    assert answer.nouls["refund"].noul == 0.9
     assert answer.choices["team"].choice == "billing"
     assert answer.scores["severity"].legend == {0: "Minor", 1: "Major"}
-    assert answer.usage.input_tokens == 30
+    assert answer.usage is not None
+    assert answer.usage["input_tokens"] == 30
+    assert answer.usage["total_tokens"] == 30
     assert answer.request_id == "test-id"
 
 
@@ -178,7 +189,7 @@ async def test_async_token_refresh(
         )
         for _ in range(2):
             answer = await decisions.ainvoke(REQUEST)
-            assert answer.predicates["refund"].probability == 0.9
+            assert answer.nouls["refund"].noul == 0.9
     assert [r.headers["authorization"] for r in requests] == [
         "Bearer token-1",
         "Bearer token-2",
@@ -305,9 +316,7 @@ def test_native_options_and_runnable_composition(
             default_headers={"x-extra": "value"},
             default_query={"test": "value"},
         )
-        chain = decisions | RunnableLambda(
-            lambda answer: answer.predicates["refund"].probability
-        )
+        chain = decisions | RunnableLambda(lambda answer: answer.nouls["refund"].noul)
         assert chain.invoke(REQUEST) == 0.9
     assert requests[0].url.params["test"] == "value"
     assert requests[0].headers["x-extra"] == "value"
@@ -320,7 +329,10 @@ def test_refusals_and_api_errors() -> None:
             200,
             json={
                 "model": "gpt-6-luna",
-                "answers": [{"type": "refusal", "name": "refund"}],
+                "answers": [
+                    {"type": "refusal", "name": "refund"},
+                    *BODY["answers"][1:],
+                ],
             },
         )
 
@@ -332,7 +344,8 @@ def test_refusals_and_api_errors() -> None:
             http_client=client,
             max_retries=0,
         )
-        assert "refund" in decisions.invoke(REQUEST).refusals
+        with pytest.raises(ModelRefusalError, match="refund"):
+            decisions.invoke(REQUEST)
     with httpx.Client(
         transport=httpx.MockTransport(
             lambda _: httpx.Response(401, json={"error": {"message": "unauthorized"}})
@@ -361,6 +374,33 @@ def test_no_credential_leak(credential: Any) -> None:
     assert "private-test-key" not in json.dumps(decisions.to_json())
 
 
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_unsupported_question_does_not_send_request(
+    use_async: bool,
+    transport: httpx.MockTransport,
+    requests: list[httpx.Request],
+) -> None:
+    with httpx.Client(transport=transport) as client:
+        async with httpx.AsyncClient(transport=transport) as async_client:
+            decisions = AzureAIOpenAIApiDecisions(
+                endpoint=ENDPOINT,
+                credential="test-key",
+                model="deployment",
+                http_client=client,
+                http_async_client=async_client,
+            )
+            request: ClassifierRequest = {
+                "state": "Find the receipt.",
+                "questions": {"receipt": Box(instructions="Locate the receipt.")},
+            }
+            with pytest.raises(ValueError, match="does not support Box"):
+                if use_async:
+                    await decisions.ainvoke(request)
+                else:
+                    decisions.invoke(request)
+    assert not requests
+
+
 @pytest.mark.parametrize("auth_field", ["credential", "api_key"])
 @pytest.mark.parametrize(
     "kwargs",
@@ -376,7 +416,7 @@ def test_validation_errors_hide_secrets(
     assert "private-test-key" not in str(error.value)
     assert "private-test-key" not in repr(error.value)
     assert AzureAIOpenAIApiDecisions.model_config == {
-        **OpenAIDecisions.model_config,
+        **OpenAIClassifier.model_config,
         "hide_input_in_errors": True,
     }
 
@@ -403,7 +443,7 @@ def test_configurable_model(
         configured = decisions.configurable_fields(
             model=ConfigurableField(id="deployment")
         ).with_config(configurable={"deployment": "other-deployment"})
-        assert configured.invoke(REQUEST).predicates["refund"].probability == 0.9
+        assert configured.invoke(REQUEST).nouls["refund"].noul == 0.9
     assert [json.loads(r.content)["model"] for r in requests] == [
         "original",
         "other-deployment",
@@ -470,14 +510,15 @@ def test_serialization_round_trip(
 
 
 def test_experimental_warning_and_exports() -> None:
-    import langchain_openai.decisions as upstream
+    import langchain_core.decisions as upstream
 
     import langchain_azure_ai.decisions as azure
 
     for name in azure.__all__:
         if name != "AzureAIOpenAIApiDecisions":
             assert getattr(azure, name) is getattr(upstream, name)
-    assert issubclass(AzureAIOpenAIApiDecisions, OpenAIDecisions)
+    assert issubclass(AzureAIOpenAIApiDecisions, OpenAIClassifier)
+    assert issubclass(AzureAIOpenAIApiDecisions, BaseDecisionModel)
     with pytest.warns(ExperimentalWarning, match="is experimental"):
         AzureAIOpenAIApiDecisions(
             endpoint=ENDPOINT, credential="test-key", model="deployment"

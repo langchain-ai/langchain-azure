@@ -1,20 +1,18 @@
-"""Azure OpenAI Decisions integration and upstream question and answer types."""
+"""Azure OpenAI decision model and LangChain Core question and answer types."""
 
-from langchain_openai.decisions import (
+from langchain_core.decisions import (
     Answer,
     Choice,
     ChoiceAnswer,
-    DecisionRequest,
-    DecisionResponse,
-    Level,
-    Predicate,
-    PredicateAnswer,
+    ClassifierRequest,
+    ClassifierResponse,
+    Noul,
+    NoulAnswer,
+    NoulCriteria,
     Question,
-    RefusalAnswer,
     Score,
     ScoreAnswer,
     State,
-    Usage,
 )
 
 from langchain_azure_ai.decisions.openai import AzureAIOpenAIApiDecisions
@@ -24,15 +22,13 @@ __all__ = [
     "AzureAIOpenAIApiDecisions",
     "Choice",
     "ChoiceAnswer",
-    "DecisionRequest",
-    "DecisionResponse",
-    "Level",
-    "Predicate",
-    "PredicateAnswer",
+    "ClassifierRequest",
+    "ClassifierResponse",
+    "Noul",
+    "NoulAnswer",
+    "NoulCriteria",
     "Question",
-    "RefusalAnswer",
     "Score",
     "ScoreAnswer",
     "State",
-    "Usage",
 ]

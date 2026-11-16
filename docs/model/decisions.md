@@ -9,26 +9,32 @@ currently using a `gpt-6-luna` deployment. Microsoft-Decision-1 uses the separat
 
 ## Interface
 
-`AzureAIOpenAIApiDecisions` is a `Runnable[DecisionRequest, DecisionResponse]`.
-It accepts shared input and named questions, and returns typed answers keyed by
+`AzureAIOpenAIApiDecisions` implements LangChain's `BaseDecisionModel`, a
+`Runnable[ClassifierRequest, ClassifierResponse]`. It accepts `state` and named
+Core questions, and returns typed answers keyed by
 question name:
 
-- `Predicate`: the probability that a condition is true.
+- `Noul`: the probability that a condition is true.
 - `Choice`: a selection from fixed options, with probabilities and confidence.
 - `Score`: a rating over ordered levels, with probabilities and confidence.
 
-A question can return a refusal while other questions receive answers. The
-result preserves these answer types rather than converting them to `AIMessage`.
-This contract is why Decisions has a dedicated Runnable instead of extending
-the chat model interface.
+Answers use `response.nouls`, `response.choices`, and `response.scores`. This
+contract supports consumers of `BaseDecisionModel` while keeping Decisions
+separate from the chat model's `AIMessage` contract.
+
+The upstream adapter defines the capability limits: `Box` is unsupported,
+`Choice` needs at least two labels, and any refusal raises `ModelRefusalError`
+for the entire request. Structured JSON state cannot preserve media; upstream
+drops embedded media with a warning. Root messages can carry supported images.
 
 ## Adapter
 
-The class extends `langchain_openai.decisions.OpenAIDecisions` and reexports its
-question and answer types from `langchain_azure_ai.decisions`. Request building
-and response parsing stay upstream; the adapter adds Azure configuration using
-the existing endpoint and credential helpers. This requires
-`langchain-openai>=1.7.2`.
+The class extends `langchain_openai.decisions.OpenAIClassifier` and reexports
+Core question and answer types from `langchain_azure_ai.decisions`. The upstream
+classifier converts Core requests and responses to and from the OpenAI protocol,
+including `Noul` to `Predicate`. The Azure adapter adds configuration using the
+existing endpoint and credential helpers. This requires
+`langchain-openai>=1.8.0`, which requires `langchain-core>=1.8.0`.
 
 Azure constructor options are normalized to the inherited `base_url` and `api_key`
 fields. Only this resolved configuration is retained for Runnable reconstruction

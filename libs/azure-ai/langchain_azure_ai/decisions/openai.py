@@ -1,4 +1,4 @@
-"""Azure configuration for the OpenAI Decisions Runnable."""
+"""Azure configuration for the OpenAI decision model."""
 
 import os
 from typing import Any
@@ -7,7 +7,7 @@ from azure.core.credentials import AzureKeyCredential, TokenCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from azure.identity import DefaultAzureCredential
 from langchain_core.utils import from_env
-from langchain_openai.decisions import OpenAIDecisions
+from langchain_openai.decisions import OpenAIClassifier
 from pydantic import ConfigDict, Field, SecretStr, model_validator
 
 from langchain_azure_ai._api.base import experimental
@@ -22,13 +22,15 @@ from langchain_azure_ai.utils.env import get_from_dict_or_env, get_project_endpo
 
 @experimental(
     message="AzureAIOpenAIApiDecisions is experimental and its interface may change. "
-    "It extends the beta OpenAIDecisions integration."
+    "It extends the beta OpenAIClassifier integration."
 )
-class AzureAIOpenAIApiDecisions(OpenAIDecisions):
+class AzureAIOpenAIApiDecisions(OpenAIClassifier):
     """Ask typed questions with the Azure OpenAI Decisions API in Foundry.
 
     Inherits question handling, response parsing, batching, retries, and synchronous
-    and asynchronous invocation from ``OpenAIDecisions``. Its upstream API is beta.
+    and asynchronous invocation from ``OpenAIClassifier``. It implements LangChain's
+    ``BaseDecisionModel`` interface with Core question and answer types. Its upstream
+    API is beta.
     The ``model`` is an Azure deployment name for a supported Decisions model,
     currently ``gpt-6-luna``. This integration uses ``/openai/v1/decisions``.
 
@@ -46,7 +48,7 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
             direct endpoint, then ``DefaultAzureCredential``. Project endpoints
             require a token credential and default to ``DefaultAzureCredential``.
             An async-only credential requires ``ainvoke`` or ``abatch``.
-        **kwargs: Options accepted by ``OpenAIDecisions``, including ``timeout``,
+        **kwargs: Options accepted by ``OpenAIClassifier``, including ``timeout``,
             ``max_retries``, HTTP clients, headers, and query parameters. An explicit
             ``api_key`` or token callable can be used instead of ``credential``.
 
@@ -55,11 +57,17 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
             authentication parameters conflict, a credential type is unsupported,
             or a project uses key authentication.
         pydantic.ValidationError: If the deployment name or another field is invalid.
+        langchain_core.exceptions.ModelRefusalError: From invocation if the API
+            refuses any question. Other answers in that request are discarded.
+
+    Note:
+        ``Box`` questions are unsupported and raise ``ValueError``. ``Choice``
+        requires at least two labels. Other input limits follow ``OpenAIClassifier``.
 
     Example:
         ```python
         from azure.identity import DefaultAzureCredential
-        from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Predicate
+        from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
 
         decisions = AzureAIOpenAIApiDecisions(
             endpoint="https://my-resource.openai.azure.com/openai/v1",
@@ -67,10 +75,10 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
             model="my-luna-deployment",
         )
         answer = decisions.invoke({
-            "input": "Please refund the duplicate charge.",
-            "questions": {"refund": Predicate(instructions="Is a refund requested?")},
+            "state": "Please refund the duplicate charge.",
+            "questions": {"refund": Noul(instructions="Is a refund requested?")},
         })
-        print(answer.predicates["refund"].probability)
+        print(answer.nouls["refund"].noul)
         ```
     """
 
@@ -99,7 +107,7 @@ class AzureAIOpenAIApiDecisions(OpenAIDecisions):
                 variables when no direct endpoint is supplied.
             credential: Azure key or token credential. Defaults to an Azure API key
                 or ``DefaultAzureCredential``, as described in the class docstring.
-            **kwargs: Options accepted by ``OpenAIDecisions``.
+            **kwargs: Options accepted by ``OpenAIClassifier``.
         """
         super().__init__(
             **{
