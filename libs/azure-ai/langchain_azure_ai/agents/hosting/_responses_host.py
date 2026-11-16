@@ -340,7 +340,7 @@ class ResponsesHostServer:
         checkpointer. With a checkpointer, the host returns HTTP 400 before
         streaming or graph execution.
 
-    The host owns an internal :class:`ResponsesAgentServerHost` and
+    The host creates or attaches to a :class:`ResponsesAgentServerHost` and
     registers a default request → graph → events conversion pipeline
     against it. For advanced scenarios (custom routes, multi-protocol
     composition, custom converter), users may either:
@@ -358,17 +358,37 @@ class ResponsesHostServer:
 
     Keyword Args:
         app: Optional existing :class:`ResponsesAgentServerHost` to attach
-            to (e.g. a multi-protocol mixin). In this mode the host-level
-            kwargs are ignored — the caller is expected to have
-            configured them on ``app`` itself. Response branching requires
-            ``app=None``.
-        options: Optional :class:`ResponsesServerOptions` forwarded to
-            :class:`ResponsesAgentServerHost`.
+            to (e.g. a multi-protocol mixin). When ``app=None``, pass ``store``,
+            ``prefix``, ``applicationinsights_connection_string``, and
+            ``graceful_shutdown_timeout`` to ``ResponsesHostServer``. When
+            supplying an existing ``app``, configure these settings when
+            creating :class:`ResponsesAgentServerHost`. Passing them to
+            ``ResponsesHostServer`` does not change the supplied app.
+
+            Response branching requires ``app=None``.
+        options: Optional :class:`ResponsesServerOptions`. When ``app=None``,
+            pass these options to ``ResponsesHostServer`` to configure the app
+            it creates.
+
+            When supplying an existing ``app``, ``resilient_background`` and
+            ``steerable_conversations`` in these options must match the values
+            used to create ``app``. Passing the same options instance to both
+            constructors is the simplest way to keep them aligned. These values
+            are not automatically inferred from ``app`` or checked for
+            consistency.
+
+            ``steerable_conversations`` also determines whether response
+            metadata reports ``foundry.agent.steerable_conversation`` support.
+
+            ``resilient_background=True`` requires a LangGraph checkpointer,
+            including when an existing ``app`` is supplied.
         store: Optional :class:`ResponseProviderProtocol`. This provider
             owns Responses protocol data, including response objects, input and
             output items, status, and history used by ``previous_response_id``.
-            When omitted, Agent Server uses :class:`FileResponseStore` locally
-            and :class:`FoundryStorageProvider` when hosted on Foundry.
+            Used only when ``app=None``. If omitted in that case, the app uses
+            :class:`FileResponseStore` locally and :class:`FoundryStorageProvider`
+            when hosted on Foundry. When supplying an existing ``app``, configure
+            ``store`` when creating it; passing ``store`` here has no effect.
         conversation_chain_store: Optional :class:`ConversationChainStoreProtocol`
             for dictionaries shared across turns. Implementations choose their
             serialization and durability model and must support concurrent calls,
@@ -383,17 +403,24 @@ class ResponsesHostServer:
             and ``app=None``.
             Branching from paused graphs is not supported.
         prefix: URL prefix for response routes (e.g. ``"/v1"``).
-        applicationinsights_connection_string: Forwarded to
-            :class:`AgentServerHost`.
-        graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+            Used only when ``app=None``. Otherwise, configure this setting when
+            creating ``app``; passing it here has no effect.
+        applicationinsights_connection_string: Application Insights connection
+            string. Used only when ``app=None``. Otherwise, configure this setting
+            when creating ``app``; passing it here has no effect.
+        graceful_shutdown_timeout: Graceful shutdown timeout. Used only when
+            ``app=None``. Otherwise, configure this setting when creating ``app``;
+            passing it here has no effect.
 
     Raises:
-        ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs. Also raised if response branching is
-            enabled without the required async checkpoint implementations,
-            with steering enabled, or with an external ``app``.
+        ValueError: If any of the following conditions holds:
+
+            1. The graph's state schema does not declare a ``messages`` field.
+            2. ``resilient_background=True`` is configured without a LangGraph
+               checkpointer.
+            3. Response branching is enabled without the required async
+               checkpoint implementations, with steering enabled, or with
+               an external ``app``.
     """
 
     def __init__(
@@ -435,8 +462,7 @@ class ResponsesHostServer:
             else FoundryConversationChainStore()
         )
         if (
-            app is None
-            and options is not None
+            options is not None
             and options.resilient_background
             and not self._graph_has_checkpointer
         ):
@@ -496,7 +522,7 @@ class ResponsesHostServer:
 
     @property
     def app(self) -> ResponsesAgentServerHost:
-        """The underlying :class:`ResponsesAgentServerHost`."""
+        """The supplied or internally created :class:`ResponsesAgentServerHost`."""
         return self._app
 
     @property
