@@ -444,10 +444,11 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
             passing it here has no effect.
 
     Raises:
-        ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs.
+        ValueError: If any of the following conditions holds:
+
+            1. The graph's state schema does not declare a ``messages`` field.
+            2. ``resilient_background=True`` is configured without a LangGraph
+               checkpointer.
     """
 
     def __init__(
