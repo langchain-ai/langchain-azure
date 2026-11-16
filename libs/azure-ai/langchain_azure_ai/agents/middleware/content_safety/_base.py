@@ -266,7 +266,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def _handle_violations(
         self,
         evaluations: Sequence[ContentSafetyEvaluation],
-        context: Literal["agent.input", "agent.output", "model.input", "model.output"],
+        context: Literal[
+            "agent.input", "agent.output", "model.input", "model.output", "tool.output"
+        ],
         offending_message: Optional[BaseMessage] = None,
     ) -> dict[str, Any] | None:
         """Apply the configured exit behaviour to detected violations.

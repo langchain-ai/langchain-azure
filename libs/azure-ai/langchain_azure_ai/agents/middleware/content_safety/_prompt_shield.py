@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
-from langchain.agents.middleware import AgentState, Runtime
+from langchain.agents.middleware import AgentState, Runtime, ToolCallRequest
 from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.messages.content import NonStandardAnnotation
+from langgraph.runtime import get_runtime
+from langgraph.types import Command
 
 from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.middleware.content_safety._base import (
@@ -61,9 +63,12 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
       documents fed back to the agent (``documents`` in the API), such as web
       search results, retrieved knowledge-base chunks, or email bodies.
 
-    The middleware extracts the last ``HumanMessage`` as the user prompt.  Any
-    ``ToolMessage`` items in the state (tool/function outputs) are forwarded to
-    the API as ``documents`` so indirect injection via tool results is also caught.
+    Before the agent runs, the middleware screens the last ``HumanMessage`` as
+    the user prompt, and any ``ToolMessage`` items in the state (tool/function
+    outputs) as ``documents``.  While the agent runs, it screens each tool
+    result as a document when the tool returns, before the model reads it, so
+    indirect injection via tool results is also caught.  An injection found
+    there applies to that ``ToolMessage``.
 
     When an injection attack is detected, the middleware takes one of two
     actions:
@@ -78,8 +83,8 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         an input-side attack.  Set it to ``True`` if you want to screen AI
         output as well.
 
-    Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
-    (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
+    Both synchronous (``before_agent`` / ``wrap_tool_call``) and asynchronous
+    (``abefore_agent`` / ``awrap_tool_call``) hooks are implemented.
 
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
@@ -100,7 +105,7 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             when ``exit_behavior="continue"``.  Defaults to a message built
             from the service response.
         apply_to_input: Whether to screen the agent's input (last
-            ``HumanMessage``).  Defaults to ``True``.
+            ``HumanMessage``) and tool results.  Defaults to ``True``.
         apply_to_output: Whether to screen the agent's output (last
             ``AIMessage``).  Defaults to ``False``.
         name: Node-name prefix used when wiring this middleware into a
@@ -111,7 +116,10 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             :class:`~langchain.agents.middleware.Runtime` execution context,
             and returns the user prompt and documents to screen, or ``None``
             to skip evaluation entirely.  When ``None`` (default) the
-            middleware uses its built-in extraction logic.
+            middleware uses its built-in extraction logic.  It's also called
+            before a tool result is screened, with the state at that point,
+            and the tool result is sent with the returned user prompt as the
+            only document.
     """
 
     def __init__(
@@ -139,7 +147,8 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
                 Mutually exclusive with ``endpoint``.
             exit_behavior: ``"error"``, ``"continue"``, or ``"replace"``.
             violation_message: Custom replacement text for ``"replace"`` mode.
-            apply_to_input: Screen the last HumanMessage before agent runs.
+            apply_to_input: Screen the last HumanMessage before agent runs,
+                and tool results while it runs.
             apply_to_output: Screen the last AIMessage after agent runs.
             name: Node-name prefix for LangGraph wiring.
             context_extractor: Optional callable that extracts the user prompt
@@ -285,6 +294,94 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             user_prompt=inputs.user_prompt, documents=inputs.documents
         )
         return self._handle_violations(violations, "agent.input", offending)
+
+    # ------------------------------------------------------------------
+    # Tool hooks
+    # ------------------------------------------------------------------
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        """Screen a tool result for indirect prompt injection.
+
+        Args:
+            request: The tool call request.
+            handler: Executes the tool call.
+
+        Returns:
+            The tool result, with its ``ToolMessage`` handled according to
+            ``exit_behavior`` when an injection is detected.
+
+        Raises:
+            ContentSafetyViolationError: When ``exit_behavior="error"`` and an
+                injection is detected in the tool result.
+        """
+        result = handler(request)
+        for user_prompt, message, text in self._tool_results_to_screen(request, result):
+            violations = self._shield_sync(user_prompt=user_prompt, documents=[text])
+            self._handle_tool_result_violations(violations, message)
+        return result
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        """Async version of :meth:`wrap_tool_call`."""
+        result = await handler(request)
+        for user_prompt, message, text in self._tool_results_to_screen(request, result):
+            violations = await self._shield_async(
+                user_prompt=user_prompt, documents=[text]
+            )
+            self._handle_tool_result_violations(violations, message)
+        return result
+
+    def _tool_results_to_screen(
+        self, request: ToolCallRequest, result: ToolMessage | Command[Any]
+    ) -> List[tuple[str, ToolMessage, str]]:
+        """Return the user prompt, message and text of each tool result to screen."""
+        if not self.apply_to_input:
+            return []
+        user_prompt = self._tool_call_user_prompt(request)
+        if user_prompt is None:
+            return []
+        if isinstance(result, ToolMessage):
+            messages = [result]
+        else:
+            update = result.update if isinstance(result.update, dict) else {}
+            messages = [
+                message
+                for message in update.get("messages", [])
+                if isinstance(message, ToolMessage)
+                and message.tool_call_id == request.tool_call["id"]
+            ]
+        screened = []
+        for message in messages:
+            text = self.get_text_from_message(message)
+            if text:
+                screened.append((user_prompt, message, text))
+        return screened
+
+    def _tool_call_user_prompt(self, request: ToolCallRequest) -> Optional[str]:
+        """Return the user prompt to screen a tool result with."""
+        if self._context_extractor is not None:
+            # The request has a ToolRuntime, and the extractor takes the graph's
+            # Runtime.
+            inputs = self._context_extractor(request.state, get_runtime())
+            return inputs.user_prompt if inputs is not None else None
+        return self.get_text_from_message(
+            self.get_human_message_from_state(request.state)
+        )
+
+    def _handle_tool_result_violations(
+        self, violations: List[PromptInjectionEvaluation], message: ToolMessage
+    ) -> None:
+        # The user prompt was screened before the agent ran, so only the tool
+        # result's own analysis applies to it.
+        documents = [v for v in violations if v.source != "user_prompt"]
+        self._handle_violations(documents, "tool.output", message)
 
     # ------------------------------------------------------------------
     # Internal helpers
