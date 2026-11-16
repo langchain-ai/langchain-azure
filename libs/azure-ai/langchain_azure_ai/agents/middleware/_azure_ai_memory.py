@@ -99,8 +99,8 @@ def _last_message_id(messages: Sequence[Any]) -> Optional[str]:
 
 def _resume_index(
     messages: Sequence[Any], count: Optional[int], message_id: Optional[str]
-) -> tuple[Optional[int], bool]:
-    """Return where the unprocessed messages start, and if the history changed.
+) -> tuple[Optional[int], int]:
+    """Return where the unprocessed messages start, and how far they moved.
 
     The ID of the last processed message finds them again after earlier
     messages are removed or replaced, for example by summarization during a run.
@@ -112,21 +112,21 @@ def _resume_index(
 
     Returns:
         The index of the first unprocessed message, or ``None`` if it can't be
-        found, and whether the messages before it changed.
+        found, and how many positions it moved since the count was saved.
     """
     if count is None:
-        return None, False
+        return None, 0
     if message_id is None:
-        return (count, False) if count <= len(messages) else (None, True)
+        return (count, 0) if count <= len(messages) else (None, 0)
     if (
         0 < count <= len(messages)
         and getattr(messages[count - 1], "id", None) == message_id
     ):
-        return count, False
+        return count, 0
     for i, message in enumerate(messages):
         if getattr(message, "id", None) == message_id:
-            return i + 1, True
-    return None, True
+            return i + 1, i + 1 - count
+    return None, 0
 
 
 def _map_message_to_memory_item(
@@ -354,7 +354,7 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         if not isinstance(messages, list):
             return None
 
-        start, history_changed = _resume_index(
+        start, shift = _resume_index(
             messages,
             state.get("azure_ai_memory_processed_message_count"),
             state.get("azure_ai_memory_processed_message_id"),
@@ -366,9 +366,11 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         if start is None:
             start = _latest_turn_start(messages)
             unsent_index = start
-        elif history_changed:
-            unsent_index = start
-        elif (
+        elif unsent_index is not None:
+            # Earlier messages are removed from the front, as summarization does,
+            # so the unsent ones still in the list move with the processed ones.
+            unsent_index = max(unsent_index + shift, 0)
+        if (
             unsent_index is not None
             and batch_id is not None
             and not batch_id.startswith(f"{self._instance_id}:")

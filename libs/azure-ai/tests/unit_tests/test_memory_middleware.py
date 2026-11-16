@@ -584,3 +584,61 @@ def test_memory_middleware_sends_turn_summarized_during_run(keep: int) -> None:
         "user 3",
         "reply 3",
     ]
+
+
+def test_memory_middleware_sends_queued_turns_kept_by_summary() -> None:
+    """Queued turns that summarization keeps should be sent by a new instance."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(
+        ["reply 1", "reply 2", "reply 3"],
+        checkpointer,
+        other_middleware=[_summarization_middleware(trigger=5, keep=3)],
+        update_every_n_turns=5,
+    )
+    for content in ["user 1", "user 2", "user 3"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]}, config)
+    first_client.beta.memory_stores.begin_update_memories.assert_not_called()
+    assert [
+        message.content for message in agent.get_state(config).values["messages"][1:]
+    ] == ["user 2", "reply 2", "user 3", "reply 3"]
+
+    agent, second_client = _create_memory_agent(["reply 4"], checkpointer)
+    agent.invoke({"messages": [HumanMessage(content="user 4")]}, config)
+
+    assert _sent_contents(second_client) == [
+        "user 2",
+        "reply 2",
+        "user 3",
+        "reply 3",
+        "user 4",
+        "reply 4",
+    ]
+
+
+def test_memory_middleware_sends_queued_turns_summarized_after_recreation() -> None:
+    """A new instance should send queued turns kept by summarization in its run."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread"}}
+    agent, first_client = _create_memory_agent(
+        ["reply 1", "reply 2"], checkpointer, update_every_n_turns=5
+    )
+    for content in ["user 1", "user 2"]:
+        agent.invoke({"messages": [HumanMessage(content=content)]}, config)
+    first_client.beta.memory_stores.begin_update_memories.assert_not_called()
+
+    agent, second_client = _create_memory_agent(
+        ["reply 3"],
+        checkpointer,
+        other_middleware=[_summarization_middleware(trigger=5, keep=3)],
+    )
+    agent.invoke({"messages": [HumanMessage(content="user 3")]}, config)
+
+    assert [
+        message.content for message in agent.get_state(config).values["messages"][1:]
+    ] == ["user 2", "reply 2", "user 3", "reply 3"]
+    assert _sent_contents(second_client) == ["user 2", "reply 2", "user 3", "reply 3"]
