@@ -1,6 +1,6 @@
 """Unit tests for Azure AI Foundry V2 agent classes."""
 
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, Optional, Union
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 from openai import OpenAI
+from pydantic import ValidationError
 
 try:
     from langchain_azure_ai.agents._v2.prebuilt.tools import (
@@ -102,10 +103,10 @@ class TestGetV2ToolDefinitions:
 class TestDeclarativeV2Helpers:
     """Tests for helper functions in declarative_v2."""
 
-    def test_function_call_to_ai_message(self) -> None:
+    def test_function_calls_to_ai_message(self) -> None:
         """Test converting a FunctionToolCallItemResource to AIMessage."""
         from langchain_azure_ai.agents._v2.base import (
-            _function_call_to_ai_message,
+            _function_calls_to_ai_message,
         )
 
         mock_fc = MagicMock()
@@ -113,7 +114,7 @@ class TestDeclarativeV2Helpers:
         mock_fc.name = "my_func"
         mock_fc.arguments = '{"x": 42}'
 
-        msg = _function_call_to_ai_message(mock_fc)
+        msg = _function_calls_to_ai_message([mock_fc])
         assert isinstance(msg, AIMessage)
         assert msg.content == ""
         assert len(msg.tool_calls) == 1
@@ -169,10 +170,10 @@ class TestDeclarativeV2Helpers:
         with pytest.raises(ValueError, match="Unsupported block type"):
             _content_from_human_message(msg)
 
-    def test_mcp_approval_to_ai_message(self) -> None:
+    def test_mcp_approvals_to_ai_message(self) -> None:
         """Test converting an MCPApprovalRequestItemResource to AIMessage."""
         from langchain_azure_ai.agents._v2.base import (
-            _mcp_approval_to_ai_message,
+            _mcp_approvals_to_ai_message,
         )
 
         mock_ar = MagicMock()
@@ -181,7 +182,7 @@ class TestDeclarativeV2Helpers:
         mock_ar.name = "read_file"
         mock_ar.arguments = '{"path": "/README.md"}'
 
-        msg = _mcp_approval_to_ai_message(mock_ar)
+        msg = _mcp_approvals_to_ai_message([mock_ar])
         assert isinstance(msg, AIMessage)
         assert msg.content == ""
         assert len(msg.tool_calls) == 1
@@ -245,15 +246,197 @@ class TestDeclarativeV2Helpers:
         output = _approval_message_to_output(tool_msg)
         assert output["approve"] is False
 
-    def test_approval_message_to_output_string_deny(self) -> None:
-        """Test converting a plain string 'deny' ToolMessage."""
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "deny",
+            "reject",
+            "yes",
+            "TRUE",
+            "1",
+            "",
+            "null",
+            '{"approved": false}',
+            '{"approve": "false"}',
+            '{"reason": "not allowed"}',
+            '{"approve": false, "reason": 1}',
+            '{"approve": true, "reasons": "typo"}',
+            [{"approve": False}],
+        ],
+    )
+    def test_approval_message_to_output_rejects_invalid_decision(
+        self, content: Union[str, list]
+    ) -> None:
+        """A decision outside the approval contract raises instead of submitting."""
         from langchain_azure_ai.agents._v2.base import (
             _approval_message_to_output,
         )
 
-        tool_msg = ToolMessage(content="deny", tool_call_id="approval_req_111")
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_222")
+        with pytest.raises(ValidationError):
+            _approval_message_to_output(tool_msg)
+
+    @pytest.mark.parametrize(
+        ("content", "approve"),
+        [
+            ('{"approve": true}', True),
+            ('{"approve": false, "reason": null}', False),
+            ([{"type": "text", "text": '{"approve": false}'}], False),
+        ],
+    )
+    def test_approval_message_to_output_accepts_valid_decision(
+        self, content: Union[str, list], approve: bool
+    ) -> None:
+        """Decisions in the approval contract are submitted as given."""
+        from langchain_azure_ai.agents._v2.base import (
+            _approval_message_to_output,
+        )
+
+        tool_msg = ToolMessage(content=content, tool_call_id="approval_req_333")
         output = _approval_message_to_output(tool_msg)
-        assert output["approve"] is False
+        assert output["approve"] is approve
+
+    @staticmethod
+    def _mcp_approval_graph() -> Any:
+        """Compile a graph that pauses in ``_mcp_approval_node``."""
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langgraph.graph import END, START, MessagesState, StateGraph
+
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            _mcp_approval_node,
+        )
+
+        builder = StateGraph(MessagesState)
+        builder.add_node("mcp_approval", _mcp_approval_node)
+        builder.add_edge(START, "mcp_approval")
+        builder.add_edge("mcp_approval", END)
+        return builder.compile(checkpointer=InMemorySaver())
+
+    @staticmethod
+    def _mcp_approval_request() -> AIMessage:
+        from langchain_azure_ai.agents._v2.base import (
+            MCP_APPROVAL_REQUEST_TOOL_NAME,
+        )
+
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "approval_req_444",
+                    "name": MCP_APPROVAL_REQUEST_TOOL_NAME,
+                    "args": {
+                        "server_label": "github",
+                        "name": "delete_repo",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("decision", "approve", "reason"),
+        [
+            (True, True, None),
+            (False, False, None),
+            ("true", True, None),
+            ("false", False, None),
+            ({"approve": True}, True, None),
+            ({"approve": False, "reason": "risky"}, False, "risky"),
+        ],
+    )
+    def test_mcp_approval_node_resume_decision(
+        self, decision: Any, approve: bool, reason: Optional[str]
+    ) -> None:
+        """The resume value reaches the approval response as given."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+        result = graph.invoke(Command(resume=decision), config)
+
+        output = _approval_message_to_output(result["messages"][-1])
+        assert output["approve"] is approve
+        assert output.get("reason") == reason
+
+    def test_mcp_approval_node_approves_echoed_interrupt_value(self) -> None:
+        """The Responses host approves by resuming with the interrupt value."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        paused = graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+        (pending,) = paused["__interrupt__"]
+        result = graph.invoke(Command(resume=pending.value), config)
+
+        output = _approval_message_to_output(result["messages"][-1])
+        assert output["approve"] is True
+
+    @pytest.mark.parametrize(
+        "decision",
+        [
+            "reject",
+            "yes",
+            "TRUE",
+            1,
+            {"approved": False},
+            {"approve": "false"},
+            {"approve": False, "reason": 1},
+            [{"approve": False}],
+            [],
+            [
+                {
+                    "id": "approval_req_other",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                }
+            ],
+            [
+                {
+                    "id": "approval_req_444",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                    "approve": False,
+                }
+            ],
+            (),
+            (
+                {
+                    "id": "approval_req_other",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                },
+            ),
+            (
+                {
+                    "id": "approval_req_444",
+                    "server_label": "github",
+                    "tool_name": "delete_repo",
+                    "arguments": "{}",
+                    "approve": False,
+                },
+            ),
+        ],
+    )
+    def test_mcp_approval_node_rejects_invalid_resume_decision(
+        self, decision: Any
+    ) -> None:
+        """An invalid resume raises and leaves the interrupt open for a retry."""
+        from langchain_azure_ai.agents._v2.base import _approval_message_to_output
+
+        graph = self._mcp_approval_graph()
+        config = {"configurable": {"thread_id": "t"}}
+        graph.invoke({"messages": [self._mcp_approval_request()]}, config)
+
+        with pytest.raises(ValidationError):
+            graph.invoke(Command(resume=decision), config)
+        assert graph.get_state(config).next == ("mcp_approval",)
+
+        result = graph.invoke(Command(resume=False), config)
+        assert _approval_message_to_output(result["messages"][-1])["approve"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +585,95 @@ class TestPromptBasedAgentModelV2:
         # Verify the model tracks pending approvals
         assert len(model.pending_mcp_approvals) == 1
         assert len(model.pending_function_calls) == 0
+
+    def test_multiple_function_calls_response(self) -> None:
+        """Test that all function calls are returned in one AIMessage."""
+        from langchain_azure_ai.agents._v2.base import (
+            _AzureAIAgentApiProxyModel,
+        )
+
+        mock_fc1 = MagicMock()
+        mock_fc1.type = "function_call"
+        mock_fc1.call_id = "call_1"
+        mock_fc1.name = "tool_a"
+        mock_fc1.arguments = '{"x": 1}'
+
+        mock_fc2 = MagicMock()
+        mock_fc2.type = "function_call"
+        mock_fc2.call_id = "call_2"
+        mock_fc2.name = "tool_b"
+        mock_fc2.arguments = '{"y": 2}'
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_multi_fc"
+        mock_response.status = "completed"
+        mock_response.output = [mock_fc1, mock_fc2]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="do both",
+        )
+        result = model.invoke([HumanMessage(content="do both")])
+        assert isinstance(result, AIMessage)
+        assert [tc["id"] for tc in result.tool_calls] == ["call_1", "call_2"]
+        assert [tc["name"] for tc in result.tool_calls] == ["tool_a", "tool_b"]
+        assert [tc["args"] for tc in result.tool_calls] == [{"x": 1}, {"y": 2}]
+        assert model.pending_function_calls == [mock_fc1, mock_fc2]
+
+    def test_multiple_mcp_approval_requests_response(self) -> None:
+        """Test that all MCP approval requests are returned in one AIMessage."""
+        from langchain_azure_ai.agents._v2.base import (
+            _AzureAIAgentApiProxyModel,
+        )
+
+        mock_ar1 = MagicMock()
+        mock_ar1.type = "mcp_approval_request"
+        mock_ar1.id = "approval_req_1"
+        mock_ar1.server_label = "api-specs"
+        mock_ar1.name = "read_file"
+        mock_ar1.arguments = '{"path": "/README.md"}'
+
+        mock_ar2 = MagicMock()
+        mock_ar2.type = "mcp_approval_request"
+        mock_ar2.id = "approval_req_2"
+        mock_ar2.server_label = "api-specs"
+        mock_ar2.name = "list_files"
+        mock_ar2.arguments = "{}"
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_multi_ar"
+        mock_response.status = "completed"
+        mock_response.output = [mock_ar1, mock_ar2]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="summarize specs",
+        )
+        result = model.invoke([HumanMessage(content="summarize specs")])
+        assert isinstance(result, AIMessage)
+        assert [tc["id"] for tc in result.tool_calls] == [
+            "approval_req_1",
+            "approval_req_2",
+        ]
+        assert [tc["args"]["name"] for tc in result.tool_calls] == [
+            "read_file",
+            "list_files",
+        ]
+        assert model.pending_mcp_approvals == [mock_ar1, mock_ar2]
 
 
 # ---------------------------------------------------------------------------
@@ -983,7 +1255,7 @@ class TestDeclarativeV2HelpersAdditional:
         )
 
         tool_msg = ToolMessage(
-            content=[{"type": "text", "text": "yes please"}],  # type: ignore[arg-type]
+            content=[{"type": "text", "text": "true"}],  # type: ignore[arg-type]
             tool_call_id="approval_req_list2",
         )
         output = _approval_message_to_output(tool_msg)
@@ -1884,6 +2156,93 @@ class TestResponsesAgentNode:
         assert call_kwargs["conversation"] == "conv_mcp"
         assert "previous_response_id" not in call_kwargs
 
+    def test_func_submits_all_function_call_outputs(self) -> None:
+        """Test _func submits every ToolMessage answering the last AIMessage."""
+        node = self._make_node()
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock(spec=OpenAI)
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_tool"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Sunny, 10:00"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = self._make_response(mock_response)
+
+        state = {
+            "messages": [
+                HumanMessage(content="weather?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "call_old", "name": "get_weather", "args": {}}],
+                ),
+                ToolMessage(content="rainy", tool_call_id="call_old"),
+                AIMessage(content="It's rainy."),
+                HumanMessage(content="weather and time?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"id": "call_a", "name": "get_weather", "args": {}},
+                        {"id": "call_b", "name": "get_time", "args": {}},
+                    ],
+                ),
+                ToolMessage(content="sunny", tool_call_id="call_a"),
+                ToolMessage(content="10:00", tool_call_id="call_b"),
+            ],
+            "azure_ai_agents_conversation_id": "conv_123",
+            "azure_ai_agents_previous_response_id": "resp_prev",
+            "azure_ai_agents_pending_type": "function_call",
+        }
+        node._func(state, config, store=None)
+
+        mock_openai.responses.create.assert_called_once()
+        input_items = mock_openai.responses.create.call_args.kwargs["input"]
+        assert input_items == [
+            {"call_id": "call_a", "output": "sunny", "type": "function_call_output"},
+            {"call_id": "call_b", "output": "10:00", "type": "function_call_output"},
+        ]
+
+    def test_func_submits_all_mcp_approval_responses(self) -> None:
+        """Test _func submits a response for every pending MCP approval."""
+        node = self._make_node()
+
+        config: Dict[str, Any] = {"callbacks": None, "metadata": None, "tags": None}
+
+        mock_openai = MagicMock(spec=OpenAI)
+        node._client.get_openai_client.return_value = mock_openai
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_approval"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Denied"
+        mock_response.usage = None
+        mock_openai.responses.create.return_value = self._make_response(mock_response)
+
+        state = {
+            "messages": [
+                ToolMessage(content='{"approve": false}', tool_call_id="approval_1"),
+                ToolMessage(content='{"approve": false}', tool_call_id="approval_2"),
+            ],
+            "azure_ai_agents_conversation_id": "conv_mcp",
+            "azure_ai_agents_previous_response_id": "resp_mcp_prev",
+            "azure_ai_agents_pending_type": "mcp_approval",
+        }
+        node._func(state, config, store=None)
+
+        mock_openai.responses.create.assert_called_once()
+        input_items = mock_openai.responses.create.call_args.kwargs["input"]
+        assert [item["approval_request_id"] for item in input_items] == [
+            "approval_1",
+            "approval_2",
+        ]
+        assert all(item["type"] == "mcp_approval_response" for item in input_items)
+        assert all(item["approve"] is False for item in input_items)
+
     def test_func_tool_message_no_pending_raises(self) -> None:
         """Test that ToolMessage without pending calls raises RuntimeError."""
         node = self._make_node()
@@ -2697,6 +3056,133 @@ class TestMiddlewareSupport:
         hints = merged.__annotations__
         assert "my_custom_field" in hints
         assert "messages" in hints
+
+    def test_private_middleware_state_is_not_in_graph_schemas(self) -> None:
+        """Fields omitted from the input or output schema stay out of them."""
+        from typing import Annotated
+
+        from langchain.agents.middleware.types import (
+            AgentMiddleware,
+            AgentState,
+            OmitFromInput,
+            OmitFromOutput,
+            PrivateStateAttr,
+        )
+        from typing_extensions import NotRequired
+
+        class CustomState(AgentState):
+            private_field: NotRequired[Annotated[int, PrivateStateAttr]]
+            input_field: NotRequired[Annotated[int, OmitFromOutput]]
+            output_field: NotRequired[Annotated[int, OmitFromInput]]
+            public_field: NotRequired[int]
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
+                return None
+
+        factory, mock_client = self._make_factory_and_client()
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+            )
+
+        input_fields = set(graph.get_input_jsonschema()["properties"])
+        output_fields = set(graph.get_output_jsonschema()["properties"])
+        assert {
+            "messages",
+            "azure_ai_agents_conversation_id",
+            "input_field",
+            "public_field",
+        } <= input_fields
+        assert (
+            not {
+                "jump_to",
+                "structured_response",
+                "private_field",
+                "output_field",
+            }
+            & input_fields
+        )
+        assert {
+            "messages",
+            "azure_ai_agents_conversation_id",
+            "structured_response",
+            "output_field",
+            "public_field",
+        } <= output_fields
+        assert not {"jump_to", "private_field", "input_field"} & output_fields
+
+    def test_private_middleware_state_is_kept_in_graph_state(self) -> None:
+        """Private fields reach later nodes and the checkpoint, not the result."""
+        from typing import Annotated
+
+        from langchain.agents.middleware.types import (
+            AgentMiddleware,
+            AgentState,
+            PrivateStateAttr,
+        )
+        from langgraph.checkpoint.memory import InMemorySaver
+        from typing_extensions import NotRequired
+
+        class CustomState(AgentState):
+            private_field: NotRequired[Annotated[int, PrivateStateAttr]]
+
+        seen: list[Any] = []
+
+        class MyMiddleware(AgentMiddleware):
+            state_schema = CustomState
+
+            @property
+            def name(self) -> str:
+                return "MyMiddleware"
+
+            def before_agent(self, state: dict, runtime: object) -> dict:  # type: ignore[override]
+                return {"private_field": 1}
+
+            def after_agent(self, state: dict, runtime: object) -> None:  # type: ignore[override]
+                seen.append(state.get("private_field"))
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_001"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = "Hello from the agent"
+        mock_response.usage = None
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = mock_response
+        mock_openai.conversations.create.return_value = MagicMock(id="conv_001")
+
+        factory, mock_client = self._make_factory_and_client()
+        mock_client.agents.get_version.return_value = (
+            mock_client.agents.create_version.return_value
+        )
+        mock_client.get_openai_client.return_value = mock_openai
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                middleware=[MyMiddleware()],
+                checkpointer=InMemorySaver(),
+            )
+            config: Any = {"configurable": {"thread_id": "thread"}}
+            result = graph.invoke({"messages": [HumanMessage(content="hi")]}, config)
+
+        assert seen == [1]
+        assert "private_field" not in result
+        assert result["messages"][-1].content == "Hello from the agent"
+        assert graph.get_state(config).values["private_field"] == 1
 
     def test_middleware_tools_added_to_tool_node(self) -> None:
         """Test that tools from middleware are included in the ToolNode."""

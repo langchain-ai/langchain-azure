@@ -50,6 +50,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import StateSnapshot, interrupt
 from starlette.testclient import TestClient
 
+from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.agents.hosting._checkpoint._checkpoint_reuse import (
     _RequestCheckpointSaver,
@@ -85,6 +86,21 @@ def graph() -> CompiledStateGraph:
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)
     return builder.compile(checkpointer=InMemorySaver())
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_branching_warns_only_when_enabled(
+    graph: CompiledStateGraph,
+    enabled: bool,
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    ResponsesHostServer(graph, enable_response_branching=enabled)
+
+    warnings = [item for item in recwarn if item.category is ExperimentalWarning]
+    assert len(warnings) == int(enabled)
+    if enabled:
+        assert "enable_response_branching" in str(warnings[0].message)
+        assert warnings[0].filename == __file__
 
 
 @pytest.fixture
