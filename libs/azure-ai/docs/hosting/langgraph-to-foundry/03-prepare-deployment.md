@@ -54,7 +54,7 @@ azd auth login
 azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 --entry-point main.py
 ```
 
-During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. The agent service's `project` field should be `.` so the upload starts from the application root directory.
+During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. Retain the agent service's generated `name` when adapting `azure.yaml`; the top-level project `name` and service key do not replace it. The agent service's `project` field should be `.` so the upload starts from the application root directory.
 
 The following agent service configuration starts the hosting runner with the graph configuration tested in [Host and test the agent locally](02-run-locally.md):
 
@@ -63,6 +63,7 @@ services:
   deep-research-foundry:
     host: azure.ai.agent
     kind: hosted
+    name: deep-research-foundry
     project: .
     language: python
     protocols:
