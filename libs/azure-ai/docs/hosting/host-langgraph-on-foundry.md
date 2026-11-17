@@ -18,7 +18,7 @@ Preserve the existing backend and state semantics, including tool-managed state,
 
 ## Map the application interface
 
-Before choosing a hosting path, record a concrete contract map for every public operation in the application's original launch path, including workflows used before or between conversations. For each operation, identify the target artifact and an actual invocation, not only a graph symbol. Graph importability and a `messages` field prove neither request nor response compatibility.
+Before choosing a hosting path, record a concrete contract map for every public operation in the application's original launch path that falls within the user's requested migration scope, including workflows used before or between conversations. For each operation, identify the target artifact and an actual invocation, not only a graph symbol. Graph importability and a `messages` field prove neither request nor response compatibility.
 
 | Contract | Evidence required before choosing configuration-only hosting |
 | --- | --- |
@@ -27,27 +27,13 @@ Before choosing a hosting path, record a concrete contract map for every public 
 | Result | The caller can obtain the operation's original result or observable side effect through the delivered interface, not just model/tool events or an HTTP success. |
 | Access path | Every required operation has a runnable target command, supported endpoint and documented request. Keeping another graph in `langgraph.json` does not expose it through the selected host or preserve the original server API. |
 
-Use configuration-only hosting only when the installed SDK's defaults implement every required mapping. Otherwise adapt input, configuration, routing and output at the hosting boundary while delegating business execution to the original graphs. Resolve the actual runnable or factory and validate adapted input against its schema; changing the protocol name or disabling a compatibility check does not implement a conversion. A companion service is a valid access path only when its required runtime and invocation are delivered and verified, not assumed to remain available from the source environment. Do not silently narrow an application migration to its primary conversational operation: a required operation left available only in the old environment is unfinished migration work, unless the user explicitly accepts that split. Complete its target access path before declaring the application migrated.
+Use configuration-only hosting only when the installed SDK's defaults implement every required mapping. Otherwise adapt input, configuration, routing and output at the hosting boundary while delegating business execution to the original graphs. Resolve the actual runnable or factory and validate adapted input against its schema; changing the protocol name or disabling a compatibility check does not implement a conversion. A companion service is a valid access path only when its required runtime and invocation are delivered and verified, not assumed to remain available from the source environment. When the user requests a whole-application migration, do not silently narrow it to its primary conversational operation: a required operation left available only in the old environment is unfinished migration work, unless the user explicitly accepts that split. Complete every required operation's target access path before declaring the whole application migrated. For a partial migration request, preserve the required operations within that scope without implicitly expanding it to the whole application.
 
 Check each operation's managed client path as well as its local HTTP path. Foundry forwards the declared protocol requests to their protocol endpoints; adding a server route inside a container does not establish a managed access path for that operation. Expose required operations through a supported declared protocol or a separately supported ingress/service, and document the corresponding native invocation. See the [hosted agent runtime contract](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agent-contract#protocol-endpoints).
 
 When composing a hosting boundary, preserve the selected host's graph and streaming contract, not just its input/output shape. `ResponsesHostServer` expects a `CompiledStateGraph`; an arbitrary runnable wrapper is not a drop-in replacement. Use a host-compatible compiled boundary or a supported custom handler, and preserve the invocation configuration and context when delegating to the original graphs.
 
 When customizing a host, keep its documented hook contracts. In particular, Invocations `build_input` converts text to graph input; structured parser results have HITL semantics and are not an arbitrary graph-state transport. Use the supported input/configuration/output hooks rather than changing parser return types to bypass conversion. Read the [Invocations hook contracts](invocations.md#overridable-methods) or [Responses hosting interface](responses.md#overridable-methods) for the installed package before adapting the boundary.
-
-## Package the build inputs
-
-This example uses a root `requirements.txt` for its remote build. Other Python projects can use a different supported dependency-resolution path: Oryx distinguishes requirements, uv and Poetry builds using files present in the upload. A uv project must retain its matching `pyproject.toml` and `uv.lock`, or intentionally package a validated replacement manifest. See the [Oryx Python build implementation](https://github.com/microsoft/Oryx/blob/84c15f84129d698b408161ed143742b386ee42a0/src/BuildScriptGenerator/Python/PythonBashBuildSnippet.sh.tpl). Do not assume a local editable install or `uv sync` proves that the remote archive will install the same application.
-
-Inspect the archive after applying ignore rules, and verify installation from that archive in a clean environment. Keep runtime source, configuration, resources and all build inputs consumed by the selected builder. Dependency manifests and lockfiles are not caches; exclude one only when a validated replacement dependency-resolution path is packaged.
-
-Treat [upload exclusions](langgraph-to-foundry/03-prepare-deployment.md#configure-upload-exclusions) as part of that choice. Do not copy a sample's lockfile/manifests exclusions into a different dependency-resolution path.
-
-## Verify the delivered workflow
-
-Installation, sustained host startup and successful application execution are separate gates. Use the actual deployment entry point and effective configuration, not an independently constructed graph. Exercise every preserved operation and the workflow connecting them through the delivered interface, including follow-up requests when continuity matters. Check actual downstream effects, not only HTTP success or an acknowledgement: dropped input can produce a plausible success response without performing the requested operation.
-
-When model, tool or external-service credentials are unavailable, use disposable, external-only substitutes to check a successful local request. Keep the submitted adapter, graph construction, routing, configuration propagation and application execution real; do not stub the delegate or return expected results from the host. Keep substitutes outside production code and remove them before delivery. This verifies the hosting boundary, not cloud integration or real-provider behavior; report unavailable checks and prerequisites separately.
 
 ## Why host your LangGraph application on Foundry?
 

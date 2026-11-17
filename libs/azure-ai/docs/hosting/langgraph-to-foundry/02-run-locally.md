@@ -33,7 +33,7 @@ The hosting package works with the existing graph, tools, and prompts, handling 
 
 > **Note:** The Responses hosting path used in this guide does not currently expose the LangGraph Agent Server runs, threads, or state APIs. Reusing the graph does not preserve those client APIs. Adapt agent invocation to the hosted Responses API and preserve the conversation identity for multi-turn clients. The Responses API provides request and response records, not equivalent access to full graph state.
 
-> **Note:** A `messages` field alone does not establish interface compatibility. Apply the walkthrough's [interface mapping](../host-langgraph-on-foundry.md#map-the-application-interface) before selecting this default path, and its [state ownership](../host-langgraph-on-foundry.md#preserve-runtime-owned-state) when the original runtime supplies required state.
+> **Note:** The default converter expects a graph state schema with a `messages` field. A `messages` field alone does not establish interface compatibility. Apply the walkthrough's [interface mapping](../host-langgraph-on-foundry.md#map-the-application-interface) before selecting this default path, and its [state ownership](../host-langgraph-on-foundry.md#preserve-runtime-owned-state) when the original runtime supplies required state.
 
 ## Prepare local configuration
 
@@ -81,8 +81,6 @@ uv run --no-sync --env-file .env python -m langchain_azure_ai.agents.hosting.run
 ```
 
 ## Verify local execution
-
-Apply the walkthrough's [three verification gates](../host-langgraph-on-foundry.md#verify-the-delivered-workflow) through the actual delivered entry point before calling local migration complete.
 
 In another terminal, send a representative request to the local `/responses` endpoint. The default port is `8088`; adjust the URL if you configured a different port:
 

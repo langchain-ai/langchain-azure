@@ -78,7 +78,7 @@ The Python runtime starts the file specified by `codeConfiguration.entryPoint`. 
 
 ### Prepare runtime dependencies
 
-This example uses a root `requirements.txt` for its remote build. For a different project, first choose the supported [packaged dependency-resolution path](../host-langgraph-on-foundry.md#package-the-build-inputs). Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
+The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
@@ -131,10 +131,12 @@ eval/
 __pycache__/
 *.pyc
 *.log
+uv.lock
+pyproject.toml
 research_agent.ipynb
 ```
 
-Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`. Exclude other dependency manifests only after confirming that the packaged requirements fully replace their build role; uv-based deployments must retain the matching project manifest and lockfile.
+Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`; the upload excludes the development `pyproject.toml` and lockfile.
 
 Review the upload contents before deployment. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
 
