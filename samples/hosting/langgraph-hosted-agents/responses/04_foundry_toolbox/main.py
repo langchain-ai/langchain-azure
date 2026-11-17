@@ -61,6 +61,7 @@ def _build_chat_model() -> ChatOpenAI:
         api_key=token_provider,
         use_responses_api=True,
         output_version="responses/v1",
+        store=False,  # LangGraph replays the messages, including tool calls.
     )
 
 

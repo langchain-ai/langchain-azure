@@ -4,14 +4,16 @@ import asyncio
 import importlib.util
 import json
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from mcp.types import TextResourceContents
 from pydantic import Field
@@ -128,6 +130,58 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         sample.AzureAIProjectToolbox, "_build_mcp_client", lambda _: client
     )
     return SimpleNamespace(client=client, calls=calls)
+
+
+def test_model_replays_tool_turn_without_provider_storage(
+    sample: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["store"] is False
+        assert payload["input"][1]["type"] == "function_call"
+        assert payload["input"][2]["type"] == "function_call_output"
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_test",
+                "created_at": 0,
+                "model": "gpt-4o",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+            },
+        )
+
+    monkeypatch.setattr(sample, "DefaultAzureCredential", Mock())
+    project = Mock()
+    project.get_openai_client.return_value.base_url = "https://example.test/openai/v1/"
+    monkeypatch.setattr(sample, "AIProjectClient", Mock(return_value=project))
+    monkeypatch.setattr(
+        sample, "get_bearer_token_provider", lambda *_: lambda: "test-token"
+    )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(
+            sample, "ChatOpenAI", partial(sample.ChatOpenAI, http_client=client)
+        )
+        model = sample._build_chat_model()
+        result = model.invoke(
+            [
+                HumanMessage(content="Use source-brief."),
+                AIMessage(
+                    content=[
+                        {
+                            "type": "function_call",
+                            "id": "fc_test",
+                            "call_id": "call_test",
+                            "name": "read_skill_resource",
+                            "arguments": json.dumps({"uri": SKILL_URI}),
+                        }
+                    ]
+                ),
+                ToolMessage(content=SKILL, tool_call_id="call_test"),
+            ]
+        )
+    assert result.response_metadata["status"] == "completed"
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "sse"])

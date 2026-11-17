@@ -38,7 +38,9 @@ not read host files or execute skill scripts.
 
 The model remains `langchain_openai.ChatOpenAI`, authenticated with
 `DefaultAzureCredential` through the Foundry project endpoint. The compiled graph
-is hosted by `ResponsesHostServer`.
+is hosted by `ResponsesHostServer`. Model calls set `store=False` because
+LangGraph sends the message history, including previous tool calls, on each turn.
+This setting is separate from the host's Responses storage.
 
 ## Configure the Toolbox
 
