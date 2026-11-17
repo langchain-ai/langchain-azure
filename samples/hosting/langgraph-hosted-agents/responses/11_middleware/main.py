@@ -74,6 +74,8 @@ async def main() -> None:
                 credential, "https://ai.azure.com/.default"
             ),
             use_responses_api=True,
+            # LangGraph manages message history instead of the model service.
+            store=False,
             output_version="responses/v1",
         )
         with model.root_client:
