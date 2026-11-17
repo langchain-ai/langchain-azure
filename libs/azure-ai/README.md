@@ -75,9 +75,9 @@ For local development, sign in with `az login`.
 Call a Microsoft Foundry model using the Responses API:
 
 > [!NOTE]
-> Set `store=False` and manage chat history in LangChain or LangGraph. Pass
-> prior messages with each model call; for agents, a LangGraph checkpointer can
-> persist the message history across turns.
+> When managing chat history with LangChain or LangGraph, set `store=False` to
+> disable model-side response storage. Send prior messages, tool calls, and tool
+> results with each model request.
 
 ```python
 from azure.identity import DefaultAzureCredential
@@ -89,7 +89,7 @@ model = AzureAIOpenAIApiChatModel(
     credential=DefaultAzureCredential(),
     model="gpt-5",  # your model deployment name
     use_responses_api=True,
-    store=False,
+    store=False,  # LangChain or LangGraph supplies the message history.
 )
 
 messages = [
