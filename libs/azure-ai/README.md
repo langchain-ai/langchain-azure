@@ -394,6 +394,22 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 ## Changelog
 
+- **1.4.0**:
+
+  - **[NEW, Experimental]** We added `AzureAIOpenAIApiDecisions` for Azure OpenAI Decisions API integrations, including Foundry project endpoints and API key or Microsoft Entra ID authentication. [#1343](https://github.com/langchain-ai/langchain-azure/pull/1343)
+  - We promoted `InvocationsHostServer` and `ResponsesHostServer` out of experimental status without changing their public interfaces. Conversation steering, resilient background execution, and response branching remain experimental and emit `ExperimentalWarning` when enabled. [#1373](https://github.com/langchain-ai/langchain-azure/pull/1373)
+  - **[Breaking change]:** We tightened v2 agent MCP approval validation. Use boolean decisions, objects with a boolean `approve` and optional string `reason`, or the strings `"true"` and `"false"`. Other values, including previously accepted shortcuts such as `"yes"` and `"deny"`, now raise validation errors instead of being converted to approval decisions. [#1337](https://github.com/langchain-ai/langchain-azure/pull/1337) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+
+    Migration tip: Replace `Command(resume="yes")` with `Command(resume=True)` and `Command(resume="deny")` with `Command(resume=False)`. To include a reason, use `Command(resume={"approve": False, "reason": "..."})`. For approval `ToolMessage` content, use `"true"` / `"false"` or a JSON string such as `'{"approve": false, "reason": "..."}'`.
+
+  - We fixed v2 agent input and output schemas to respect LangChain middleware annotations. Compatibility note: Private fields, including `jump_to`, are now ignored in input and omitted from `invoke()` results, so callers relying on their previous exposure must update their code. These fields remain available to middleware and checkpointers, and `stream_mode="values"` still includes the full state. [#1372](https://github.com/langchain-ai/langchain-azure/pull/1372) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed v2 agents to execute every parallel function call, present every MCP approval request, and submit all corresponding outputs in order for both regular invocation and message streaming. [#1345](https://github.com/langchain-ai/langchain-azure/pull/1345) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzurePromptShieldMiddleware` to screen tool results before the agent model sees them, with the configured error, replace, or continue behavior. [#1377](https://github.com/langchain-ai/langchain-azure/pull/1377) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzureAIMemoryMiddleware` to track processed messages per thread, send each new turn without a checkpointer, and recover queued or failed updates still present in checkpointed messages after recreation. Initial history sends only the latest turn, and summarization messages are excluded. [#1347](https://github.com/langchain-ai/langchain-azure/pull/1347) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We made `ResponsesHostServer` reject `resilient_background=True` without a LangGraph checkpointer at construction, including when an existing `app` is supplied. [#1351](https://github.com/langchain-ai/langchain-azure/pull/1351)
+  - We deferred optional tracing imports in v1 and v2 `AgentServiceFactory` until `create_prompt_agent(trace=True)`, so disabling tracing no longer requires the `opentelemetry` extra. Requests with tracing enabled validate these dependencies before creating a remote agent. [#1349](https://github.com/langchain-ai/langchain-azure/pull/1349)
+  - We expanded the Invocations and Responses hosting references and added a guide for deploying LangGraph as a Foundry hosted agent. [#1333](https://github.com/langchain-ai/langchain-azure/pull/1333) [#1334](https://github.com/langchain-ai/langchain-azure/pull/1334) [#1268](https://github.com/langchain-ai/langchain-azure/pull/1268)
+
 - **1.3.1**:
 
   - We added a hosting telemetry flag that records whether response branching is enabled. [#1307](https://github.com/langchain-ai/langchain-azure/pull/1307)
