@@ -24,6 +24,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyEvaluation,
     ContentSafetyViolationError,
     _AzureContentSafetyBaseMiddleware,
+    _is_text_block,
 )
 
 logger = logging.getLogger(__name__)
@@ -274,9 +275,8 @@ class AzureContentSafetyPolicyMiddleware(_AzureContentSafetyBaseMiddleware):
         evaluation: Optional[UnifiedModerationEvaluation],
     ) -> None:
         if content != original:
-            if not isinstance(message.content, str) and any(
-                not isinstance(block, dict) or block.get("type") != "text"
-                for block in message.content
+            if not isinstance(message.content, str) and not all(
+                _is_text_block(block) for block in message.content
             ):
                 raise ValueError(
                     "Cannot transform a message containing non-text blocks."
