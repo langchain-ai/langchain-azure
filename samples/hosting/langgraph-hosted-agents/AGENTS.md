@@ -45,6 +45,9 @@ SDKs used. Apply these rules to new samples and changed parts of existing sample
 
 ## Build and Startup
 
+- When `main.py` only exports a graph, set azd's `startupCommand` in `azure.yaml`
+  to invoke the hosting module with the hosted entrypoint's protocol and options.
+  `codeConfiguration.entryPoint` and Docker `CMD` do not set the local command.
 - Install dependencies before copying application code to preserve Docker layer caching.
 - Use `--no-cache-dir` for pip installs. Pip generates dependency `.pyc` files by
   default; avoid redundant dependency-wide `compileall` steps.
@@ -73,6 +76,7 @@ RUN .venv/bin/python -m compileall -q \
 - For documentation changes, check affected commands, configuration, and links.
   For runtime or dependency changes, exercise the entrypoint and client flow in a
   clean environment with the documented versions and extras; test new sample logic.
+- For startup changes, verify readiness and that the host stays running.
 - When changing telemetry or image builds, check default tracing initialization,
   dependency-layer order, and bytecode in the resulting image as applicable.
 - Keep repository-file checks in the [docs/samples suite](../../../CONTRIBUTING.md#docs-and-samples-tests).
