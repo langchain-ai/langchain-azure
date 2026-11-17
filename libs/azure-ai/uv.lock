@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11, <4.0"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1603,7 +1603,6 @@ wheels = [
 name = "langchain-azure-ai"
 version = "1.3.1"
 source = { editable = "." }
-default-groups = ["dev", "lint", "test"]
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
@@ -1757,8 +1756,8 @@ test-integration = []
 
 [[package]]
 name = "langchain-core"
-version = "1.8.0"
-source = { git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore#771d11ba650b6fc43306d8f303e574814e433804" }
+version = "1.8.1"
+source = { git = "https://github.com/langchain-ai/langchain.git?subdirectory=libs%2Fcore#92c7defb0ac54ca2be18fca1bcf89cc88d9356c6" }
 dependencies = [
     { name = "certifi" },
     { name = "httpx" },
