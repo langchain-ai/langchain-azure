@@ -10,7 +10,6 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import tool
@@ -25,7 +24,7 @@ SAMPLE = (
     Path(__file__).resolve().parents[3]
     / "samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox"
 )
-SKILL_PATH = "/skills/source-brief/SKILL.md"
+SKILL_URI = "skill://source-brief/SKILL.md"
 SKILL = (SAMPLE / "skill-src/source-brief/SKILL.md").read_text(encoding="utf-8")
 
 
@@ -91,10 +90,8 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         return "20.0"
 
     class Client:
-        resources = {
-            "skill://index.json": '{"skills":[{"name":"source-brief"}]}',
-            "skill://source-brief/SKILL.md": SKILL,
-        }
+        contents = [SKILL]
+        resource_reads: list[str] = []
 
         async def get_tools(self) -> list[Any]:
             return [web_search, code_interpreter]
@@ -104,14 +101,13 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             assert server_name == "toolbox"
             yield self
 
-        async def list_resources(self) -> Any:
-            return SimpleNamespace(
-                resources=[SimpleNamespace(uri=uri) for uri in self.resources]
-            )
-
         async def read_resource(self, uri: str) -> Any:
+            assert uri == SKILL_URI
+            self.resource_reads.append(uri)
             return SimpleNamespace(
-                contents=[TextResourceContents(uri=uri, text=self.resources[uri])]
+                contents=[
+                    TextResourceContents(uri=uri, text=text) for text in self.contents
+                ]
             )
 
     client = Client()
@@ -126,7 +122,7 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     "exporter",
     [None, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"],
 )
-def test_entrypoint_reads_skill_then_calls_tools(
+def test_entrypoint_loads_skill_prompt_and_calls_tools(
     sample: Any,
     mcp_boundary: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -142,7 +138,6 @@ def test_entrypoint_reads_skill_then_calls_tools(
     model = ScriptedModel(
         messages=iter(
             [
-                call("read_file", file_path=SKILL_PATH, limit=1000),
                 call("web_search", query="Python 3.14 release notes"),
                 call("code_interpreter", code="(250 - 200) / 250 * 100"),
                 AIMessage(content=final),
@@ -159,10 +154,8 @@ def test_entrypoint_reads_skill_then_calls_tools(
         monkeypatch.setattr(sample, "OTLPSpanExporter", Mock())
         monkeypatch.setattr(sample.trace, "set_tracer_provider", Mock())
     monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path / "state"))
-    roots = []
 
     def run(host: Any, **kwargs: Any) -> None:
-        roots.extend(Path(root) for root in tmp_path.glob("toolbox-skills-*"))
         with TestClient(host.app) as client:
             response = client.post(
                 "/responses",
@@ -196,7 +189,7 @@ def test_entrypoint_reads_skill_then_calls_tools(
             for item in payload["output"]
             if item["type"] == "function_call"
         ]
-        assert names == ["read_file", "web_search", "code_interpreter"]
+        assert names == ["web_search", "code_interpreter"]
         text = "".join(
             part.get("text", "")
             for item in payload["output"]
@@ -206,78 +199,28 @@ def test_entrypoint_reads_skill_then_calls_tools(
         assert text == final
 
     monkeypatch.setattr(sample.ResponsesHostServer, "run", run)
-    # Inspect the directory lifetime without replacing its cleanup behavior.
-    from tempfile import TemporaryDirectory
-
-    monkeypatch.setattr(
-        sample,
-        "TemporaryDirectory",
-        lambda **kwargs: TemporaryDirectory(dir=tmp_path, **kwargs),
-    )
     sample.main()
     if exporter:
         tracing.assert_called_once_with()
         sample.trace.set_tracer_provider.assert_called_once()
     else:
         tracing.assert_called_once_with(auto_configure_azure_monitor=True)
-    assert roots and all(not root.exists() for root in roots)
+    assert mcp_boundary.client.resource_reads == [SKILL_URI]
     assert [name for name, _ in mcp_boundary.calls] == [
         "web_search",
         "code_interpreter",
     ]
-    assert model.tool_names == {"read_file", "web_search", "code_interpreter"}
+    assert model.tool_names == {"web_search", "code_interpreter"}
     first_prompt = str(model.requests[0][0].content)
-    assert SKILL_PATH in first_prompt and "source-brief" in first_prompt
-    assert "Keep each claim with its source URL" not in first_prompt
-    assert "Keep each claim with its source URL" in str(model.requests[1])
+    assert SKILL in first_prompt
 
 
-def test_tool_only_toolbox_still_works(
+@pytest.mark.parametrize("contents", [[], ["   "]])
+def test_empty_skill_fails_at_startup(
     sample: Any,
     mcp_boundary: Any,
-    tmp_path: Path,
+    contents: list[str],
 ) -> None:
-    mcp_boundary.client.resources = {}
-    backend = FilesystemBackend(root_dir=tmp_path, virtual_mode=True)
-    tools = asyncio.run(sample._load_toolbox(backend))
-    model = ScriptedModel(
-        messages=iter(
-            [
-                call("web_search", query="Python 3.14 release notes"),
-                AIMessage(content="Release notes found."),
-            ]
-        )
-    )
-    graph = sample._build_agent(model, tools, backend)
-    result = asyncio.run(graph.ainvoke({"messages": [("user", "Find release notes")]}))
-    assert result["messages"][-1].content == "Release notes found."
-    assert "source-brief" not in str(model.requests[0][0].content)
-
-
-def test_skill_reader_cannot_access_host_files(
-    sample: Any,
-    mcp_boundary: Any,
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "skills-root"
-    root.mkdir()
-    secret = tmp_path / "secret.txt"
-    secret.write_text("outside-secret", encoding="utf-8")
-    backend = FilesystemBackend(root_dir=root, virtual_mode=True)
-    tools = asyncio.run(sample._load_toolbox(backend))
-    model = ScriptedModel(
-        messages=iter(
-            [
-                call("read_file", file_path="/../secret.txt", limit=1000),
-                AIMessage(content="Cannot read that file."),
-            ]
-        )
-    )
-    result = sample._build_agent(model, tools, backend).invoke(
-        {
-            "messages": [("user", "Read a file")],
-        }
-    )
-    tool_result = result["messages"][-2]
-    assert tool_result.status == "error"
-    assert "outside-secret" not in str(model.requests)
+    mcp_boundary.client.contents = contents
+    with pytest.raises(ValueError, match="must provide source-brief/SKILL.md"):
+        asyncio.run(sample._load_toolbox())

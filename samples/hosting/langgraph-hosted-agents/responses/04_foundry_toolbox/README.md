@@ -8,27 +8,26 @@ check any arithmetic with `code_interpreter`, then write a brief with citations.
 ## How it works
 
 At startup, [main.py](main.py) uses `AzureAIProjectToolbox.get_tools()` to load
-LangChain tools and `aget_skills(backend=...)` to download skill files into a
-temporary `FilesystemBackend`. Both use the Toolbox's default version. Set
-`toolbox_version` on `AzureAIProjectToolbox` to pin a specific version.
+LangChain tools and `aget_resources()` to read the `source-brief` skill:
 
-The existing `create_agent` graph uses two Deep Agents middleware components:
+```python
+toolbox = AzureAIProjectToolbox(toolbox_name=os.environ["TOOLBOX_NAME"])
+tools = await toolbox.get_tools()
+resources = await toolbox.aget_resources(uris="skill://source-brief/SKILL.md")
+skill = "\n\n".join(resource.as_string() for resource in resources)
+agent = create_agent(model, tools=tools, system_prompt=skill)
+```
 
-- `SkillsMiddleware` advertises skill names and descriptions in the system
-  prompt. Full instructions enter the conversation when the agent reads a skill.
-- `FilesystemMiddleware`, restricted to `read_file`, lets the agent read the
-  downloaded skills and their references. Paths stay inside the temporary
-  directory. Conversation and tool-output offloading are disabled so this shared
-  directory contains only Toolbox skills.
+The Skill's text enters the system prompt and guides **search → calculate if
+needed → write the brief**. A numerical comparison uses `code_interpreter`;
+a brief with no arithmetic only needs search. This uses the SDK's resource API
+and the existing LangChain agent, with no additional Skills framework.
 
-For a research request, the expected sequence is **read the skill → search →
-calculate if needed → write the brief**. The procedure lives in the skill;
-the agent code discovers it and provides the tools to carry it out. A numerical
-comparison uses `code_interpreter`; a brief with no arithmetic only needs search.
-
-Skill content is downloaded from Foundry once per host process. Restart the host
-after publishing a Toolbox or skill update. If no skills are attached, startup
-logs show `Loaded 0 skill file(s)` and ordinary Toolbox tool calls still work.
+Both API calls use the Toolbox's default version. Set `toolbox_version` on
+`AzureAIProjectToolbox` to pin a specific version. The sample loads the full,
+small `SKILL.md` once per host process; supporting files and scripts are not
+loaded or executed. Restart the host after publishing a Toolbox or skill update.
+Attach `source-brief` before starting the host.
 
 The model remains `langchain_openai.ChatOpenAI`, authenticated with
 `DefaultAzureCredential` through the Foundry project endpoint. The compiled graph
@@ -90,8 +89,8 @@ Toolbox and has no local fallback.
 
 Follow the parent's [local setup](../../README.md#running-the-agent-host-locally),
 then install this sample's [requirements](requirements.txt) and run `python main.py`.
-This sample requires `langchain-azure-ai>=1.3.1` and
-`deepagents==0.7.28`. If the SDK version is not available on your package index,
+This sample requires `langchain-azure-ai>=1.3.1`.
+If the SDK version is not available on your package index,
 install the repository SDK before the sample requirements (from the repo root):
 
 ```bash
@@ -112,8 +111,7 @@ for identity setup. Telemetry is enabled by default through the
 [shared tracing setup](../../README.md#tracing); message content, tool arguments,
 and tool results are redacted unless content recording is explicitly enabled.
 
-Startup lists the loaded tools and skill paths, including
-`/skills/source-brief/SKILL.md`.
+Startup lists the loaded tools and confirms that `source-brief/SKILL.md` was loaded.
 
 ## Try the skill and tools together
 
@@ -125,8 +123,8 @@ curl -X POST http://127.0.0.1:8088/responses \
   -d '{"input":"Use the source-brief skill to compare Python 3.13 and 3.14 for a small web service. Find primary sources and include performance figures only when the measurements are comparable. Use code_interpreter for any percentage calculations."}'
 ```
 
-The response should include a `read_file` call for the skill, `web_search` calls,
-and a brief with **Recommendation**, **Evidence**, and **Open questions**. A
+The response should include `web_search` calls and a brief with
+**Recommendation**, **Evidence**, and **Open questions**. A
 `code_interpreter` call appears when the task needs a calculation.
 
 To exercise both remote tools with explicit calculation inputs, stream a request:
@@ -138,7 +136,7 @@ curl -N -X POST http://127.0.0.1:8088/responses \
 ```
 
 Here `code_interpreter` should calculate a **20% latency reduction** from the
-user's inputs. Intermediate reads and remote tool calls appear as
+user's inputs. Remote tool calls appear as
 `function_call` / `function_call_output` items over JSON or SSE. Ordinary tool
 requests such as `Use code_interpreter to calculate 17 * 25` still work.
 
@@ -158,5 +156,5 @@ From the repository root, run the registered offline smoke checks:
 uv run --project .github/tests --frozen pytest .github/tests --docs-samples-dir samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox
 ```
 
-The tests use the real SDK resource loader, middleware, graph, and Responses
+The tests use the real SDK resource loader, graph, and Responses
 host with a scripted model and a fake MCP boundary. They require no Azure calls.
