@@ -102,8 +102,7 @@ Required environment variables:
 
 - `FOUNDRY_PROJECT_ENDPOINT`: your Foundry project endpoint.
 - `TOOLBOX_NAME`: the configured Toolbox name (`agent-tools` in the manifest).
-- `AZURE_AI_MODEL_DEPLOYMENT_NAME`: your model deployment (defaults to `gpt-4.1-mini`,
-  matching the manifest).
+- `AZURE_AI_MODEL_DEPLOYMENT_NAME`: your model deployment (defaults to `gpt-4o`).
 
 Local runs use the developer's credential; the deployed agent identity also needs
 access to the project's model and Toolbox. Follow the shared deployment guidance
