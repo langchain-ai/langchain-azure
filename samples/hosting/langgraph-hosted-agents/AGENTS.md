@@ -63,9 +63,9 @@ Example uv Dockerfile fragment, assuming uv is installed:
 ```dockerfile
 WORKDIR /app/user_agent
 COPY pyproject.toml uv.lock ./
+# Install dependencies only; the sample runs directly from source.
 RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode
 COPY . .
-RUN uv sync --frozen --no-dev --compile-bytecode
 RUN .venv/bin/python -m compileall -q \
     $(.venv/bin/python -c "import sysconfig as s; print(s.get_paths()['stdlib'])") || true; \
     uv run --no-sync python -m compileall -q -x '[.]venv' .
