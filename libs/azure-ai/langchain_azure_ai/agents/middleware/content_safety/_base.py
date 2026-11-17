@@ -266,7 +266,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def _handle_violations(
         self,
         evaluations: Sequence[ContentSafetyEvaluation],
-        context: Literal["agent.input", "agent.output", "model.input", "model.output"],
+        context: Literal[
+            "agent.input", "agent.output", "model.input", "model.output", "tool.output"
+        ],
         offending_message: Optional[BaseMessage] = None,
     ) -> dict[str, Any] | None:
         """Apply the configured exit behaviour to detected violations.
@@ -459,6 +461,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def get_text_from_message(self, msg: Optional[BaseMessage]) -> Optional[str]:
         """Extract plain text from a LangChain message's content.
 
+        In list content, string items and ``text`` / ``input_text`` blocks
+        are joined.
+
         Args:
             msg: A LangChain message object, or ``None``.
 
@@ -471,13 +476,22 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             return msg.content or None
         if isinstance(msg.content, list):
             parts = [
-                block["text"]
+                block if isinstance(block, str) else block["text"]
                 for block in msg.content
-                if isinstance(block, dict) and block.get("type") == "text"
+                if _is_text_block(block)
             ]
             text = " ".join(parts)
             return text or None
         return None
+
+
+def _is_text_block(block: Any) -> bool:
+    """Return whether a content block is text that the middleware extracts."""
+    return isinstance(block, str) or (
+        isinstance(block, dict)
+        and block.get("type") in ("text", "input_text")
+        and isinstance(block.get("text"), str)
+    )
 
 
 def get_content_safety_annotations(

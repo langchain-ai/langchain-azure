@@ -16,6 +16,13 @@ Completions and your model and endpoint support it, set
 the model configuration. This choice is independent of the host
 protocol: both Responses and Invocations hosts can use either model API.
 
+Model calls set `store=False` because LangGraph supplies the message history,
+including tool calls and results. With a checkpointer, LangGraph restores state
+between turns; without one, the Responses host loads prior turns into the graph.
+This setting only disables model-side response storage. Hosted Responses storage
+stays enabled for conversation history, `previous_response_id`, and checkpoint
+recovery.
+
 Each sample has its own code, dependencies, and README for local runs.
 
 ## Setup paths

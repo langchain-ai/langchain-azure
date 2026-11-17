@@ -60,8 +60,9 @@ def _build_chat_model() -> ChatOpenAI:
         base_url=str(openai_client.base_url),
         api_key=token_provider,
         use_responses_api=True,
+        # LangGraph manages message history instead of the model service.
+        store=False,
         output_version="responses/v1",
-        store=False,  # LangGraph replays the messages, including tool calls.
     )
 
 
