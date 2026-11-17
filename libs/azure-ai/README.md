@@ -153,6 +153,9 @@ answer = decisions.invoke({
 print(answer.nouls["refund"].noul)  # probability that a refund is requested
 ```
 
+For API concepts and prerequisites, see the
+[Azure OpenAI Decisions API documentation](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
+
 <a id="microsoft-foundry-agent-service"></a>
 
 ### Accessing agents on Microsoft Foundry Agent Service
