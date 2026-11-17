@@ -75,8 +75,11 @@ For local development, sign in with `az login`.
 Call a Microsoft Foundry model using the Responses API:
 
 > [!NOTE]
-> When managing chat history with LangChain or LangGraph, set `store=False` to
-> disable model-side response storage.
+> LangChain and LangGraph agents manage conversation history in their state.
+> We recommend `store=False` to disable model-side response storage for these agents.
+> For direct model calls, your code can manage history by passing prior messages,
+> or use `store=True` with `previous_response_id` to continue a conversation
+> using model-side storage.
 
 ```python
 from azure.identity import DefaultAzureCredential
@@ -88,7 +91,7 @@ model = AzureAIOpenAIApiChatModel(
     credential=DefaultAzureCredential(),
     model="gpt-5",  # your model deployment name
     use_responses_api=True,
-    store=False,  # LangChain or LangGraph supplies the message history.
+    store=False,  # Disable model-side response storage.
 )
 
 messages = [
