@@ -76,8 +76,7 @@ Call a Microsoft Foundry model using the Responses API:
 
 > [!NOTE]
 > When managing chat history with LangChain or LangGraph, set `store=False` to
-> disable model-side response storage. Send prior messages, tool calls, and tool
-> results with each model request.
+> disable model-side response storage.
 
 ```python
 from azure.identity import DefaultAzureCredential
