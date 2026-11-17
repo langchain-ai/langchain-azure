@@ -27,6 +27,7 @@ Choose its `azd` setup path before running or deploying:
 | `agent.manifest.yaml` and `agent.yaml` | Follow [Using azd](#using-azd) below. |
 | `azure.yaml` in [Responses Resilient](responses/10_resilient/README.md#deploying-the-agent-to-foundry) or [Invocations Resilient](invocations/04_resilient/README.md#deploying-the-agent-to-foundry) | Initialize the independent azd project using that sample's deployment steps. |
 | `azure.yaml` in [Deep Agents](responses/12_deep_agents/SETUP.md) | Complete its resource setup and deployment steps. |
+| `azure.yaml` in [Foundry Toolbox](responses/04_foundry_toolbox/README.md#deploy-to-foundry) | Initialize with an existing project, model, Toolbox, and registry connection using that sample's deployment steps. |
 | Both formats in [Branching](responses/13_branching/README.md#run-with-azd) | Follow the sample's existing-project setup. |
 
 ## Start here
@@ -275,9 +276,8 @@ hosted-agent runtime.
 >   provisioned during `azd ai agent init`.
 > - `APPLICATIONINSIGHTS_CONNECTION_STRING` — the connection string for
 >   the project's Application Insights instance.
-> - `TOOLBOX_NAME` — only for samples that declare a `kind: toolbox`
->   resource in their `agent.manifest.yaml` (e.g.
->   [responses/04_foundry_toolbox](responses/04_foundry_toolbox/)).
+> - `TOOLBOX_NAME` — for the [Foundry Toolbox sample](responses/04_foundry_toolbox/),
+>   set this in the azd environment as described in its deployment steps.
 >
 > Each sample's `main.py` reads these names directly, so no code
 > changes are required between local-dev and deployed.

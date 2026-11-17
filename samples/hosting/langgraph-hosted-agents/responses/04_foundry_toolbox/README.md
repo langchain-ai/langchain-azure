@@ -46,8 +46,7 @@ This setting is separate from the host's Responses storage.
 
 Use a Foundry project with a model deployment and a Toolbox containing
 `web_search` and `code_interpreter`. The caller needs **Foundry User** on that
-project. The [agent manifest](agent.manifest.yaml) declares these two tools;
-skill creation and attachment are separate steps below.
+project. Skill creation and attachment are separate steps below.
 
 From this sample directory, with `FOUNDRY_PROJECT_ENDPOINT` and `TOOLBOX_NAME`
 set in your shell, upload the included [source-brief skill](skill-src/source-brief/SKILL.md):
@@ -96,7 +95,7 @@ Toolbox and has no local fallback.
 
 ## Run locally
 
-Follow the parent's [local setup](../../README.md#running-the-agent-host-locally),
+Follow the parent's [Python setup](../../README.md#using-python),
 then install this sample's [requirements](requirements.txt) and run `python main.py`.
 This sample requires `langchain-azure-ai>=1.3.1`.
 If the SDK version is not available on your package index,
@@ -151,11 +150,44 @@ requests such as `Use code_interpreter to calculate 17 * 25` still work.
 
 ## Deploy to Foundry
 
-Follow the parent's [deployment guide](../../README.md#deploying-the-agent-to-foundry).
-After `azd provision` creates the Toolbox, upload and attach the skill using the
-steps above, then deploy the agent. `TOOLBOX_NAME` is injected from the manifest.
-The image build needs access to a package index containing the required SDK
-version. To use an existing Toolbox instead, configure its name for the agent.
+The [azure.yaml](azure.yaml) uses the sample's [Dockerfile](Dockerfile) and a
+remote Azure Container Registry (ACR) build. Reuse an existing Foundry project,
+model deployment, and the Toolbox configured above. The project also needs an
+ACR connection that the hosted agent can use to pull the image; see the
+[Foundry deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent)
+for registry and identity setup.
+
+With the Foundry extension installed, initialize from an empty directory.
+Set `SAMPLE_DIR` to the absolute path of this sample, `FOUNDRY_PROJECT_ID` to
+your project's ARM resource ID, and `ACR_CONNECTION_NAME` to its existing
+registry connection name:
+
+```bash
+azd ai agent init -t "$SAMPLE_DIR/azure.yaml" \
+  --project-id "$FOUNDRY_PROJECT_ID" \
+  --model-deployment "$AZURE_AI_MODEL_DEPLOYMENT_NAME" \
+  --deploy-mode container --acr-connection "$ACR_CONNECTION_NAME" --no-prompt
+```
+
+Change to the project directory printed by `init`, then set the Toolbox name
+in the azd environment and deploy:
+
+```bash
+azd env set TOOLBOX_NAME "$TOOLBOX_NAME"
+azd deploy --no-prompt
+azd ai agent show --output json
+```
+
+No `azd provision` is needed for these existing resources. Initialization binds
+the project, model, and registry; `azure.yaml` passes the model deployment and
+Toolbox name into the container. The image installs the published SDK from
+[requirements.txt](requirements.txt). The legacy `agent.manifest.yaml` is not
+used by this setup; current `azd` requires an `azure.yaml` project.
+
+To test the deployed agent, send the same requests above to the Responses
+endpoint returned by `show`, including its `api-version=v1` query parameter.
+Add an `Authorization: Bearer <token>` header with an Entra token for
+`https://ai.azure.com`.
 
 ## Local checks
 
