@@ -67,6 +67,9 @@ For more details and tutorials, see [Get started with LangChain and LangGraph wi
 
 ### Calling Microsoft Foundry models
 
+The examples use Microsoft Entra ID authentication with `DefaultAzureCredential`.
+For local development, sign in with `az login`.
+
 #### Responses API
 
 Call a Microsoft Foundry model using the Responses API:
@@ -77,12 +80,13 @@ Call a Microsoft Foundry model using the Responses API:
 > persist the message history across turns.
 
 ```python
+from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key",  # or DefaultAzureCredential() for Microsoft Entra ID
+    credential=DefaultAzureCredential(),
     model="gpt-5",  # your model deployment name
     use_responses_api=True,
     store=False,
@@ -122,12 +126,14 @@ result = model_with_image_gen.invoke(
 Call an OpenAI-compatible Foundry model using the Chat Completions API:
 
 ```python
+from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key",
+    credential=DefaultAzureCredential(),
     model="Mistral-Large-3",  # your model deployment name
+    use_responses_api=False,
 )
 
 model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
@@ -139,11 +145,12 @@ Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
 `langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
 
 ```python
+from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
 
 decisions = AzureAIOpenAIApiDecisions(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key",
+    credential=DefaultAzureCredential(),
     model="your-decisions-deployment",  # your Decisions model deployment name
 )
 
@@ -162,11 +169,12 @@ For API concepts and prerequisites, see the
 Generate embeddings for search and retrieval using an embedding model deployment:
 
 ```python
+from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
 
 embeddings = AzureAIOpenAIApiEmbeddingsModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key",
+    credential=DefaultAzureCredential(),
     model="text-embedding-3-small",  # your embedding model deployment name
 )
 
