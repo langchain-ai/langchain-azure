@@ -352,6 +352,7 @@ class TestMessageTextExtraction:
             content=[
                 "foo",
                 {"type": "input_text", "text": "bar"},
+                {"type": "input_text"},
                 {"type": "input_image", "image_url": "http://x.com/img.png"},
                 {"type": "text", "text": "baz"},
             ],

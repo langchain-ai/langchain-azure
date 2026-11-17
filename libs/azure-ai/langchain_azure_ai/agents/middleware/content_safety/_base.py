@@ -478,15 +478,20 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             parts = [
                 block if isinstance(block, str) else block["text"]
                 for block in msg.content
-                if isinstance(block, str)
-                or (
-                    isinstance(block, dict)
-                    and block.get("type") in ("text", "input_text")
-                )
+                if _is_text_block(block)
             ]
             text = " ".join(parts)
             return text or None
         return None
+
+
+def _is_text_block(block: Any) -> bool:
+    """Return whether a content block is text that the middleware extracts."""
+    return isinstance(block, str) or (
+        isinstance(block, dict)
+        and block.get("type") in ("text", "input_text")
+        and isinstance(block.get("text"), str)
+    )
 
 
 def get_content_safety_annotations(
