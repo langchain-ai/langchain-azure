@@ -1,10 +1,11 @@
 """Unit tests for the guardrails module."""
 
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -2133,15 +2134,13 @@ def _shield_tool_results(
 
 
 def _create_tool_agent(
-    middleware: Any, command_content: Any = None
+    middleware: Any, tool_result: Optional[Callable[[str], Any]] = None
 ) -> tuple[Any, List[List[Any]]]:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import (
         FakeMessagesListChatModel,
     )
-    from langchain_core.messages import ToolMessage
     from langchain_core.tools import InjectedToolCallId, tool
-    from langgraph.types import Command
 
     model_inputs: List[List[Any]] = []
 
@@ -2161,17 +2160,12 @@ def _create_tool_agent(
         return _INJECTED_TOOL_RESULT
 
     @tool("fetch_page")
-    def fetch_page_command(
+    def fetch_page_result(
         url: str, tool_call_id: Annotated[str, InjectedToolCallId]
-    ) -> Command:
-        """Return the content of a web page in a state update."""
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(content=command_content, tool_call_id=tool_call_id)
-                ]
-            }
-        )
+    ) -> Any:
+        """Return the content of a web page as the given tool result."""
+        assert tool_result is not None
+        return tool_result(tool_call_id)
 
     model = ToolModel(
         responses=[
@@ -2188,7 +2182,7 @@ def _create_tool_agent(
             AIMessage(content="done"),
         ]
     )
-    page_tool = fetch_page if command_content is None else fetch_page_command
+    page_tool = fetch_page if tool_result is None else fetch_page_result
     agent = create_agent(model=model, tools=[page_tool], middleware=[middleware])
     return agent, model_inputs
 
@@ -2200,6 +2194,38 @@ _INJECTED_LIST_CONTENT = pytest.mark.parametrize(
         [{"type": "input_text", "text": _INJECTED_TOOL_RESULT}],
     ],
     ids=["str", "input_text"],
+)
+
+
+def _command_tool_result(content: Any) -> Callable[[str], Command]:
+    return lambda tool_call_id: Command(
+        update={"messages": [ToolMessage(content=content, tool_call_id=tool_call_id)]}
+    )
+
+
+_INJECTED_RESULT_FORMS = pytest.mark.parametrize(
+    "tool_result",
+    [
+        lambda tool_call_id: Command(
+            update={
+                "messages": [
+                    {
+                        "role": "tool",
+                        "content": _INJECTED_TOOL_RESULT,
+                        "tool_call_id": tool_call_id,
+                    }
+                ]
+            }
+        ),
+        lambda tool_call_id: [
+            Command(update={}),
+            ToolMessage(content=_INJECTED_TOOL_RESULT, tool_call_id=tool_call_id),
+        ],
+        lambda tool_call_id: [
+            _command_tool_result(_INJECTED_TOOL_RESULT)(tool_call_id)
+        ],
+    ],
+    ids=["command_message_dict", "list_with_tool_message", "list_with_command"],
 )
 
 
@@ -2343,7 +2369,7 @@ class TestPromptShieldToolResults:
         )
 
         m = _make_prompt_shield()
-        agent, model_inputs = _create_tool_agent(m, command_content=content)
+        agent, model_inputs = _create_tool_agent(m, _command_tool_result(content))
         with patch.object(m, "_send_rest_sync", side_effect=_shield_tool_results):
             with pytest.raises(ContentSafetyViolationError):
                 agent.invoke({"messages": [HumanMessage(content="Summarize it")]})
@@ -2360,7 +2386,7 @@ class TestPromptShieldToolResults:
         )
 
         m = _make_prompt_shield()
-        agent, model_inputs = _create_tool_agent(m, command_content=content)
+        agent, model_inputs = _create_tool_agent(m, _command_tool_result(content))
         with patch.object(
             m,
             "_send_rest_async",
@@ -2373,6 +2399,92 @@ class TestPromptShieldToolResults:
                 )
 
         assert len(model_inputs) == 1
+
+    @_INJECTED_RESULT_FORMS
+    def test_create_agent_blocks_injected_tool_result_forms(
+        self, tool_result: Callable[[str], Any]
+    ) -> None:
+        """Message dicts and list results should be blocked before the model."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_prompt_shield()
+        agent, model_inputs = _create_tool_agent(m, tool_result)
+        with patch.object(m, "_send_rest_sync", side_effect=_shield_tool_results):
+            with pytest.raises(ContentSafetyViolationError):
+                agent.invoke({"messages": [HumanMessage(content="Summarize it")]})
+
+        assert len(model_inputs) == 1
+
+    @_INJECTED_RESULT_FORMS
+    async def test_create_agent_blocks_injected_tool_result_forms_async(
+        self, tool_result: Callable[[str], Any]
+    ) -> None:
+        """The async run should also block message dicts and list results."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_prompt_shield()
+        agent, model_inputs = _create_tool_agent(m, tool_result)
+        with patch.object(
+            m,
+            "_send_rest_async",
+            new_callable=AsyncMock,
+            side_effect=_shield_tool_results,
+        ):
+            with pytest.raises(ContentSafetyViolationError):
+                await agent.ainvoke(
+                    {"messages": [HumanMessage(content="Summarize it")]}
+                )
+
+        assert len(model_inputs) == 1
+
+    def test_create_agent_replaces_injected_tool_message_dict(self) -> None:
+        """A replaced message dict should reach the state as the notice."""
+        m = _make_prompt_shield(
+            exit_behavior="replace", violation_message="Tool result removed."
+        )
+        agent, model_inputs = _create_tool_agent(
+            m,
+            lambda tool_call_id: Command(
+                update={
+                    "messages": [
+                        {
+                            "role": "tool",
+                            "content": _INJECTED_TOOL_RESULT,
+                            "tool_call_id": tool_call_id,
+                        }
+                    ]
+                }
+            ),
+        )
+        with patch.object(m, "_send_rest_sync", side_effect=_shield_tool_results):
+            result = agent.invoke({"messages": [HumanMessage(content="Summarize it")]})
+
+        assert [
+            msg.content for msg in result["messages"] if isinstance(msg, ToolMessage)
+        ] == ["Tool result removed."]
+        assert _INJECTED_TOOL_RESULT not in str(model_inputs[1])
+
+    def test_create_agent_passes_safe_list_tool_result(self) -> None:
+        """A safe list result should reach the model unchanged."""
+        m = _make_prompt_shield()
+        agent, model_inputs = _create_tool_agent(
+            m,
+            lambda tool_call_id: [
+                Command(update={}),
+                ToolMessage(content="safe result", tool_call_id=tool_call_id),
+            ],
+        )
+        with patch.object(
+            m, "_send_rest_sync", side_effect=_shield_tool_results
+        ) as mock_rest:
+            agent.invoke({"messages": [HumanMessage(content="Summarize it")]})
+
+        assert mock_rest.call_args[0][1]["documents"] == ["safe result"]
+        assert model_inputs[1][-1].content == "safe result"
 
     def test_wrap_tool_call_skipped_when_apply_to_input_false(self) -> None:
         """Tool results shouldn't be screened when input screening is off."""

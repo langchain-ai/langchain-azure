@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime, ToolCallRequest
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage, convert_to_messages
 from langchain_core.messages.content import NonStandardAnnotation
 from langgraph.runtime import get_runtime
 from langgraph.types import Command
@@ -312,14 +312,16 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
 
         Returns:
             The tool result, with its ``ToolMessage`` handled according to
-            ``exit_behavior`` when an injection is detected.
+            ``exit_behavior`` when an injection is detected. When it's
+            screened, message dicts in a ``Command`` update are returned as
+            messages.
 
         Raises:
             ContentSafetyViolationError: When ``exit_behavior="error"`` and an
                 injection is detected in the tool result.
         """
-        result = handler(request)
-        for user_prompt, message, text in self._tool_results_to_screen(request, result):
+        result, screened = self._tool_results_to_screen(request, handler(request))
+        for user_prompt, message, text in screened:
             violations = self._shield_sync(user_prompt=user_prompt, documents=[text])
             self._handle_tool_result_violations(violations, message)
         return result
@@ -330,8 +332,8 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         """Async version of :meth:`wrap_tool_call`."""
-        result = await handler(request)
-        for user_prompt, message, text in self._tool_results_to_screen(request, result):
+        result, screened = self._tool_results_to_screen(request, await handler(request))
+        for user_prompt, message, text in screened:
             violations = await self._shield_async(
                 user_prompt=user_prompt, documents=[text]
             )
@@ -339,30 +341,26 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
         return result
 
     def _tool_results_to_screen(
-        self, request: ToolCallRequest, result: ToolMessage | Command[Any]
-    ) -> List[tuple[str, ToolMessage, str]]:
-        """Return the user prompt, message and text of each tool result to screen."""
+        self, request: ToolCallRequest, result: Any
+    ) -> tuple[Any, List[tuple[str, ToolMessage, str]]]:
+        """Return the tool result, and the prompt, message and text to screen.
+
+        ``ToolNode`` also returns a list of ``ToolMessage`` and ``Command``
+        items. Message dicts in a ``Command`` update are converted to
+        messages, so the screened message is the one added to the state.
+        """
         if not self.apply_to_input:
-            return []
+            return result, []
         user_prompt = self._tool_call_user_prompt(request)
         if user_prompt is None:
-            return []
-        if isinstance(result, ToolMessage):
-            messages = [result]
-        else:
-            update = result.update if isinstance(result.update, dict) else {}
-            messages = [
-                message
-                for message in update.get("messages", [])
-                if isinstance(message, ToolMessage)
-                and message.tool_call_id == request.tool_call["id"]
-            ]
+            return result, []
+        result = _convert_command_messages(result)
         screened = []
-        for message in messages:
+        for message in _tool_messages(result, request.tool_call["id"]):
             text = self.get_text_from_message(message)
             if text:
                 screened.append((user_prompt, message, text))
-        return screened
+        return result, screened
 
     def _tool_call_user_prompt(self, request: ToolCallRequest) -> Optional[str]:
         """Return the user prompt to screen a tool result with."""
@@ -463,3 +461,34 @@ class AzurePromptShieldMiddleware(_AzureContentSafetyBaseMiddleware):
             if text:
                 texts.append(text)
         return texts
+
+
+def _convert_command_messages(result: Any) -> Any:
+    """Convert message dicts in ``Command`` updates as the state reducer does."""
+    if isinstance(result, list):
+        return [_convert_command_messages(item) for item in result]
+    if isinstance(result, Command) and isinstance(result.update, dict):
+        messages = result.update.get("messages")
+        if isinstance(messages, list):
+            return replace(
+                result,
+                update={**result.update, "messages": convert_to_messages(messages)},
+            )
+    return result
+
+
+def _tool_messages(result: Any, tool_call_id: Optional[str]) -> List[ToolMessage]:
+    """Return the tool messages in a tool result."""
+    if isinstance(result, list):
+        return [
+            message for item in result for message in _tool_messages(item, tool_call_id)
+        ]
+    if isinstance(result, ToolMessage):
+        return [result]
+    if isinstance(result, Command) and isinstance(result.update, dict):
+        return [
+            message
+            for message in result.update.get("messages", [])
+            if isinstance(message, ToolMessage) and message.tool_call_id == tool_call_id
+        ]
+    return []
