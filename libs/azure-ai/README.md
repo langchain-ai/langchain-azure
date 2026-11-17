@@ -7,7 +7,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | I want to... | Start with |
 | --- | --- |
 | Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
-| Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#using-the-decisions-api-experimental) |
+| Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#decisions-api-experimental) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
@@ -54,7 +54,7 @@ The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and c
 
 This package includes:
 
-* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) from LangChain and LangGraph via the Responses API, Chat Completions API, or [Decisions API (experimental)](#using-the-decisions-api-experimental).
+* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) from LangChain and LangGraph via the Responses API, Chat Completions API, or [Decisions API (experimental)](#decisions-api-experimental).
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
@@ -67,7 +67,14 @@ For more details and tutorials, see [Get started with LangChain and LangGraph wi
 
 ### Calling Microsoft Foundry models
 
-Call a Microsoft Foundry model using the Chat Completions API:
+#### Responses API
+
+Call a Microsoft Foundry model using the Responses API:
+
+> [!NOTE]
+> Set `store=False` and manage chat history in LangChain or LangGraph. Pass
+> prior messages with each model call; for agents, a LangGraph checkpointer can
+> persist the message history across turns.
 
 ```python
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
@@ -75,8 +82,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="gpt-5"
+    credential="your-api-key",  # or DefaultAzureCredential() for Microsoft Entra ID
+    model="gpt-5",  # your model deployment name
+    use_responses_api=True,
+    store=False,
 )
 
 messages = [
@@ -94,7 +103,7 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
-You can also use builtin tools with them:
+You can also use built-in tools with the Responses API:
 
 ```python
 from langchain_azure_ai.tools.builtin import ImageGenerationTool
@@ -105,34 +114,26 @@ result = model_with_image_gen.invoke(
 )
 ```
 
-Models in Microsoft Foundry Models are OpenAI-compatible and can be used with the class:
+#### Chat Completions API
+
+> [!NOTE]
+> For new apps, consider building on the **Responses API** instead of Chat Completions.
+
+Call an OpenAI-compatible Foundry model using the Chat Completions API:
 
 ```python
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
+
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential="your-api-key",
-    model="Mistral-Large-3"
+    model="Mistral-Large-3",  # your model deployment name
 )
+
+model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 ```
 
-Generate embeddings for search and retrieval using an embedding model deployment:
-
-```python
-from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
-
-embeddings = AzureAIOpenAIApiEmbeddingsModel(
-    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key",
-    model="text-embedding-3-small",  # your embedding model deployment name
-)
-
-query_vector = embeddings.embed_query("What is Microsoft Foundry?")
-document_vectors = embeddings.embed_documents(
-    ["Microsoft Foundry helps you build AI applications."]
-)
-```
-
-### Using the Decisions API (experimental)
+#### Decisions API (experimental)
 
 Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
 `langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
@@ -155,6 +156,25 @@ print(answer.nouls["refund"].noul)  # probability that a refund is requested
 
 For API concepts and prerequisites, see the
 [Azure OpenAI Decisions API documentation](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
+
+#### Embeddings
+
+Generate embeddings for search and retrieval using an embedding model deployment:
+
+```python
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
+
+embeddings = AzureAIOpenAIApiEmbeddingsModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential="your-api-key",
+    model="text-embedding-3-small",  # your embedding model deployment name
+)
+
+query_vector = embeddings.embed_query("What is Microsoft Foundry?")
+document_vectors = embeddings.embed_documents(
+    ["Microsoft Foundry helps you build AI applications."]
+)
+```
 
 <a id="microsoft-foundry-agent-service"></a>
 
