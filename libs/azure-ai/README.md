@@ -67,7 +67,7 @@ For more details and tutorials, see [Get started with LangChain and LangGraph wi
 
 ### Calling Microsoft Foundry models
 
-The examples use Microsoft Entra ID authentication with `DefaultAzureCredential`.
+Prefer Microsoft Entra ID authentication with `DefaultAzureCredential`.
 For local development, sign in with `az login`.
 
 #### Responses API
@@ -126,14 +126,13 @@ result = model_with_image_gen.invoke(
 Call an OpenAI-compatible Foundry model using the Chat Completions API:
 
 ```python
-from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential=DefaultAzureCredential(),
+    # With DefaultAzureCredential(), explicitly set use_responses_api=False.
+    credential="your-api-key",
     model="Mistral-Large-3",  # your model deployment name
-    use_responses_api=False,
 )
 
 model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
