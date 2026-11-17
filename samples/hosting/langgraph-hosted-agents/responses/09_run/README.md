@@ -49,6 +49,21 @@ parent README, then start this sample with:
 python -m langchain_azure_ai.agents.hosting.run --protocol responses
 ```
 
+### Run with azd
+
+With the [azd prerequisites](../../README.md#prerequisites) installed,
+initialize from this sample's directory, selecting your Foundry project
+and model deployment when prompted:
+
+```bash
+azd ai agent init -t ./azure.yaml
+azd ai agent run --no-client
+```
+
+The host serves on `http://127.0.0.1:8088`.
+[azure.yaml](azure.yaml) sets `startupCommand` to the hosting-module command
+above. Running `python main.py` only exports the graph and exits.
+
 ## Interacting with the agent
 
 Send a POST request with an `"input"` field:
@@ -81,6 +96,7 @@ curl -X POST http://127.0.0.1:8088/responses \
 
 ## Deploying the Agent to Foundry
 
-To host the agent on Foundry, follow the [Deploying the Agent to
-Foundry](../../README.md#deploying-the-agent-to-foundry) section of the
-parent README.
+After initializing with `azure.yaml` above, deploy with `azd deploy`.
+Deployment uses the existing [Dockerfile](Dockerfile), whose `CMD` starts
+the same hosting module. See the [deployment guide](../../README.md#deploying-the-agent-to-foundry)
+for Foundry prerequisites.

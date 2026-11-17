@@ -25,6 +25,7 @@ Choose its `azd` setup path before running or deploying:
 | Sample configuration | Setup path |
 | --- | --- |
 | `agent.manifest.yaml` and `agent.yaml` | Follow [Using azd](#using-azd) below. |
+| `azure.yaml` in [Responses Run](responses/09_run/README.md#run-with-azd) or [Invocations Run](invocations/03_run/README.md#run-with-azd) | Use the sample's explicit hosting-module startup command and azd setup. |
 | `azure.yaml` in [Responses Resilient](responses/10_resilient/README.md#deploying-the-agent-to-foundry) or [Invocations Resilient](invocations/04_resilient/README.md#deploying-the-agent-to-foundry) | Initialize the independent azd project using that sample's deployment steps. |
 | `azure.yaml` in [Deep Agents](responses/12_deep_agents/SETUP.md) | Complete its resource setup and deployment steps. |
 | Both formats in [Branching](responses/13_branching/README.md#run-with-azd) | Follow the sample's existing-project setup. |
@@ -86,10 +87,10 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 
 ## Running the Agent Host Locally
 
-You can run any sample two ways: through the Azure Developer CLI
-(`azd ai agent run`, which builds the container and matches the
-Foundry-hosted runtime), or directly with `python main.py` (faster
-iteration, uses your local Python).
+You can run any sample through the Azure Developer CLI (`azd ai agent run`)
+or directly with Python. Both use a local Python process. Most samples
+start with `python main.py`; the run-entrypoint samples use the hosting
+module commands [below](#run-the-agent-host-1).
 
 ### Using `azd`
 
@@ -105,8 +106,7 @@ above after installing the prerequisites.
    - Authenticate: `azd auth login`
 2. **Azure subscription** with permission to create Foundry projects
    and model deployments (or an existing project you can re-use).
-3. **Docker** running locally (required by `azd ai agent run` to build
-   the container image declared in each sample's `Dockerfile`).
+3. **Docker** for container-image builds when deploying Dockerfile samples.
 
 #### Create a new project
 
