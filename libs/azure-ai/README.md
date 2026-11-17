@@ -7,6 +7,7 @@ This package contains the LangChain integration for Microsoft Foundry (formerly 
 | I want to... | Start with |
 | --- | --- |
 | Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#using-the-decisions-api-experimental) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
@@ -130,6 +131,32 @@ document_vectors = embeddings.embed_documents(
     ["Microsoft Foundry helps you build AI applications."]
 )
 ```
+
+### Using the Decisions API (experimental)
+
+Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. This
+integration is **experimental**: its interface may change, and constructing it
+emits an `ExperimentalWarning`. Requires `langchain-azure-ai>=1.4.0` and a model
+deployment that supports the Decisions API.
+
+```python
+from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
+
+decisions = AzureAIOpenAIApiDecisions(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential="your-api-key",
+    model="your-decisions-deployment",  # your Decisions model deployment name
+)
+
+answer = decisions.invoke({
+    "state": "Please refund the duplicate charge.",
+    "questions": {"refund": Noul(instructions="Is a refund requested?")},
+})
+print(answer.nouls["refund"].noul)  # probability that a refund is requested
+```
+
+See [Decisions integration details](docs/model/decisions.md) for question types
+and supported behavior.
 
 <a id="microsoft-foundry-agent-service"></a>
 
