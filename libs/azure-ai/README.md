@@ -1,12 +1,12 @@
 # langchain-azure-ai
 
-This package contains the LangChain integration for Microsoft Foundry (formerly known Azure AI). To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
+This package integrates Microsoft Foundry with LangChain, LangGraph, and Deep Agents. For setup and examples, see the [Microsoft Foundry development guide](https://aka.ms/azureai/langchain).
 
 ## Start here
 
 | I want to... | Start with |
 | --- | --- |
-| Call Microsoft Foundry models from LangChain or LangGraph | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Call Microsoft Foundry models from LangChain, LangGraph, or Deep Agents | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
 | Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#decisions-api-experimental) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
@@ -50,18 +50,18 @@ pip install -U langchain-azure-ai[v1]
 
 ## Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
+The `langchain-azure-ai` package connects LangChain, LangGraph, and Deep Agents applications to Microsoft Foundry models, agents, tools, and services.
 
 This package includes:
 
-* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) from LangChain and LangGraph via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), or [Decisions API (experimental)](#decisions-api-experimental).
+* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), or [Decisions API (experimental)](#decisions-api-experimental).
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
 * **Using Microsoft Foundry Tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
 * **Searching documents (vector store):** index and search documents with [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores).
 
-For more details and tutorials, see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
+For more details and tutorials, see the [Microsoft Foundry development guide](https://aka.ms/azureai/langchain).
 
 <a id="microsoft-foundry-models"></a>
 
@@ -75,7 +75,7 @@ For local development, sign in with `az login`.
 Call a Microsoft Foundry model using the Responses API:
 
 > [!NOTE]
-> LangChain and LangGraph agents manage conversation history in their state.
+> LangGraph agents manage conversation history in their state.
 > We recommend `store=False` to disable model-side response storage for these agents.
 > For direct model calls, your code can manage history by passing prior messages,
 > or use `store=True` with `previous_response_id` to continue a conversation
@@ -253,7 +253,8 @@ You're not a genius and you don't love programming!
 
 ### Applying Content Safety guardrails via middleware
 
-Use a Content Safety guardrail policy with any LangChain `create_agent` agent:
+Pass Content Safety middleware to LangChain's `create_agent` or Deep Agents'
+`create_deep_agent`. This example uses `create_agent`:
 
 ```python
 from langchain.agents import create_agent
@@ -273,6 +274,10 @@ agent = create_agent(
 This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits agent and model input/output and tool arguments/results to the service; the guardrail policy controls each intervention point. The same text may be checked at both agent and model boundaries. A blocked policy verdict raises `ContentSafetyViolationError`; allowed transformations are applied, and non-blocking findings are available via `get_content_safety_annotations`. Agent/model hooks screen text; tool hooks screen JSON-encoded arguments and results. See the [runnable example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/unified-moderation/basic_usage.py).
 
 ### Hosting LangGraph agents on Microsoft Foundry
+
+These hosts accept compiled LangGraph graphs, including those returned by
+LangChain's `create_agent` and Deep Agents' `create_deep_agent`. For a complete
+Deep Agents example, see the [Deep Agents hosting sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/README.md).
 
 > [!TIP]
 > To choose between Responses and Invocations, see
@@ -415,7 +420,7 @@ rather than a checkpointer for that purpose.
 
 ### Tracing with Azure Application Insights
 
-To trace your LangChain / LangGraph applications with Azure Application Insights, first install the OpenTelemetry extras:
+To trace your LangChain, LangGraph, or Deep Agents applications with Azure Application Insights, first install the OpenTelemetry extras:
 
 ```bash
 pip install -U langchain-azure-ai[opentelemetry]
