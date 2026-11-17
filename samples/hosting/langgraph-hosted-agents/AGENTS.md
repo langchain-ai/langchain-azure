@@ -1,0 +1,94 @@
+# Hosted Agent Samples
+
+Applies to this directory and its descendants. Follow the [repository](../../../AGENTS.md)
+and [azure-ai](../../../libs/azure-ai/AGENTS.md) instructions, plus those of other
+SDKs used. Apply these rules to new samples and changed parts of existing samples.
+
+## Sample Code
+
+- Read the target README and [shared README](README.md) before editing.
+- Give each sample one clear goal. Use native framework and hosting SDK features;
+  add custom wrappers or host subclasses only when the goal requires them.
+- Follow `responses/NN_name/` or `invocations/NN_name/`, use an unused number, and
+  add new samples to the shared README's index.
+- Include an entrypoint, dependencies, `.env.example`, Dockerfile, and deployment
+  configuration for the supported setup path. Keep names and defaults consistent
+  across code, configuration, and documentation. Declare required versions and extras.
+- Install SDK dependencies from published packages. Do not use local source paths,
+  editable SDK installs, or Git URLs.
+- Keep credentials out of committed files. Label simulated tools and data, and
+  preserve input validation, error handling, and resource cleanup.
+- Keep blocking I/O off the async event loop; use async SDK calls or
+  `asyncio.to_thread` for necessary synchronous calls.
+- Use the Responses or Decisions API for model calls by default. Do not use
+  Chat Completions.
+- When calling models through the Responses API, set `store=False` because
+  LangGraph manages conversation history.
+
+## README
+
+- Write in plain, concise English. Open with what the sample demonstrates, when
+  to use it, and the expected outcome.
+- Use title case for headings and this section order:
+  `What This Sample Demonstrates`, `How It Works`, `Running the Agent Host`,
+  `Interacting with the Agent`, and `Deploying the Agent to Foundry`.
+  Add sample-specific subsections as needed.
+- Explain only what the reader needs for that goal. Omit unrelated topics or link
+  to another sample or document. Link to shared setup, deployment, and tracing
+  instructions instead of repeating them; state sample-specific differences.
+- Include required resources, versions, authentication, permissions, and variables,
+  including cloud requirements for local runs. Distinguish developer and agent access.
+- Provide runnable client code with commands, inputs, and expected results. A
+  request snippet is enough for a simple call; use a script for stateful flows
+  such as approval/resume, stream reconnection, or artifact downloads.
+- Keep snippets consistent with the code. Explain relevant limits, persistence,
+  content exposure, and cleanup beside the affected steps. Keep review history
+  and development plans in the PR description.
+
+## Telemetry
+
+- Enable telemetry by default in every sample, locally and when hosted. Include
+  tracing dependencies, initialize instrumentation at startup, and configure export
+  through the [shared tracing setup](README.md#tracing).
+- Document exporter and content-recording defaults. Telemetry enablement does not
+  require enabling content capture.
+
+## Build and Startup
+
+- When `main.py` only exports a graph, set azd's `startupCommand` in `azure.yaml`
+  to invoke the hosting module with the hosted entrypoint's protocol and options.
+  `codeConfiguration.entryPoint` and Docker `CMD` do not set the local command.
+- Install dependencies before copying application code to preserve Docker layer caching.
+- Use `--no-cache-dir` for pip installs. Pip generates dependency `.pyc` files by
+  default; avoid redundant dependency-wide `compileall` steps.
+- With uv, use `uv sync --compile-bytecode` for dependencies and `compileall` for
+  the standard library and application code at build time, using the runtime
+  interpreter and final paths. Dependency and standard-library compilation is
+  best-effort; application compilation must fail the build on syntax errors and
+  exclude `.venv`.
+- Exclude local environments, caches, and secrets from the build context with `.dockerignore`.
+
+Example uv Dockerfile fragment, assuming uv is installed:
+
+```dockerfile
+WORKDIR /app/user_agent
+COPY pyproject.toml uv.lock ./
+# Install dependencies only; the sample runs directly from source.
+RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode
+COPY . .
+RUN .venv/bin/python -m compileall -q \
+    $(.venv/bin/python -c "import sysconfig as s; print(s.get_paths()['stdlib'])") || true; \
+    uv run --no-sync python -m compileall -q -x '[.]venv' .
+```
+
+## Validation
+
+- For documentation changes, check affected commands, configuration, and links.
+  For runtime or dependency changes, exercise the entrypoint and client flow in a
+  clean environment with the documented versions and extras; test new sample logic.
+- For startup changes, verify readiness and that the host stays running.
+- When changing telemetry or image builds, check default tracing initialization,
+  dependency-layer order, and bytecode in the resulting image as applicable.
+- Keep repository-file checks in the [docs/samples suite](../../../CONTRIBUTING.md#docs-and-samples-tests).
+  Report actual results and distinguish source inspection, offline/mock checks,
+  and live Foundry validation.
