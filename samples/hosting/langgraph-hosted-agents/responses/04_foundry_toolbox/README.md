@@ -1,11 +1,16 @@
-# Foundry Toolbox tools and skills
+# Foundry Toolbox Tools and Skills
 
 A LangChain agent that loads tools and skills from the same **Foundry Toolbox**
-and serves the **Responses protocol**. The included `source-brief` skill guides
-the agent through a research task: search for primary sources with `web_search`,
-check any arithmetic with `code_interpreter`, then write a brief with citations.
+and serves the **Responses protocol**. Use it to combine a reusable research
+procedure with remote tools and produce a brief with citations.
 
-## How it works
+## What This Sample Demonstrates
+
+The included `source-brief` skill guides the agent through a research task:
+load instructions on demand, search for primary sources with `web_search`,
+check any arithmetic with `code_interpreter`, then write the brief.
+
+## How It Works
 
 At startup, [main.py](main.py) uses `AzureAIProjectToolbox.get_tools()` to load
 LangChain tools and `aget_resources(uris="skill://index.json")` to read the
@@ -42,7 +47,9 @@ is hosted by `ResponsesHostServer`. Model calls set `store=False` because
 LangGraph sends the message history, including previous tool calls, on each turn.
 This setting is separate from the host's Responses storage.
 
-## Configure the Toolbox
+## Running the Agent Host
+
+### Configure the Toolbox
 
 Use a Foundry project with a model deployment and a Toolbox containing
 `web_search` and `code_interpreter`. The caller needs **Foundry User** on that
@@ -93,18 +100,13 @@ and [attaching them to a Toolbox](https://learn.microsoft.com/azure/foundry/agen
 The files in `skill-src/` are upload sources; the host reads skills from the
 Toolbox and has no local fallback.
 
-## Run locally
+### Run Locally
 
-Follow the parent's [Python setup](../../README.md#using-python),
-then install this sample's [requirements](requirements.txt) and run `python main.py`.
-This sample requires `langchain-azure-ai>=1.3.1`.
-If the SDK version is not available on your package index,
-install the repository SDK before the sample requirements (from the repo root):
-
-```bash
-pip install "./libs/azure-ai[hosting,opentelemetry,tools]"
-pip install -r samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox/requirements.txt
-```
+Follow the parent's [Python setup](../../README.md#using-python) to create a
+virtual environment and fill in `.env` from [.env.example](.env.example).
+Install this sample's [requirements](requirements.txt) from published packages;
+the sample requires `langchain-azure-ai>=1.3.1` with the `hosting`,
+`opentelemetry`, and `tools` extras.
 
 Required environment variables:
 
@@ -120,7 +122,26 @@ and tool results are redacted unless content recording is explicitly enabled.
 
 Startup lists the loaded tools and confirms that the skill catalog was loaded.
 
-## Try the skill and tools together
+From this sample directory, start the host:
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+### Local Checks
+
+From the repository root, run the registered offline smoke checks:
+
+```bash
+uv run --project .github/tests --frozen pytest .github/tests --docs-samples-dir samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox
+```
+
+The tests use the real SDK resource loader, graph, and Responses
+host with a scripted model and a fake MCP boundary. They verify metadata-only
+startup, on-demand reads, and tool calls without Azure calls.
+
+## Interacting with the Agent
 
 Send a research request:
 
@@ -148,7 +169,7 @@ user's inputs. Skill reads and remote tool calls appear as
 `function_call` / `function_call_output` items over JSON or SSE. Ordinary tool
 requests such as `Use code_interpreter to calculate 17 * 25` still work.
 
-## Deploy to Foundry
+## Deploying the Agent to Foundry
 
 The [azure.yaml](azure.yaml) uses the sample's [Dockerfile](Dockerfile) and a
 remote Azure Container Registry (ACR) build. Reuse an existing Foundry project,
@@ -188,15 +209,3 @@ To test the deployed agent, send the same requests above to the Responses
 endpoint returned by `show`, including its `api-version=v1` query parameter.
 Add an `Authorization: Bearer <token>` header with an Entra token for
 `https://ai.azure.com`.
-
-## Local checks
-
-From the repository root, run the registered offline smoke checks:
-
-```bash
-uv run --project .github/tests --frozen pytest .github/tests --docs-samples-dir samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox
-```
-
-The tests use the real SDK resource loader, graph, and Responses
-host with a scripted model and a fake MCP boundary. They verify metadata-only
-startup, on-demand reads, and tool calls without Azure calls.
