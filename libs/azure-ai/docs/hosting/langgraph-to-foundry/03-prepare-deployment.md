@@ -78,7 +78,7 @@ The Python runtime starts the file specified by `codeConfiguration.entryPoint`. 
 
 ### Prepare runtime dependencies
 
-The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
+In this example, the remote build installs dependencies from the root `requirements.txt`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
