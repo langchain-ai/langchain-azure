@@ -25,7 +25,20 @@ SAMPLE = (
     / "samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox"
 )
 SKILL_URI = "skill://source-brief/SKILL.md"
+INDEX_URI = "skill://index.json"
 SKILL = (SAMPLE / "skill-src/source-brief/SKILL.md").read_text(encoding="utf-8")
+CATALOG = json.dumps(
+    {
+        "skills": [
+            {
+                "name": "source-brief",
+                "type": "skill-md",
+                "description": "Research a topic or compare options using web search.",
+                "url": SKILL_URI,
+            }
+        ]
+    }
+)
 
 
 class ScriptedModel(GenericFakeChatModel):
@@ -90,7 +103,7 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         return "20.0"
 
     class Client:
-        contents = [SKILL]
+        resources = {INDEX_URI: [CATALOG], SKILL_URI: [SKILL]}
         resource_reads: list[str] = []
 
         async def get_tools(self) -> list[Any]:
@@ -102,11 +115,11 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             yield self
 
         async def read_resource(self, uri: str) -> Any:
-            assert uri == SKILL_URI
             self.resource_reads.append(uri)
             return SimpleNamespace(
                 contents=[
-                    TextResourceContents(uri=uri, text=text) for text in self.contents
+                    TextResourceContents(uri=uri, text=text)
+                    for text in self.resources[uri]
                 ]
             )
 
@@ -122,7 +135,7 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     "exporter",
     [None, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"],
 )
-def test_entrypoint_loads_skill_prompt_and_calls_tools(
+def test_entrypoint_reads_skill_on_demand_then_calls_tools(
     sample: Any,
     mcp_boundary: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -138,6 +151,7 @@ def test_entrypoint_loads_skill_prompt_and_calls_tools(
     model = ScriptedModel(
         messages=iter(
             [
+                call("read_skill_resource", uri=SKILL_URI),
                 call("web_search", query="Python 3.14 release notes"),
                 call("code_interpreter", code="(250 - 200) / 250 * 100"),
                 AIMessage(content=final),
@@ -156,6 +170,7 @@ def test_entrypoint_loads_skill_prompt_and_calls_tools(
     monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path / "state"))
 
     def run(host: Any, **kwargs: Any) -> None:
+        assert mcp_boundary.client.resource_reads == [INDEX_URI]
         with TestClient(host.app) as client:
             response = client.post(
                 "/responses",
@@ -189,7 +204,7 @@ def test_entrypoint_loads_skill_prompt_and_calls_tools(
             for item in payload["output"]
             if item["type"] == "function_call"
         ]
-        assert names == ["web_search", "code_interpreter"]
+        assert names == ["read_skill_resource", "web_search", "code_interpreter"]
         text = "".join(
             part.get("text", "")
             for item in payload["output"]
@@ -205,22 +220,66 @@ def test_entrypoint_loads_skill_prompt_and_calls_tools(
         sample.trace.set_tracer_provider.assert_called_once()
     else:
         tracing.assert_called_once_with(auto_configure_azure_monitor=True)
-    assert mcp_boundary.client.resource_reads == [SKILL_URI]
+    assert mcp_boundary.client.resource_reads == [INDEX_URI, SKILL_URI]
     assert [name for name, _ in mcp_boundary.calls] == [
         "web_search",
         "code_interpreter",
     ]
-    assert model.tool_names == {"web_search", "code_interpreter"}
+    assert model.tool_names == {
+        "read_skill_resource",
+        "web_search",
+        "code_interpreter",
+    }
     first_prompt = str(model.requests[0][0].content)
-    assert SKILL in first_prompt
+    assert CATALOG in first_prompt
+    assert "Keep each claim with its source URL" not in first_prompt
+    assert model.requests[1][-1].content == SKILL
+
+
+def test_unrelated_request_does_not_read_skill(sample: Any, mcp_boundary: Any) -> None:
+    tools, catalog = asyncio.run(sample._load_toolbox())
+    model = ScriptedModel(messages=iter([AIMessage(content="Hello!")]))
+    graph = sample.create_agent(model, tools=tools, system_prompt=catalog)
+    result = asyncio.run(graph.ainvoke({"messages": [("user", "Hello")]}))
+    assert result["messages"][-1].content == "Hello!"
+    assert mcp_boundary.client.resource_reads == [INDEX_URI]
+    assert SKILL not in str(model.requests)
+
+
+def test_supporting_resource_is_read_on_demand(sample: Any, mcp_boundary: Any) -> None:
+    reference_uri = "skill://source-brief/references/guide.md"
+    mcp_boundary.client.resources[reference_uri] = ["Reference text."]
+    tools, _ = asyncio.run(sample._load_toolbox())
+    assert mcp_boundary.client.resource_reads == [INDEX_URI]
+    result = asyncio.run(tools[-1].ainvoke({"uri": reference_uri}))
+    assert result == "Reference text."
+    assert mcp_boundary.client.resource_reads == [INDEX_URI, reference_uri]
+
+
+@pytest.mark.parametrize("uri", ["file:///secret.txt", "https://example.test/skill"])
+def test_reader_rejects_non_skill_uri(sample: Any, mcp_boundary: Any, uri: str) -> None:
+    tools, _ = asyncio.run(sample._load_toolbox())
+    result = asyncio.run(tools[-1].ainvoke({"uri": uri}))
+    assert "Use a skill:// URI" in result
+    assert mcp_boundary.client.resource_reads == [INDEX_URI]
 
 
 @pytest.mark.parametrize("contents", [[], ["   "]])
-def test_empty_skill_fails_at_startup(
+def test_empty_skill_returns_tool_error(
     sample: Any,
     mcp_boundary: Any,
     contents: list[str],
 ) -> None:
-    mcp_boundary.client.contents = contents
-    with pytest.raises(ValueError, match="must provide source-brief/SKILL.md"):
+    mcp_boundary.client.resources[SKILL_URI] = contents
+    tools, _ = asyncio.run(sample._load_toolbox())
+    result = asyncio.run(tools[-1].ainvoke({"uri": SKILL_URI}))
+    assert "No skill content returned" in result
+
+
+@pytest.mark.parametrize("contents", [[], ["   "]])
+def test_empty_index_fails_at_startup(
+    sample: Any, mcp_boundary: Any, contents: list[str]
+) -> None:
+    mcp_boundary.client.resources[INDEX_URI] = contents
+    with pytest.raises(ValueError, match="must provide skill://index.json"):
         asyncio.run(sample._load_toolbox())

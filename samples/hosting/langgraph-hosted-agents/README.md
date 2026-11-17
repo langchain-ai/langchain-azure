@@ -59,7 +59,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 1 | [Basic](responses/01_basic/) | Minimal `create_agent` graph hosted as the Responses API. |
 | 2 | [Tools](responses/02_tools/) | `@tool` registration. Intermediate tool calls and results are surfaced as `function_call` / `function_call_output` output items. |
 | 3 | [MCP](responses/03_mcp/) | Tools loaded at startup from a remote MCP server (GitHub by default) via `langchain_mcp_adapters.client.MultiServerMCPClient`. |
-| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools and a research skill loaded from the same Foundry Toolbox. The skill guides web search and code execution through the agent's system prompt. |
+| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools and a skill catalog from the same Foundry Toolbox. The agent reads a relevant skill on demand, then follows it using web search and code execution. |
 | 5 | [Workflows](responses/05_workflows/) | Hand-built multi-node `StateGraph` (plan -> tools -> synthesize) hosted as the Responses API. |
 | 6 | [Files](responses/06_files/) | Image and file request attachments passed directly to a Responses-compatible model. |
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |

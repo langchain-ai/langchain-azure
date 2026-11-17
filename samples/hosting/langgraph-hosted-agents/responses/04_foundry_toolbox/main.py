@@ -15,8 +15,9 @@ SharePoint search, etc.) behind one URL. ``AzureAIProjectToolbox``:
 - returns standard LangChain ``BaseTool`` instances ready to plug into
   any LangGraph / LangChain agent.
 
-Tools and the ``source-brief`` skill are fetched once at startup. The skill
-text becomes part of the system prompt and guides the agent's tool use.
+Tools and the skill catalog are fetched once at startup. Only skill metadata
+enters the system prompt; the agent reads instructions and supporting text
+from the Toolbox on demand through ``read_skill_resource``.
 
 See README.md for skill setup, environment variables, and runnable requests.
 """
@@ -33,7 +34,7 @@ from langchain.agents import create_agent
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from langchain_azure_ai.tools import AzureAIProjectToolbox
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -64,7 +65,7 @@ def _build_chat_model() -> ChatOpenAI:
 
 
 async def _load_toolbox() -> tuple[list[BaseTool], str]:
-    """Fetch tools and the source-brief skill from the same Foundry Toolbox.
+    """Fetch tools and skill metadata, and expose an on-demand resource reader.
 
     ``project_endpoint`` is resolved from ``FOUNDRY_PROJECT_ENDPOINT``
     automatically. The credential defaults to ``DefaultAzureCredential``
@@ -78,12 +79,29 @@ async def _load_toolbox() -> tuple[list[BaseTool], str]:
     print(f"Loaded {len(tools)} tool(s) from Foundry toolbox '{toolbox_name}':")
     for t in tools:
         print(f"  - {t.name}")
-    resources = await toolbox.aget_resources(uris="skill://source-brief/SKILL.md")
-    skill = "\n\n".join(resource.as_string() for resource in resources)
-    if not skill.strip():
-        raise ValueError("The Toolbox must provide source-brief/SKILL.md.")
-    print(f"Loaded source-brief/SKILL.md from Foundry toolbox '{toolbox_name}'.")
-    return tools, skill
+    resources = await toolbox.aget_resources(uris="skill://index.json")
+    catalog = "\n\n".join(resource.as_string() for resource in resources)
+    if not catalog.strip():
+        raise ValueError("The Toolbox must provide skill://index.json.")
+    print(f"Loaded skill catalog from Foundry toolbox '{toolbox_name}'.")
+
+    @tool
+    async def read_skill_resource(uri: str) -> str:
+        """Read a skill's SKILL.md or supporting text from this Toolbox.
+
+        Use a skill:// URI from the catalog or a loaded skill. Read SKILL.md
+        before following a skill, then read references only when needed.
+        """
+        if not uri.startswith("skill://"):
+            raise ToolException("Use a skill:// URI from this Toolbox.")
+        resources = await toolbox.aget_resources(uris=uri)
+        content = "\n\n".join(resource.as_string() for resource in resources)
+        if not content.strip():
+            raise ToolException(f"No skill content returned for {uri}.")
+        return content
+
+    read_skill_resource.handle_tool_error = True
+    return [*tools, read_skill_resource], catalog
 
 
 def main() -> None:
@@ -97,13 +115,15 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    tools, skill = asyncio.run(_load_toolbox())
+    tools, catalog = asyncio.run(_load_toolbox())
     graph = create_agent(
         _build_chat_model(),
         tools=tools,
         system_prompt=(
-            "Follow the source-brief skill below for research and comparison "
-            "requests, using the toolbox tools.\n\n" + skill
+            "Available skills are listed in the Toolbox catalog below. "
+            "When a skill matches the user's request, call read_skill_resource "
+            "with its SKILL.md URI before following its procedure using the "
+            "toolbox tools. Read supporting resources only when needed.\n\n" + catalog
         ),
     )
     port = int(os.environ.get("PORT", "8088"))
