@@ -134,10 +134,8 @@ document_vectors = embeddings.embed_documents(
 
 ### Using the Decisions API (experimental)
 
-Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. This
-integration is **experimental**: its interface may change, and constructing it
-emits an `ExperimentalWarning`. Requires `langchain-azure-ai>=1.4.0` and a model
-deployment that supports the Decisions API.
+Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
+`langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
 
 ```python
 from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
