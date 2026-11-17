@@ -14,6 +14,8 @@ SDKs used. Apply these rules to new samples and changed parts of existing sample
 - Include an entrypoint, dependencies, `.env.example`, Dockerfile, and deployment
   configuration for the supported setup path. Keep names and defaults consistent
   across code, configuration, and documentation. Declare required versions and extras.
+- Install SDK dependencies from published packages. Do not use local source paths,
+  editable SDK installs, or Git URLs.
 - Keep credentials out of committed files. Label simulated tools and data, and
   preserve input validation, error handling, and resource cleanup.
 - Keep blocking I/O off the async event loop; use async SDK calls or
@@ -23,6 +25,10 @@ SDKs used. Apply these rules to new samples and changed parts of existing sample
 
 - Write in plain, concise English. Open with what the sample demonstrates, when
   to use it, and the expected outcome.
+- Use title case for headings and this section order:
+  `What This Sample Demonstrates`, `How It Works`, `Running the Agent Host`,
+  `Interacting with the Agent`, and `Deploying the Agent to Foundry`.
+  Add sample-specific subsections as needed.
 - Explain only what the reader needs for that goal. Omit unrelated topics or link
   to another sample or document. Link to shared setup, deployment, and tracing
   instructions instead of repeating them; state sample-specific differences.
