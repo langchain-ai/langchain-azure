@@ -153,9 +153,6 @@ answer = decisions.invoke({
 print(answer.nouls["refund"].noul)  # probability that a refund is requested
 ```
 
-See [Decisions integration details](docs/model/decisions.md) for question types
-and supported behavior.
-
 <a id="microsoft-foundry-agent-service"></a>
 
 ### Accessing agents on Microsoft Foundry Agent Service
