@@ -48,10 +48,11 @@ SDKs used. Apply these rules to new samples and changed parts of existing sample
 - Install dependencies before copying application code to preserve Docker layer caching.
 - Use `--no-cache-dir` for pip installs. Pip generates dependency `.pyc` files by
   default; avoid redundant dependency-wide `compileall` steps.
-- With uv, run `compileall` at build time for dependencies, the standard library,
-  and application code using the runtime interpreter and final paths. Dependency
-  and standard-library compilation is best-effort; application compilation must
-  fail the build on syntax errors and exclude `.venv`.
+- With uv, use `uv sync --compile-bytecode` for dependencies and `compileall` for
+  the standard library and application code at build time, using the runtime
+  interpreter and final paths. Dependency and standard-library compilation is
+  best-effort; application compilation must fail the build on syntax errors and
+  exclude `.venv`.
 - Exclude local environments, caches, and secrets from the build context with `.dockerignore`.
 
 Example uv Dockerfile fragment, assuming uv is installed:
@@ -59,12 +60,12 @@ Example uv Dockerfile fragment, assuming uv is installed:
 ```dockerfile
 WORKDIR /app/user_agent
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode
 COPY . .
-RUN uv sync --frozen --no-dev
-RUN PYTHONDONTWRITEBYTECODE= .venv/bin/python -m compileall -q \
-    $(.venv/bin/python -c "import sysconfig as s; print(s.get_paths()['stdlib'], s.get_paths()['purelib'])") || true; \
-    PYTHONDONTWRITEBYTECODE= .venv/bin/python -m compileall -q -x '[.]venv' .
+RUN uv sync --frozen --no-dev --compile-bytecode
+RUN .venv/bin/python -m compileall -q \
+    $(.venv/bin/python -c "import sysconfig as s; print(s.get_paths()['stdlib'])") || true; \
+    uv run --no-sync python -m compileall -q -x '[.]venv' .
 ```
 
 ## Validation
