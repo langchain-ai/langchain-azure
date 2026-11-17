@@ -9,12 +9,9 @@ REST endpoint that speaks either the **Responses** protocol or the
 **Invocations** protocol (or both, on the same port).
 
 All samples use the Responses API for model calls, with
-`use_responses_api=True` and `output_version="responses/v1"`. We recommend
-Responses when your model and endpoint support it. If you prefer Chat
-Completions and your model and endpoint support it, set
-`use_responses_api=False` and remove `output_version="responses/v1"` from
-the model configuration. This choice is independent of the host
-protocol: both Responses and Invocations hosts can use either model API.
+`use_responses_api=True` and `output_version="responses/v1"`. The model API is
+independent of the host protocol: both Responses and Invocations hosts use
+the Responses API to call models.
 
 Each sample has its own code, dependencies, and README for local runs.
 

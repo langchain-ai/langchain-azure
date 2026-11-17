@@ -20,6 +20,10 @@ SDKs used. Apply these rules to new samples and changed parts of existing sample
   preserve input validation, error handling, and resource cleanup.
 - Keep blocking I/O off the async event loop; use async SDK calls or
   `asyncio.to_thread` for necessary synchronous calls.
+- Use the Responses or Decisions API for model calls by default. Do not use
+  Chat Completions.
+- When calling models through the Responses API, set `store=False` because
+  LangGraph manages conversation history.
 
 ## README
 
