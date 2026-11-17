@@ -1,6 +1,6 @@
 """Unit tests for the guardrails module."""
 
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -342,6 +342,22 @@ class TestMessageTextExtraction:
         state = {"messages": [HumanMessage(content="question")]}
         msg = m.get_ai_message_from_state(state)
         assert m.get_text_from_message(msg) is None
+
+    def test_extract_text_string_and_input_text_blocks(self) -> None:
+        """String items and ``input_text`` blocks in list content are joined."""
+        from langchain_core.messages import ToolMessage
+
+        m = self._make()
+        msg = ToolMessage(
+            content=[
+                "foo",
+                {"type": "input_text", "text": "bar"},
+                {"type": "input_image", "image_url": "http://x.com/img.png"},
+                {"type": "text", "text": "baz"},
+            ],
+            tool_call_id="call_1",
+        )
+        assert m.get_text_from_message(msg) == "foo bar baz"
 
 
 # ---------------------------------------------------------------------------
@@ -2115,12 +2131,16 @@ def _shield_tool_results(
     }
 
 
-def _create_tool_agent(middleware: Any) -> tuple[Any, List[List[Any]]]:
+def _create_tool_agent(
+    middleware: Any, command_content: Any = None
+) -> tuple[Any, List[List[Any]]]:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import (
         FakeMessagesListChatModel,
     )
-    from langchain_core.tools import tool
+    from langchain_core.messages import ToolMessage
+    from langchain_core.tools import InjectedToolCallId, tool
+    from langgraph.types import Command
 
     model_inputs: List[List[Any]] = []
 
@@ -2139,6 +2159,19 @@ def _create_tool_agent(middleware: Any) -> tuple[Any, List[List[Any]]]:
         """Return the content of a web page."""
         return _INJECTED_TOOL_RESULT
 
+    @tool("fetch_page")
+    def fetch_page_command(
+        url: str, tool_call_id: Annotated[str, InjectedToolCallId]
+    ) -> Command:
+        """Return the content of a web page in a state update."""
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(content=command_content, tool_call_id=tool_call_id)
+                ]
+            }
+        )
+
     model = ToolModel(
         responses=[
             AIMessage(
@@ -2154,8 +2187,19 @@ def _create_tool_agent(middleware: Any) -> tuple[Any, List[List[Any]]]:
             AIMessage(content="done"),
         ]
     )
-    agent = create_agent(model=model, tools=[fetch_page], middleware=[middleware])
+    page_tool = fetch_page if command_content is None else fetch_page_command
+    agent = create_agent(model=model, tools=[page_tool], middleware=[middleware])
     return agent, model_inputs
+
+
+_INJECTED_LIST_CONTENT = pytest.mark.parametrize(
+    "content",
+    [
+        [_INJECTED_TOOL_RESULT],
+        [{"type": "input_text", "text": _INJECTED_TOOL_RESULT}],
+    ],
+    ids=["str", "input_text"],
+)
 
 
 def _tool_call_request(state: Dict[str, Any]) -> Any:
@@ -2268,6 +2312,66 @@ class TestPromptShieldToolResults:
             )
 
         assert tool_message.content == "Tool result removed."
+
+    @_INJECTED_LIST_CONTENT
+    def test_wrap_tool_call_replaces_injected_list_content(
+        self, content: List[Any]
+    ) -> None:
+        """Text in string items and ``input_text`` blocks should be screened."""
+        from langchain_core.messages import ToolMessage
+
+        m = _make_prompt_shield(
+            exit_behavior="replace", violation_message="Tool result removed."
+        )
+        request = _tool_call_request({"messages": [HumanMessage(content="hi")]})
+        with patch.object(m, "_send_rest_sync", side_effect=_shield_tool_results):
+            result = m.wrap_tool_call(
+                request,
+                lambda req: ToolMessage(content=content, tool_call_id="call_1"),
+            )
+
+        assert result.content == "Tool result removed."
+
+    @_INJECTED_LIST_CONTENT
+    def test_create_agent_blocks_injected_command_list_content(
+        self, content: List[Any]
+    ) -> None:
+        """List content in a ``Command`` should be blocked before the model."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_prompt_shield()
+        agent, model_inputs = _create_tool_agent(m, command_content=content)
+        with patch.object(m, "_send_rest_sync", side_effect=_shield_tool_results):
+            with pytest.raises(ContentSafetyViolationError):
+                agent.invoke({"messages": [HumanMessage(content="Summarize it")]})
+
+        assert len(model_inputs) == 1
+
+    @_INJECTED_LIST_CONTENT
+    async def test_create_agent_blocks_injected_command_list_content_async(
+        self, content: List[Any]
+    ) -> None:
+        """The async run should also block list content in a ``Command``."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_prompt_shield()
+        agent, model_inputs = _create_tool_agent(m, command_content=content)
+        with patch.object(
+            m,
+            "_send_rest_async",
+            new_callable=AsyncMock,
+            side_effect=_shield_tool_results,
+        ):
+            with pytest.raises(ContentSafetyViolationError):
+                await agent.ainvoke(
+                    {"messages": [HumanMessage(content="Summarize it")]}
+                )
+
+        assert len(model_inputs) == 1
 
     def test_wrap_tool_call_skipped_when_apply_to_input_false(self) -> None:
         """Tool results shouldn't be screened when input screening is off."""

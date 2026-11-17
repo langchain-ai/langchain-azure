@@ -461,6 +461,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def get_text_from_message(self, msg: Optional[BaseMessage]) -> Optional[str]:
         """Extract plain text from a LangChain message's content.
 
+        In list content, string items and ``text`` / ``input_text`` blocks
+        are joined.
+
         Args:
             msg: A LangChain message object, or ``None``.
 
@@ -473,9 +476,13 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             return msg.content or None
         if isinstance(msg.content, list):
             parts = [
-                block["text"]
+                block if isinstance(block, str) else block["text"]
                 for block in msg.content
-                if isinstance(block, dict) and block.get("type") == "text"
+                if isinstance(block, str)
+                or (
+                    isinstance(block, dict)
+                    and block.get("type") in ("text", "input_text")
+                )
             ]
             text = " ".join(parts)
             return text or None
