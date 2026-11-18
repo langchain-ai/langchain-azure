@@ -1,14 +1,14 @@
 # Enable persistence and recovery
 
-Once the agent [runs in Foundry](04-deploy-and-verify.md), decide what state and work must survive across turns or host restarts. This article shows how to preserve messages, reports, and task progress with durable checkpoints. It then covers recovery for requests interrupted by a host failure. Apply the parts that match your application's requirements.
+Use this chapter during hosting design and graph construction when state retained by the original runtime must be preserved. Apply the walkthrough's [state-ownership mapping](../host-langgraph-on-foundry.md#preserve-runtime-owned-state) and keep an existing backend that meets those requirements. The examples below show checkpoint construction and, separately, unfinished-request recovery when required. Perform the hosted verification sections after deployment; preserving required state is not a post-deployment enhancement.
 
 ## Before you start
 
-Complete [Deploy and verify the agent](04-deploy-and-verify.md). Keep the deployed agent name, invocation access, and application source available. Choose the checks below that match your state and recovery requirements.
+For planning and graph construction, use the existing application source; deployment is not a prerequisite. For hosted persistence, user-isolation, or recovery verification, first complete [Deploy and verify the agent](04-deploy-and-verify.md) and have the deployed agent name and invocation access available. Apply only the parts that match your existing state and recovery requirements.
 
 ## Persist graph state across turns
 
-If your application needs state across turns, configure a durable checkpointer. In the Deep Research example, this state includes messages, reports, and task progress.
+If the existing workflow requires server-managed graph state across turns, supply a checkpointer with the required lifetime. Use a durable checkpointer when state must survive the relevant host or session lifecycle. In the Deep Research example, this state includes messages, reports, and task progress.
 
 Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
 
@@ -45,7 +45,7 @@ The existing root `langgraph.json` loads `./agent.py:agent`. The Responses host 
 
 > **Tip:** To continue using [LangGraph Studio](https://docs.langchain.com/langsmith/local-dev-testing) for local debugging, provide a separate graph entry point without a custom checkpointer. `langgraph dev` manages persistence itself and rejects graphs with an application-configured checkpointer. Keep `FoundryCheckpointSaver` on the Foundry entry point. Studio shows local graph state, not deployed Foundry checkpoints.
 
-Redeploy the updated agent:
+Include this construction in the initial deployment when required state is part of the migration. If updating an already deployed agent, redeploy it:
 
 ```shell
 azd deploy deep-research-foundry

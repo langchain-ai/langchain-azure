@@ -10,6 +10,39 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need separate adaptation. See the [Responses hosting limitations](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point).
 
+## Preserve runtime-owned state
+
+Identify required state from the original launch path and documented client workflow, not only the exported graph. LangGraph development/server runtimes can supply checkpointing outside that graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. Another host does not inherit that runtime service.
+
+| Original state owner | Re-hosting responsibility |
+| --- | --- |
+| The source server/runtime | Supply an equivalent server-side owner and lifetime for the state required by existing workflows. Returning updated state and expecting callers to resubmit it is a client-contract change, not equivalent server-managed continuation. |
+| The application or an established external backend | Preserve that backend and its state semantics, including framework- and tool-managed state beyond messages. |
+| The caller, under the existing contract | Preserve that contract; do not introduce server-side storage or recovery requirements unnecessarily. |
+
+Ensure the serving and delegated execution paths preserve required state through the chosen owner. Conversation/thread identifiers are keys, not storage; for Invocations, a reused session does not reconstruct transcript history without a checkpointer. See [conversation and state](invocations.md#3-conversation-and-state) and [persistence configuration](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns). Keep necessary construction/lifecycle adaptations focused on preserving behavior; they do not authorize business-logic redesign or historical checkpoint migration. Keep development and hosted construction separate where their ownership rules differ. Change client/server state responsibilities only with explicit user intent. For stateless operations, do not introduce continuity requirements.
+
+## Map the application interface
+
+Before choosing a hosting path, record a concrete contract map for every public operation in the application's original launch path that falls within the user's requested migration scope, including workflows used before or between conversations. For each operation, identify the target artifact and an actual invocation, not only a graph symbol. Graph importability and a `messages` field prove neither request nor response compatibility.
+
+| Contract | Evidence required before choosing configuration-only hosting |
+| --- | --- |
+| Input | The selected protocol converts the caller's payload into the original graph input schema; a JSON string is not automatically arbitrary graph state. |
+| Caller configuration | Preserve caller-provided `RunnableConfig.configurable` values and missing-value validation. Reject missing required values as the original application does; do not invent defaults or substitute platform/session identity for an application-defined parameter without an explicit approved mapping. |
+| Result | The caller can obtain the operation's original result or observable side effect through the delivered interface, not just model/tool events or an HTTP success. |
+| Access path | Every required operation has a runnable target command, supported endpoint and documented request. Keeping another graph in `langgraph.json` does not expose it through the selected host or preserve the original server API. |
+
+Responses request `metadata` is not a general `RunnableConfig.configurable` channel. When caller configuration needs adaptation, implement the mapping with the [supported configuration hook](responses.md#overridable-methods), preserving the hosting-owned configuration; metadata appearing in a response does not prove that the graph received it.
+
+Use configuration-only hosting only when the installed SDK's defaults implement every required mapping. Otherwise adapt input, configuration, routing and output at the hosting boundary while delegating business execution to the original graphs. Resolve the actual runnable or factory and validate adapted input against its schema; changing the protocol name or disabling a compatibility check does not implement a conversion. A companion service is a valid access path only when its required runtime and invocation are delivered and verified, not assumed to remain available from the source environment. When the user requests a whole-application migration, do not silently narrow it to its primary conversational operation: a required operation left available only in the old environment is unfinished migration work, unless the user explicitly accepts that split. Complete every required operation's target access path before declaring the whole application migrated. For a partial migration request, preserve the required operations within that scope without implicitly expanding it to the whole application.
+
+Check each operation's managed client path as well as its local HTTP path. Foundry forwards the declared protocol requests to their protocol endpoints; adding a server route inside a container does not establish a managed access path for that operation. Expose required operations through a supported declared protocol or a separately supported ingress/service, and document the corresponding native invocation. See the [hosted agent runtime contract](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agent-contract#protocol-endpoints).
+
+When composing a hosting boundary, preserve the selected host's graph and streaming contract, not just its input/output shape. `ResponsesHostServer` expects a `CompiledStateGraph`; an arbitrary runnable wrapper is not a drop-in replacement. Use a host-compatible compiled boundary or a supported custom handler, and preserve the invocation configuration and context when delegating to the original graphs.
+
+When customizing a host, keep its documented hook contracts. In particular, Invocations `build_input` converts text to graph input; structured parser results have HITL semantics and are not an arbitrary graph-state transport. Use the supported input/configuration/output hooks rather than changing parser return types to bypass conversion. Read the [Invocations hook contracts](invocations.md#overridable-methods) or [Responses hosting interface](responses.md#overridable-methods) for the installed package before adapting the boundary.
+
 ## Why host your LangGraph application on Foundry?
 
 Microsoft Foundry combines agent hosting with application interfaces, enterprise services, security controls, and diagnostics and evaluation in one platform to help enterprises deliver production-quality AI agents.
@@ -53,7 +86,7 @@ Your local `.env` must remain outside source control and source uploads. See [Co
 
 ## Migration steps
 
-Complete the first four articles to prepare, test, and deploy your application. Then use the remaining articles for persistence and recovery, diagnostics, and evaluation as your application requires.
+Plan required state ownership before local hosting or deployment, then complete the first four articles to prepare, test and deploy the application. Apply persistence where existing behavior requires it; unfinished-request recovery, diagnostics and evaluation remain requirements-dependent.
 
 | Stage | Article | Outcome |
 | --- | --- | --- |

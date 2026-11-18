@@ -54,7 +54,7 @@ azd auth login
 azd ai agent init --protocol responses --deploy-mode code --runtime python_3_13 --entry-point main.py
 ```
 
-During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. The agent service's `project` field should be `.` so the upload starts from the application root directory.
+During initialization, select the existing project from [Prepare Foundry resources](01-prepare-resources.md) and name the agent `deep-research-foundry`. The initialization flow creates `azure.yaml` and an azd environment. Retain the agent service's generated `name` when adapting `azure.yaml`; the top-level project `name` and service key do not replace it. The agent service's `project` field should be `.` so the upload starts from the application root directory.
 
 The following agent service configuration starts the hosting runner with the graph configuration tested in [Host and test the agent locally](02-run-locally.md):
 
@@ -63,6 +63,7 @@ services:
   deep-research-foundry:
     host: azure.ai.agent
     kind: hosted
+    name: deep-research-foundry
     project: .
     language: python
     protocols:
@@ -78,7 +79,7 @@ The Python runtime starts the file specified by `codeConfiguration.entryPoint`. 
 
 ### Prepare runtime dependencies
 
-The remote build installs dependencies from the root `requirements.txt`, not your local `pyproject.toml` or `uv.lock`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
+In this example, the remote build installs dependencies from the root `requirements.txt`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
@@ -138,7 +139,9 @@ research_agent.ipynb
 
 Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`; the upload excludes the development `pyproject.toml` and lockfile.
 
-Review the upload contents before deployment. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
+For a different dependency workflow, keep its required project and lockfile inputs in the upload and follow the selected builder's dependency rules. Do not copy this example's exclusions while relying on the excluded files for installation.
+
+Run `azd package` before deployment and inspect the upload for the declared launcher, referenced application files, and dependency inputs. Packaging verifies the upload contents, not a successful remote build. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
 
 ## Configure project connections for third-party endpoints
 
