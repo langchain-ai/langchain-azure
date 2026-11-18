@@ -2243,7 +2243,9 @@ class AzureAIOpenTelemetryTracer(BaseCallbackHandler):
             chat_generations = [gen for thread in generations for gen in thread]
 
         if chat_generations:
-            messages = [gen.message for gen in chat_generations if gen.message]
+            messages = [
+                gen.message for gen in chat_generations if getattr(gen, "message", None)
+            ]
             formatted, _ = _prepare_messages(
                 messages,
                 record_content=self._content_recording,
