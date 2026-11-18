@@ -139,7 +139,9 @@ research_agent.ipynb
 
 Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`; the upload excludes the development `pyproject.toml` and lockfile.
 
-Review the upload contents before deployment. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
+For a different dependency workflow, keep its required project and lockfile inputs in the upload and follow the selected builder's dependency rules. Do not copy this example's exclusions while relying on the excluded files for installation.
+
+Run `azd package` before deployment and inspect the upload for the declared launcher, referenced application files, and dependency inputs. Packaging verifies the upload contents, not a successful remote build. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
 
 ## Configure project connections for third-party endpoints
 
