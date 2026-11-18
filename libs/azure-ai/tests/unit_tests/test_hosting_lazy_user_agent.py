@@ -37,9 +37,9 @@ def test_framework_versions_do_not_import_frameworks() -> None:
         from langchain_azure_ai._user_agent import get_user_agent
 
         ua = get_user_agent()
-        for package in ("langchain", "langgraph"):
+        for package in ("langchain-core", "langchain", "langgraph"):
             assert f"{package}/{version(package)}" in ua
-        for package in ("langchain", "langgraph", "deepagents"):
+        for package in ("langchain_core", "langchain", "langgraph", "deepagents"):
             assert package not in sys.modules
         """
     )
@@ -69,7 +69,7 @@ def test_azure_sdk_user_agent_includes_framework_versions() -> None:
         assert hosting.HOSTING_USER_AGENT in ua
         assert BASE_USER_AGENT in ua
         assert "(features=3)" in ua
-        for package in ("langchain", "langgraph"):
+        for package in ("langchain-core", "langchain", "langgraph"):
             assert f"{package}/{version(package)}" in ua
         """
     )
@@ -324,7 +324,7 @@ def test_langchain_client_created_later_sends_dynamic_user_agent(
                     ua = headers["user-agent"]
                     assert ua.count(hosting.HOSTING_USER_AGENT) == 1, ua
                     assert BASE_USER_AGENT in ua, ua
-                    for package in ("langchain", "langgraph"):
+                    for package in ("langchain-core", "langchain", "langgraph"):
                         assert f"{package}/{version(package)}" in ua, ua
                     if deepagents_installed == "True":
                         assert "deepagents/0.7.28" in ua, ua

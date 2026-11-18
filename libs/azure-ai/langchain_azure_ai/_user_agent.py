@@ -14,8 +14,8 @@ prepended to the base token by :func:`get_user_agent`, yielding e.g.::
 
     langchain_azure_ai.agents.hosting/<host-ver> langchain-azure-ai/<pkg-ver>
 
-Installed ``langchain``, ``langgraph``, and ``deepagents`` versions are
-included as additional ``package/version`` tokens before the base token.
+Installed versions of ``langchain-core``, ``langchain``, ``langgraph``, and
+``deepagents`` are included as ``package/version`` tokens before the base token.
 Versions are read once from package metadata without importing the frameworks.
 These tokens describe the environment, not which framework handled a request.
 
@@ -61,7 +61,7 @@ _FOUNDRY_HOSTING_ENV_VAR: Final[str] = "FOUNDRY_HOSTING_ENVIRONMENT"
 
 def _get_framework_user_agent() -> str:
     tokens = []
-    for package in ("langchain", "langgraph", "deepagents"):
+    for package in ("langchain-core", "langchain", "langgraph", "deepagents"):
         try:
             version = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

@@ -129,11 +129,14 @@ class TestVersionResolution:
 
 
 class TestFrameworkVersions:
-    @pytest.mark.parametrize("missing", [None, "deepagents", "langgraph", "langchain"])
+    @pytest.mark.parametrize(
+        "missing", [None, "deepagents", "langgraph", "langchain", "langchain-core"]
+    )
     def test_installed_versions_compose_with_existing_headers(
         self, missing: str | None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         versions = {
+            "langchain-core": "1.5.6",
             "langchain": "1.2.12",
             "langgraph": "1.2.16",
             "deepagents": "0.7.28",
@@ -146,7 +149,7 @@ class TestFrameworkVersions:
 
         with patch("importlib.metadata.version", side_effect=version) as lookup:
             frameworks = _user_agent._get_framework_user_agent()
-        assert lookup.call_count == 3
+        assert lookup.call_count == 4
         expected = " ".join(
             f"{package}/{value}"
             for package, value in versions.items()
@@ -168,6 +171,21 @@ class TestFrameworkVersions:
             ),
             "X-Test": "ok",
         }
+
+    def test_core_only_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def version(package: str) -> str:
+            if package == "langchain-core":
+                return "1.5.6"
+            raise importlib.metadata.PackageNotFoundError(package)
+
+        with patch("importlib.metadata.version", side_effect=version):
+            frameworks = _user_agent._get_framework_user_agent()
+        assert frameworks == "langchain-core/1.5.6"
+        monkeypatch.setattr(_user_agent, "_FRAMEWORK_USER_AGENT", frameworks)
+
+        assert _user_agent.get_user_agent() == (
+            f"langchain-core/1.5.6 {_user_agent.BASE_USER_AGENT}"
+        )
 
     @pytest.mark.parametrize(
         "error",
