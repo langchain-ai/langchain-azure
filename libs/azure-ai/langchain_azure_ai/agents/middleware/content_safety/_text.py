@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
@@ -430,8 +429,8 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
     async def _analyze_async(self, text: str) -> List[ContentSafetyEvaluation]:
         """Call the async Content Safety API and return violations.
 
-        Text over the request limit is split and the parts are analysed
-        concurrently.
+        Text over the request limit is split and the parts are analysed one
+        at a time, as in :meth:`_analyze_sync`.
         """
         parts = _split_text(text)
         logger.debug(
@@ -442,9 +441,7 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
             len(parts),
         )
         client = self._get_async_client()
-        responses = await asyncio.gather(
-            *(client.analyze_text(self._analyze_options(p)) for p in parts)
-        )
+        responses = [await client.analyze_text(self._analyze_options(p)) for p in parts]
         return self._collect_violations(responses)
 
     def _analyze_options(self, text: str) -> AnalyzeTextOptions:

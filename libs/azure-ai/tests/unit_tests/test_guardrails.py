@@ -1,5 +1,6 @@
 """Unit tests for the guardrails module."""
 
+import asyncio
 from typing import Annotated, Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4291,6 +4292,41 @@ class TestLongTextScreening:
             m.before_agent({"messages": [HumanMessage(content=text)]}, runtime=None)
 
         assert sent == [text]
+
+    @pytest.mark.parametrize("kind", ["text_moderation", "protected_material"])
+    async def test_async_parts_sent_one_at_a_time(self, kind: str) -> None:
+        """The async hooks should not send the parts all at once."""
+        active = 0
+        max_active = 0
+
+        async def send(*args: Any) -> Any:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0)
+            active -= 1
+            if kind == "text_moderation":
+                return MagicMock(categories_analysis=[], blocklists_match=[])
+            return {"protectedMaterialAnalysis": {"detected": False}}
+
+        state = {"messages": [HumanMessage(content="x" * 25_000)]}
+        if kind == "text_moderation":
+            m = _make_text_moderation()
+            client = MagicMock()
+            client.analyze_text = AsyncMock(side_effect=send)
+            with patch.object(m, "_get_async_client", return_value=client):
+                await m.abefore_agent(state, runtime=None)
+            calls = client.analyze_text.await_count
+        else:
+            m = _make_protected_material()
+            with patch.object(
+                m, "_send_rest_async", new_callable=AsyncMock, side_effect=send
+            ) as mock_rest:
+                await m.abefore_agent(state, runtime=None)
+            calls = mock_rest.await_count
+
+        assert calls == 3
+        assert max_active == 1
 
     def test_split_text_without_whitespace_or_with_blank_parts(self) -> None:
         """Text without whitespace is cut at the limit, and blank parts dropped."""

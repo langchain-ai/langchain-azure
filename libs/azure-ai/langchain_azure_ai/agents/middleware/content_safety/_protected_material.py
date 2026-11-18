@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
@@ -345,17 +344,15 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     ) -> List[ProtectedMaterialEvaluation]:
         """Call the asynchronous protected material detection REST API.
 
-        Text over the request limit is split and the parts are checked
-        concurrently.
+        Text over the request limit is split and the parts are checked one at
+        a time, as in :meth:`_detect_sync`.
         """
-        results = await asyncio.gather(
-            *(
-                self._send_rest_async(
-                    operation, {self.type: part}, _PROTECTED_MATERIAL_API_VERSION
-                )
-                for part in _split_text(text)
+        results = [
+            await self._send_rest_async(
+                operation, {self.type: part}, _PROTECTED_MATERIAL_API_VERSION
             )
-        )
+            for part in _split_text(text)
+        ]
         return self._collect_violations(results)
 
     def _collect_violations(
