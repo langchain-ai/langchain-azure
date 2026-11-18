@@ -1,21 +1,36 @@
 # Foundry Decision Models
 
-Both adapters use LangChain's `BaseDecisionModel` interface with `invoke` and
-`ainvoke`. Select the adapter for your deployment:
+## Choose an adapter
 
-| Deployment | Adapter | API path |
+| Models | Adapter | API path |
 | --- | --- | --- |
-| Microsoft Decision deployments using the System One API | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
+| Compatible Microsoft Decision models, verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
 | `gpt-6-luna` | `AzureAIOpenAIApiDecisions` | `/openai/v1/decisions` |
 
-## Microsoft Decision
+## Shared interface
 
-Use this adapter with a Microsoft Decision deployment that uses a compatible
-System One request and response format. Set `model` to the Foundry deployment
-name and `project_endpoint` to the Foundry project URL. The adapter derives the
-resource URL and calls the resource-level Decision API. It defaults to
-`DefaultAzureCredential`; pass `credential` explicitly to use an API key or
-another Entra credential.
+Both adapters implement LangChain's `BaseDecisionModel`, a
+`Runnable[ClassifierRequest, ClassifierResponse]`. Call `invoke` or `ainvoke`
+with `state` and a map of named questions. Read answers by question name:
+
+- `Noul`: probability that a condition is true, in `result.nouls`.
+- `Choice`: selection from fixed options, in `result.choices`.
+- `Score`: rating over ordered levels, in `result.scores`.
+
+`Choice` and `Score` answers include probabilities and confidence. `Choice`
+requires at least two labels. Neither adapter supports `Box` questions.
+
+## Example
+
+Set `AZURE_AI_PROJECT_ENDPOINT` to the Foundry project URL and
+`DECISION_DEPLOYMENT_NAME` to your deployment name, not the underlying model
+name. Both adapters derive the resource URL from the project URL and default to
+`DefaultAzureCredential` in this configuration.
+
+To switch between compatible Microsoft Decision deployments, change only
+`DECISION_DEPLOYMENT_NAME`. For a `gpt-6-luna` deployment, also replace
+`AzureAIMicrosoftDecisions` with `AzureAIOpenAIApiDecisions` in the import and
+constructor. The request and response code stays the same.
 
 ```python
 import os
@@ -41,62 +56,25 @@ result = decisions.invoke(
 print(result.choices["team"].choice)
 ```
 
-The adapter supports `Noul`, `Choice`, and `Score` questions and preserves the
-probabilities and confidence reported by the model. It accepts text, JSON
-objects, and JSON arrays. LangChain message conversion, image assets, and `Box`
-are not supported.
+## Adapter differences
 
-Verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1`.
+### Microsoft Decision
 
-See the [Foundry model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)
-for deployment and API details.
+`AzureAIMicrosoftDecisions` accepts text, JSON objects, and JSON arrays. It
+does not convert LangChain messages or send image assets. To use an API key,
+pass it as `credential`. To skip project URL resolution, pass the Foundry
+resource URL as `endpoint`. See the [Microsoft Decision model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision).
 
-## Azure OpenAI Decisions
+### Azure OpenAI Decisions
 
-### Scope
+`AzureAIOpenAIApiDecisions` uses the beta `OpenAIClassifier` from
+`langchain-openai>=1.8.0` and emits `ExperimentalWarning` on construction. The
+classifier maps `Noul` to `Predicate`. Root messages can carry supported
+images. Media embedded in JSON state is dropped with a warning. A refusal on
+any question raises `ModelRefusalError` for the whole request.
 
-Expose the [Foundry Azure OpenAI Decisions API](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions)
-through `langchain-azure-ai`. This integration targets `/openai/v1/decisions`,
-currently using a `gpt-6-luna` deployment.
-
-### Interface
-
-`AzureAIOpenAIApiDecisions` implements LangChain's `BaseDecisionModel`, a
-`Runnable[ClassifierRequest, ClassifierResponse]`. It accepts `state` and named
-Core questions, and returns typed answers keyed by
-question name:
-
-- `Noul`: the probability that a condition is true.
-- `Choice`: a selection from fixed options, with probabilities and confidence.
-- `Score`: a rating over ordered levels, with probabilities and confidence.
-
-Answers use `response.nouls`, `response.choices`, and `response.scores`. This
-contract supports consumers of `BaseDecisionModel` while keeping Decisions
-separate from the chat model's `AIMessage` contract.
-
-The upstream adapter defines the capability limits: `Box` is unsupported,
-`Choice` needs at least two labels, and any refusal raises `ModelRefusalError`
-for the entire request. Structured JSON state cannot preserve media; upstream
-drops embedded media with a warning. Root messages can carry supported images.
-
-### Adapter
-
-The class extends `langchain_openai.decisions.OpenAIClassifier` and reexports
-Core question and answer types from `langchain_azure_ai.decisions`. The upstream
-classifier converts Core requests and responses to and from the OpenAI protocol,
-including `Noul` to `Predicate`. The Azure adapter adds configuration using the
-existing endpoint and credential helpers. This requires
-`langchain-openai>=1.8.0`, which requires `langchain-core>=1.8.0`.
-
-Azure constructor options are normalized to the inherited `base_url` and `api_key`
-fields. Only this resolved configuration is retained for Runnable reconstruction
-and serialization; credentials use the upstream secret-reference mechanism.
-
-Requests go directly to the resource's `/openai/v1/decisions` endpoint. When
-configured with a Foundry project endpoint, the adapter derives the resource
-URL; it does not call the project or Agent Service APIs.
-
-### Stability
-
-The upstream `OpenAIClassifier` is beta, so `AzureAIOpenAIApiDecisions` emits
-`ExperimentalWarning` on construction. No runtime opt-in flag is required.
+`project_endpoint` requires an Entra credential. To use an API key, pass a
+resource `endpoint` ending in `/openai/v1` and the key as `credential`. The
+adapter retains the resolved `base_url` and `api_key` for Runnable
+reconstruction and serialization, using the upstream secret-reference
+mechanism for credentials. See the [Azure OpenAI Decisions guide](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
