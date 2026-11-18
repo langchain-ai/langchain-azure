@@ -33,6 +33,7 @@ Choose its `azd` setup path before running or deploying:
 | `agent.manifest.yaml` and `agent.yaml` | Follow [Using azd](#using-azd) below. |
 | `azure.yaml` in [Responses Resilient](responses/10_resilient/README.md#deploying-the-agent-to-foundry) or [Invocations Resilient](invocations/04_resilient/README.md#deploying-the-agent-to-foundry) | Initialize the independent azd project using that sample's deployment steps. |
 | `azure.yaml` in [Deep Agents](responses/12_deep_agents/SETUP.md) | Complete its resource setup and deployment steps. |
+| `azure.yaml` in [Foundry Toolbox](responses/04_foundry_toolbox/README.md#deploying-the-agent-to-foundry) | Initialize with an existing project, model, Toolbox, and registry connection using that sample's deployment steps. |
 | Both formats in [Branching](responses/13_branching/README.md#run-with-azd) | Follow the sample's existing-project setup. |
 
 ## Start here
@@ -65,7 +66,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 1 | [Basic](responses/01_basic/) | Minimal `create_agent` graph hosted as the Responses API. |
 | 2 | [Tools](responses/02_tools/) | `@tool` registration. Intermediate tool calls and results are surfaced as `function_call` / `function_call_output` output items. |
 | 3 | [MCP](responses/03_mcp/) | Tools loaded at startup from a remote MCP server (GitHub by default) via `langchain_mcp_adapters.client.MultiServerMCPClient`. |
-| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools loaded at startup from an Azure AI Foundry Toolbox (managed multi-MCP gateway) via `langchain_azure_ai.tools.AzureAIProjectToolbox`. |
+| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools and a skill catalog from the same Foundry Toolbox. The agent reads a relevant skill on demand, then follows it using web search and code execution. |
 | 5 | [Workflows](responses/05_workflows/) | Hand-built multi-node `StateGraph` (plan -> tools -> synthesize) hosted as the Responses API. |
 | 6 | [Files](responses/06_files/) | Image and file request attachments passed directly to a Responses-compatible model. |
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
@@ -281,9 +282,8 @@ hosted-agent runtime.
 >   provisioned during `azd ai agent init`.
 > - `APPLICATIONINSIGHTS_CONNECTION_STRING` — the connection string for
 >   the project's Application Insights instance.
-> - `TOOLBOX_NAME` — only for samples that declare a `kind: toolbox`
->   resource in their `agent.manifest.yaml` (e.g.
->   [responses/04_foundry_toolbox](responses/04_foundry_toolbox/)).
+> - `TOOLBOX_NAME` — for the [Foundry Toolbox sample](responses/04_foundry_toolbox/),
+>   set this in the azd environment as described in its deployment steps.
 >
 > Each sample's `main.py` reads these names directly, so no code
 > changes are required between local-dev and deployed.
