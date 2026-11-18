@@ -1,13 +1,62 @@
-# Azure OpenAI Decisions
+# Foundry Decision Models
 
-## Scope
+Both adapters use LangChain's `BaseDecisionModel` interface with `invoke` and
+`ainvoke`. Select the adapter for your deployment:
+
+| Deployment | Adapter | API path |
+| --- | --- | --- |
+| `Microsoft-Decision-1` or `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
+| `gpt-6-luna` | `AzureAIOpenAIApiDecisions` | `/openai/v1/decisions` |
+
+## Microsoft Decision
+
+Use the same adapter for both Microsoft models. Set `model` to the Foundry
+deployment name. Pass the Foundry project URL as `project_endpoint`. The adapter
+derives the resource URL and calls the resource-level Decision API. It defaults
+to `DefaultAzureCredential`; pass `credential` explicitly to use an API key
+or another Entra credential.
+
+```python
+import os
+
+from langchain_azure_ai.decisions import AzureAIMicrosoftDecisions, Choice
+
+decisions = AzureAIMicrosoftDecisions(
+    project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+    model=os.environ["DECISION_DEPLOYMENT_NAME"],
+)
+
+result = decisions.invoke(
+    {
+        "state": {"ticket": "I was charged twice for this order."},
+        "questions": {
+            "team": Choice(
+                instructions="Which team should handle this ticket?",
+                criteria={"billing": "Payments and refunds", "support": "Other requests"},
+            )
+        },
+    }
+)
+print(result.choices["team"].choice)
+```
+
+Both deployments accept `Noul`, `Choice`, and `Score` questions. The adapter
+preserves the probabilities and confidence reported by the model. Text, JSON
+objects, and JSON arrays are supported. LangChain message conversion, image
+assets, and `Box` are not supported. The adapter is experimental.
+
+See the [Foundry model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)
+for deployment and API details.
+
+## Azure OpenAI Decisions
+
+### Scope
 
 Expose the [Foundry Azure OpenAI Decisions API](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions)
 through `langchain-azure-ai`. This integration targets `/openai/v1/decisions`,
-currently using a `gpt-6-luna` deployment. Microsoft-Decision-1 uses the separate
-`/providers/microsoft/v1/systemone` protocol and is outside this design's scope.
+currently using a `gpt-6-luna` deployment.
 
-## Interface
+### Interface
 
 `AzureAIOpenAIApiDecisions` implements LangChain's `BaseDecisionModel`, a
 `Runnable[ClassifierRequest, ClassifierResponse]`. It accepts `state` and named
@@ -27,7 +76,7 @@ The upstream adapter defines the capability limits: `Box` is unsupported,
 for the entire request. Structured JSON state cannot preserve media; upstream
 drops embedded media with a warning. Root messages can carry supported images.
 
-## Adapter
+### Adapter
 
 The class extends `langchain_openai.decisions.OpenAIClassifier` and reexports
 Core question and answer types from `langchain_azure_ai.decisions`. The upstream
@@ -44,7 +93,7 @@ Requests go directly to the resource's `/openai/v1/decisions` endpoint. When
 configured with a Foundry project endpoint, the adapter derives the resource
 URL; it does not call the project or Agent Service APIs.
 
-## Stability
+### Stability
 
 The upstream Runnable is beta, so the Azure adapter uses the existing
 `@experimental(...)` decorator and emits `ExperimentalWarning` on construction.

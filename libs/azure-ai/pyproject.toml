@@ -36,6 +36,7 @@ dependencies = [
   "azure-core~=1.41",
   "azure-identity~=1.15",
   "azure-search-documents>=11.4,<13.0",
+  "httpx>=0.25,<1",
   "langchain>=1.2.12,<2.0.0",
   "langchain-core>=1.8.0,<2.0.0",
   "langchain-openai>=1.8.0,<2.0.0",

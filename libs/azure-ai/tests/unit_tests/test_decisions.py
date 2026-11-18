@@ -20,6 +20,7 @@ from pydantic import SecretStr, ValidationError
 
 from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.decisions import (
+    AzureAIMicrosoftDecisions,
     AzureAIOpenAIApiDecisions,
     Choice,
     ClassifierRequest,
@@ -515,8 +516,9 @@ def test_experimental_warning_and_exports() -> None:
     import langchain_azure_ai.decisions as azure
 
     for name in azure.__all__:
-        if name != "AzureAIOpenAIApiDecisions":
+        if name not in {"AzureAIMicrosoftDecisions", "AzureAIOpenAIApiDecisions"}:
             assert getattr(azure, name) is getattr(upstream, name)
+    assert issubclass(AzureAIMicrosoftDecisions, BaseDecisionModel)
     assert issubclass(AzureAIOpenAIApiDecisions, OpenAIClassifier)
     assert issubclass(AzureAIOpenAIApiDecisions, BaseDecisionModel)
     with pytest.warns(ExperimentalWarning, match="is experimental"):
