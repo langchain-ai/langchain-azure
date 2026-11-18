@@ -172,7 +172,9 @@ def _add_request_hosting_features(features: HostingFeature) -> None:
 
 def _sync_azure_http_user_agent() -> None:
     global _managed_azure_http_user_agent
-    user_agent = _format_hosting_user_agent(_process_hosting_features)
+    # Process-wide headers must not capture request-local hosting features.
+    with _hosting_feature_scope(HostingFeature.NONE):
+        user_agent = get_user_agent()
     current = os.environ.get(_AZURE_HTTP_USER_AGENT_ENV_VAR)
     if current is None or current == _managed_azure_http_user_agent:
         os.environ[_AZURE_HTTP_USER_AGENT_ENV_VAR] = user_agent
@@ -205,7 +207,8 @@ set_user_agent_prefix(_HOSTING_PREFIX_KEY, get_hosting_user_agent)
 # Foundry-storage calls, and the Azure Monitor exporter.
 #
 # A caller-supplied value wins. While this package owns the value, feature
-# registration refreshes it so azure-core clients observe the latest mask.
+# registration refreshes it so azure-core clients observe the latest mask
+# and the shared SDK/framework version tokens.
 _sync_azure_http_user_agent()
 
 # Third leg of UA propagation: wrap LLM SDK client classes' ``__init__``
