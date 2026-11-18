@@ -33,7 +33,6 @@ from pydantic import (
     model_validator,
 )
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai._resources import (
     _get_base_url_from_endpoint,
     _make_async_token_provider,
@@ -46,14 +45,11 @@ _TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 _JSON_STATE = TypeAdapter(str | dict[str, JsonValue] | list[JsonValue])
 
 
-@experimental(
-    message="AzureAIMicrosoftDecisions is experimental and its interface may change."
-)
 class AzureAIMicrosoftDecisions(BaseDecisionModel):
     """Ask typed questions with a Microsoft Decision deployment in Foundry.
 
-    Use the same class for ``Microsoft-Decision-1`` and ``Microsoft-Decision-1.1``.
-    Pass the deployment name as ``model``. Both use the System One API.
+    The deployment must use a compatible System One request and response format.
+    Pass the deployment name as ``model``.
 
     Args:
         model: Foundry deployment name, not the underlying model name.

@@ -20,10 +20,6 @@ from langchain_azure_ai.decisions import (
     Score,
 )
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::langchain_azure_ai._api.base.ExperimentalWarning"
-)
-
 ENDPOINT = "https://test.services.ai.azure.com"
 PROJECT_ENDPOINT = ENDPOINT + "/api/projects/test-project"
 REQUEST: ClassifierRequest = {

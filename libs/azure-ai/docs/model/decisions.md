@@ -5,16 +5,17 @@ Both adapters use LangChain's `BaseDecisionModel` interface with `invoke` and
 
 | Deployment | Adapter | API path |
 | --- | --- | --- |
-| `Microsoft-Decision-1` or `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
+| Microsoft Decision deployments using the System One API | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
 | `gpt-6-luna` | `AzureAIOpenAIApiDecisions` | `/openai/v1/decisions` |
 
 ## Microsoft Decision
 
-Use the same adapter for both Microsoft models. Set `model` to the Foundry
-deployment name. Pass the Foundry project URL as `project_endpoint`. The adapter
-derives the resource URL and calls the resource-level Decision API. It defaults
-to `DefaultAzureCredential`; pass `credential` explicitly to use an API key
-or another Entra credential.
+Use this adapter with a Microsoft Decision deployment that uses a compatible
+System One request and response format. Set `model` to the Foundry deployment
+name and `project_endpoint` to the Foundry project URL. The adapter derives the
+resource URL and calls the resource-level Decision API. It defaults to
+`DefaultAzureCredential`; pass `credential` explicitly to use an API key or
+another Entra credential.
 
 ```python
 import os
@@ -40,10 +41,12 @@ result = decisions.invoke(
 print(result.choices["team"].choice)
 ```
 
-Both deployments accept `Noul`, `Choice`, and `Score` questions. The adapter
-preserves the probabilities and confidence reported by the model. Text, JSON
-objects, and JSON arrays are supported. LangChain message conversion, image
-assets, and `Box` are not supported. The adapter is experimental.
+The adapter supports `Noul`, `Choice`, and `Score` questions and preserves the
+probabilities and confidence reported by the model. It accepts text, JSON
+objects, and JSON arrays. LangChain message conversion, image assets, and `Box`
+are not supported.
+
+Verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1`.
 
 See the [Foundry model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)
 for deployment and API details.
@@ -95,6 +98,5 @@ URL; it does not call the project or Agent Service APIs.
 
 ### Stability
 
-The upstream Runnable is beta, so the Azure adapter uses the existing
-`@experimental(...)` decorator and emits `ExperimentalWarning` on construction.
-No additional runtime opt-in flag is introduced.
+The upstream `OpenAIClassifier` is beta, so `AzureAIOpenAIApiDecisions` emits
+`ExperimentalWarning` on construction. No runtime opt-in flag is required.
