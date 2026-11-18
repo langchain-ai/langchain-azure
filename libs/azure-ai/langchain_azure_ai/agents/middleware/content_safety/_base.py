@@ -101,6 +101,8 @@ class _ContentSafetyState(MessagesState, total=False):
 
 logger = logging.getLogger(__name__)
 
+_MAX_TEXT_LENGTH = 10_000
+
 
 class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     """Base class with shared credential, client, and violation-handling logic.
@@ -492,6 +494,30 @@ def _is_text_block(block: Any) -> bool:
         and block.get("type") in ("text", "input_text")
         and isinstance(block.get("text"), str)
     )
+
+
+def _split_text(text: str, max_length: int = _MAX_TEXT_LENGTH) -> List[str]:
+    """Split text into parts that fit in one Content Safety text request.
+
+    The text APIs accept up to 10,000 characters per request, and longer text
+    has to be split.  Each part ends before the last whitespace within the
+    limit, so words aren't cut, unless there is none.  Parts that are only
+    whitespace are dropped.
+    """
+    if len(text) <= max_length:
+        return [text]
+    parts: List[str] = []
+    while text:
+        cut = len(text)
+        if cut > max_length:
+            cut = next(
+                (i for i in range(max_length, 0, -1) if text[i].isspace()),
+                max_length,
+            )
+        part, text = text[:cut], text[cut:]
+        if not part.isspace():
+            parts.append(part)
+    return parts
 
 
 def get_content_safety_annotations(
