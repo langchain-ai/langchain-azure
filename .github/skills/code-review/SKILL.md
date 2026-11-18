@@ -3,8 +3,9 @@ name: code-review
 description: >-
   Reviews changes in the langchain-azure monorepo using package-specific
   knowledge of langchain-azure-ai, langchain-azure-compute,
-  langchain-azure-cosmosdb, langchain-azure-postgresql, langchain-azure-storage,
-  langchain-sqlserver, and langchain-azure-dynamic-sessions, together with the
+  langchain-azure-cosmosdb, langchain-azure-kusto, langchain-azure-postgresql,
+  langchain-azure-storage, langchain-sqlserver, and
+  langchain-azure-dynamic-sessions, together with the
   LangChain, LangGraph, Deep Agents, and Azure SDK contracts each package must
   satisfy. Use this skill whenever reviewing a pull request or diff, checking
   code for bugs or regressions, or assessing changes under libs/, samples/, or
@@ -71,6 +72,7 @@ Read the file for each package that changed. Skip the rest.
 | `libs/azure-ai/` | `langchain-azure-ai` | [azure-ai.md](references/azure-ai.md) |
 | `libs/azure-compute/` | `langchain-azure-compute` | [azure-compute.md](references/azure-compute.md) |
 | `libs/azure-cosmosdb/` | `langchain-azure-cosmosdb` | [azure-cosmosdb.md](references/azure-cosmosdb.md) |
+| `libs/azure-kusto/` | `langchain-azure-kusto` | [azure-kusto.md](references/azure-kusto.md) |
 | `libs/azure-postgresql/` | `langchain-azure-postgresql` | [azure-postgresql.md](references/azure-postgresql.md) |
 | `libs/azure-storage/` | `langchain-azure-storage` | [azure-storage.md](references/azure-storage.md) |
 | `libs/sqlserver/` | `langchain-sqlserver` | [sqlserver.md](references/sqlserver.md) |

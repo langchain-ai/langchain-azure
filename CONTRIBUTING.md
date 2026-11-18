@@ -33,11 +33,12 @@ Install uv: **[documentation on how to install it](https://docs.astral.sh/uv/get
 
 ## Different packages
 
-This repository contains seven packages with Azure integrations with LangChain:
+This repository contains eight packages with Azure integrations with LangChain:
 - [langchain-azure-ai](https://pypi.org/project/langchain-azure-ai/)
 - [langchain-azure-compute](./libs/azure-compute)
 - [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
+- [langchain-azure-kusto](./libs/azure-kusto)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 - [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
 - [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
@@ -61,6 +62,7 @@ Here's the structure visualized as a tree:
 │   ├── azure-compute
 │   ├── azure-cosmosdb
 │   ├── azure-dynamic-sessions
+│   ├── azure-kusto
 │   ├── azure-postgresql
 │   ├── azure-storage
 │   ├── sqlserver
