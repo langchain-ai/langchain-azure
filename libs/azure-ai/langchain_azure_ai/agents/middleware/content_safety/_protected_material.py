@@ -360,7 +360,9 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     ) -> List[ProtectedMaterialEvaluation]:
         """Parse the responses into at most one violation.
 
-        When several parts are detected, their code citations are combined.
+        When several parts are detected, their code citations are combined,
+        except those already found in an earlier part, as the parts of long
+        text overlap.
         """
         detected = [
             e
@@ -375,9 +377,10 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
         )
         if not detected:
             return []
-        return [
-            replace(
-                detected[0],
-                code_citations=[c for e in detected for c in e.code_citations],
+        code_citations: List[Dict[str, Any]] = []
+        for e in detected:
+            earlier_citations = list(code_citations)
+            code_citations.extend(
+                c for c in e.code_citations if c not in earlier_citations
             )
-        ]
+        return [replace(detected[0], code_citations=code_citations)]

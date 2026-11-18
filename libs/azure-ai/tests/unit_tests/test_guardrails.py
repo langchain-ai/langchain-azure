@@ -4133,11 +4133,21 @@ def _create_answer_agent(middleware: Any, answer: str = "ok") -> Any:
     return create_agent(model=model, middleware=[middleware])
 
 
+def _analyze_text_matching_blocklist(options: Any) -> Any:
+    match = MagicMock(blocklist_name="my-list", blocklist_item_text=_FLAGGED_TEXT)
+    return MagicMock(
+        categories_analysis=[],
+        blocklists_match=[match] if _FLAGGED_TEXT in options.text else [],
+    )
+
+
 def _assert_split_into_requests(sent: List[str], text: str) -> None:
     assert len(sent) == 2
-    assert all(len(chunk) <= 10_000 for chunk in sent)
-    assert "".join(sent) == text
+    assert sent[0] == text[:10_000]
+    assert len(sent[1]) <= 10_000
+    assert text.endswith(sent[1])
     assert sent[1].startswith(" ")
+    assert len(sent[0]) + len(sent[1]) - len(text) >= 128
 
 
 class TestLongTextScreening:
@@ -4247,8 +4257,36 @@ class TestLongTextScreening:
             "Hate (severity: 6), Violence (severity: 4)"
         )
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "x " * 4990 + _FLAGGED_TEXT + "." + "x" * 1000,
+            "x " * 4996 + _FLAGGED_TEXT + "x" * 1000,
+        ],
+        ids=["before_limit", "across_limit"],
+    )
+    def test_blocklist_item_on_part_boundary_is_matched(self, text: str) -> None:
+        """A blocklist item on a part boundary should be reported once."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            BlocklistEvaluation,
+            ContentSafetyViolationError,
+        )
+
+        m = _make_text_moderation(blocklist_names=["my-list"], apply_to_output=False)
+        client = MagicMock()
+        client.analyze_text.side_effect = _analyze_text_matching_blocklist
+        with patch.object(m, "_get_sync_client", return_value=client):
+            with pytest.raises(ContentSafetyViolationError) as exc_info:
+                m.before_agent({"messages": [HumanMessage(content=text)]}, runtime=None)
+
+        assert exc_info.value.violations == [
+            BlocklistEvaluation(
+                category="blocklist", blocklist_name="my-list", text=_FLAGGED_TEXT
+            )
+        ]
+
     def test_protected_material_reports_one_violation(self) -> None:
-        """Detections in several parts should be reported as one violation."""
+        """Detections in several parts should be one violation, citing each once."""
         from langchain_azure_ai.agents.middleware.content_safety import (
             ContentSafetyViolationError,
             ProtectedMaterialEvaluation,
@@ -4267,7 +4305,7 @@ class TestLongTextScreening:
             {
                 "protectedMaterialAnalysis": {
                     "detected": True,
-                    "codeCitations": more_citations,
+                    "codeCitations": citations + more_citations,
                 }
             },
         ]
@@ -4329,10 +4367,14 @@ class TestLongTextScreening:
         assert max_active == 1
 
     def test_split_text_without_whitespace_or_with_blank_parts(self) -> None:
-        """Text without whitespace is cut at the limit, and blank parts dropped."""
+        """Without whitespace, parts share 128 characters; blank parts are dropped."""
         from langchain_azure_ai.agents.middleware.content_safety._base import (
             _split_text,
         )
 
-        assert _split_text("x" * 25_000) == ["x" * 10_000, "x" * 10_000, "x" * 5_000]
-        assert _split_text("x" * 10_000 + " " * 10_001 + "y") == ["x" * 10_000, " y"]
+        assert _split_text("x" * 25_000) == ["x" * 10_000, "x" * 10_000, "x" * 5_256]
+        assert _split_text("x" * 10_000 + " " * 30_000 + "y") == [
+            "x" * 10_000,
+            "x" * 128 + " " * 9_872,
+            " " * 512 + "y",
+        ]

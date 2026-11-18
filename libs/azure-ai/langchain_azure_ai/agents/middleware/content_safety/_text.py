@@ -458,14 +458,17 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
         """Parse the responses and keep the evaluations over the threshold.
 
         Each harm category is kept once, with its highest severity across the
-        responses.  Blocklist matches are all kept.
+        responses.  Blocklist matches are kept, except those already found in
+        an earlier response, as the parts of long text overlap.
         """
         categories: Dict[str, ContentModerationEvaluation] = {}
         blocklist_matches: List[ContentSafetyEvaluation] = []
         for response in responses:
+            earlier_matches = list(blocklist_matches)
             for e in self.get_evaluation_response(response):
                 if isinstance(e, BlocklistEvaluation):
-                    blocklist_matches.append(e)
+                    if e not in earlier_matches:
+                        blocklist_matches.append(e)
                 elif (
                     isinstance(e, ContentModerationEvaluation)
                     and e.severity >= self._severity_threshold

@@ -102,6 +102,9 @@ class _ContentSafetyState(MessagesState, total=False):
 logger = logging.getLogger(__name__)
 
 _MAX_TEXT_LENGTH = 10_000
+# Parts of long text overlap by at least this, the maximum length of a
+# blocklist item.
+_TEXT_OVERLAP = 128
 
 
 class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
@@ -496,28 +499,40 @@ def _is_text_block(block: Any) -> bool:
     )
 
 
-def _split_text(text: str, max_length: int = _MAX_TEXT_LENGTH) -> List[str]:
+def _split_text(
+    text: str,
+    max_length: int = _MAX_TEXT_LENGTH,
+    overlap: int = _TEXT_OVERLAP,
+) -> List[str]:
     """Split text into parts that fit in one Content Safety text request.
 
     The text APIs accept up to 10,000 characters per request, and longer text
-    has to be split.  Each part ends before the last whitespace within the
-    limit, so words aren't cut, unless there is none.  Parts that are only
-    whitespace are dropped.
+    has to be split.  Each part but the last is ``max_length`` characters.
+    The next part starts at least ``overlap`` characters before the end of
+    the previous one, so text up to that long, such as a blocklist item, is
+    whole in at least one part.  It starts at the last whitespace within
+    ``overlap`` characters before that, so it doesn't start inside a word,
+    unless there is none.  Parts that are only whitespace are dropped.
     """
     if len(text) <= max_length:
         return [text]
     parts: List[str] = []
-    while text:
-        cut = len(text)
-        if cut > max_length:
-            cut = next(
-                (i for i in range(max_length, 0, -1) if text[i].isspace()),
-                max_length,
-            )
-        part, text = text[:cut], text[cut:]
+    start = 0
+    while True:
+        end = min(start + max_length, len(text))
+        part = text[start:end]
         if not part.isspace():
             parts.append(part)
-    return parts
+        if end == len(text):
+            return parts
+        start = next(
+            (
+                i
+                for i in range(end - overlap, end - 2 * overlap, -1)
+                if text[i].isspace()
+            ),
+            end - overlap,
+        )
 
 
 def get_content_safety_annotations(
