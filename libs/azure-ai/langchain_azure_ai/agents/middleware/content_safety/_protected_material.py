@@ -172,7 +172,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             ProtectedMaterialEvaluation(
                 category="ProtectedMaterial",
                 detected=analysis.get("detected", False),
-                code_citations=analysis.get("codeCitations", []),
+                code_citations=analysis.get("codeCitations") or [],
             )
         ]
 
