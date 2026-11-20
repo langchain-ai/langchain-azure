@@ -1,0 +1,4 @@
+# TODO: replace with a langchain-azure-storage version pin once a release
+# includes AzureTableStorageSaver. Until then, install it from this repo.
+-e ../../libs/azure-storage
+langgraph==1.2.6
