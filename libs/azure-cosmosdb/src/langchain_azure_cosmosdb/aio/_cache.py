@@ -19,6 +19,7 @@ from langchain_core.outputs import Generation
 
 from langchain_azure_cosmosdb._cache import (
     _hash,
+    _llm_string_filter,
     _load_generations_from_json,
 )
 from langchain_azure_cosmosdb.aio._vectorstore import (
@@ -221,6 +222,7 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
         results = await llm_cache.asimilarity_search_with_score(
             query=prompt,
             k=1,
+            where=_llm_string_filter(llm_string),
         )
         if results:
             for document, score in results:
@@ -328,7 +330,8 @@ class AsyncAzureCosmosDBNoSqlSemanticCache(BaseCache):
                 container = vs._container
                 items: list[Any] = []
                 async for item in container.query_items(
-                    query=query,
+                    query=f"{query} WHERE c.metadata.llm_string = @llm_string",
+                    parameters=[{"name": "@llm_string", "value": llm_string}],
                 ):
                     items.append(item)
                 for item in items:
