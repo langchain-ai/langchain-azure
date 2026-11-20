@@ -87,7 +87,6 @@ from langgraph.types import Command
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from langchain_azure_ai._api.base import experimental
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     _add_process_hosting_features,
@@ -354,7 +353,6 @@ async def _close_async_iterator(iterator: AsyncIterator[Any]) -> None:
         await close()
 
 
-@experimental()
 class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     """Host a LangChain ``Runnable`` as the Invocations API.
 
@@ -419,23 +417,38 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         output_parser: Optional callable that converts the runnable result
             into response text for non-streaming requests. When omitted, the
             default parser reads the last AI message from a ``messages`` state.
-        options: Optional :class:`ResponsesServerOptions`. The
-            ``resilient_background`` and ``steerable_conversations`` values
-            configure durable invocation recovery and in-flight conversation
-            steering respectively.
+        options: Optional :class:`ResponsesServerOptions`. Only
+            ``resilient_background`` (durable recovery) and
+            ``steerable_conversations`` (in-flight steering) are used; other
+            fields have no effect. These options configure
+            ``InvocationsHostServer`` whether ``app`` is supplied or created
+            automatically. Either flag enables task-backed execution, including
+            foreground JSON and SSE requests.
+            ``background=True`` still requires ``resilient_background=True``.
+            Both options are experimental and emit a feature-level
+            ``ExperimentalWarning`` when enabled.
         app: Optional existing :class:`InvocationAgentServerHost` to
-            attach to (e.g. a multi-protocol mixin). In this mode the
-            host-level kwargs are ignored — the caller is expected to
-            have configured them on ``app`` itself.
-        applicationinsights_connection_string: Forwarded to
-            :class:`AgentServerHost`.
-        graceful_shutdown_timeout: Forwarded to :class:`AgentServerHost`.
+            attach to (e.g. a multi-protocol mixin). When ``app=None``, pass
+            ``applicationinsights_connection_string`` and
+            ``graceful_shutdown_timeout`` to ``InvocationsHostServer``. When
+            supplying an existing ``app``, configure these settings when creating
+            :class:`InvocationAgentServerHost`. Passing them to
+            ``InvocationsHostServer`` does not change the supplied app.
+            ``options`` still configures invocation execution and the
+            checkpointer requirement.
+        applicationinsights_connection_string: Application Insights connection
+            string. Used only when ``app=None``. Otherwise, configure this setting
+            when creating ``app``; passing it here has no effect.
+        graceful_shutdown_timeout: Graceful shutdown timeout. Used only when
+            ``app=None``. Otherwise, configure this setting when creating ``app``;
+            passing it here has no effect.
 
     Raises:
-        ValueError: If the graph's state schema does not declare a
-            ``messages`` field, or if ``resilient_background=True`` is
-            configured without a LangGraph checkpointer. Override this class
-            to host custom-state graphs.
+        ValueError: If any of the following conditions holds:
+
+            1. The graph's state schema does not declare a ``messages`` field.
+            2. ``resilient_background=True`` is configured without a LangGraph
+               checkpointer.
     """
 
     def __init__(
@@ -451,9 +464,21 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         self._validate_graph_schema(graph)
         self._hosting_features = HostingFeature.INVOCATIONS
         if options is not None and options.resilient_background:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "InvocationsHostServer.resilient_background", stacklevel=3
+            )
             self._hosting_features |= HostingFeature.RESILIENT_BACKGROUND
+
         if options is not None and options.steerable_conversations:
+            from langchain_azure_ai._api.base import warn_experimental
+
+            warn_experimental(
+                "InvocationsHostServer.steerable_conversations", stacklevel=3
+            )
             self._hosting_features |= HostingFeature.STEERABLE_CONVERSATIONS
+
         self._graph = graph
         self._supports_langgraph_stream_modes = (
             getattr(graph, "builder", None) is not None
@@ -524,7 +549,7 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
 
     @property
     def app(self) -> InvocationAgentServerHost:
-        """The underlying :class:`InvocationAgentServerHost`."""
+        """The supplied or internally created :class:`InvocationAgentServerHost`."""
         return self._app
 
     @property
@@ -696,14 +721,24 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         return background, previous_invocation_id
 
     def build_runnable_config(self, request: Request) -> RunnableConfig:
-        """Build a ``RunnableConfig`` for the invocation.
+        """Build a ``RunnableConfig`` for a direct invocation.
+
+        Called for foreground JSON and SSE requests when neither
+        ``options.resilient_background`` nor
+        ``options.steerable_conversations`` is enabled. Task-backed execution
+        uses :meth:`build_task_runnable_config` instead and does not call
+        this method.
+
+        If your customization must apply to both direct and task-backed
+        execution, override both this method and
+        :meth:`build_task_runnable_config`.
 
         Sets ``configurable.thread_id`` from a user-scoped internal form of
         ``request.state.session_id`` so checkpointed conversations cannot
         collide across users that choose the same public session ID.
 
         Args:
-            request: The Starlette request.
+            request: The original Starlette request.
 
         Returns:
             A ``RunnableConfig`` dict.
@@ -726,6 +761,14 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
     ) -> RunnableConfig:
         """Build config for a task-backed invocation attempt.
 
+        Called when ``options.resilient_background`` or
+        ``options.steerable_conversations`` is enabled, including foreground
+        JSON and SSE, background work, and active recovered attempts. This
+        path does not call :meth:`build_runnable_config`.
+
+        If your customization must apply to both direct and task-backed
+        execution, override both this method and :meth:`build_runnable_config`.
+
         The graph thread uses ``context.task_id``, the user-partitioned
         internal ID for the public session. The public ``session_id`` remains
         available in the invocation envelope and task input only.
@@ -733,6 +776,16 @@ class InvocationsHostServer(Generic[GraphInputT, GraphOutputT]):
         The task context is transport-scoped rather than checkpointed graph
         state. Nodes can use it to inspect recovery, cancellation, steering,
         and shutdown signals for the current attempt.
+
+        Args:
+            session_id: Public session ID for the invocation; unused by the
+                default implementation, which sets ``configurable.thread_id``
+                to ``context.task_id``.
+            context: Task execution context for the current attempt.
+
+        Returns:
+            A ``RunnableConfig`` with the thread ID, task context, and
+            cancellation signal under ``configurable``.
         """
         del session_id  # retained for subclass signature compatibility
         configurable: dict[str, Any] = {

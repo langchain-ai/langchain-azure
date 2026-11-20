@@ -18,7 +18,12 @@ pytest.importorskip("opentelemetry")
 pytest.importorskip("langchain_core")
 
 from langchain_core.agents import AgentAction  # noqa: E402
+from langchain_core.callbacks import (  # noqa: E402
+    CallbackManagerForLLMRun,
+    CallbackManagerForRetrieverRun,
+)
 from langchain_core.documents import Document  # noqa: E402
+from langchain_core.language_models import BaseLLM  # noqa: E402
 from langchain_core.messages import (  # noqa: E402
     AIMessage,
     BaseMessage,
@@ -26,7 +31,9 @@ from langchain_core.messages import (  # noqa: E402
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from langchain_core.outputs import ChatGeneration, Generation, LLMResult  # noqa: E402
+from langchain_core.retrievers import BaseRetriever  # noqa: E402
+from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
 from opentelemetry import trace as otel_trace  # noqa: E402
 from opentelemetry.sdk.resources import Resource  # noqa: E402
@@ -1960,6 +1967,48 @@ def test_llm_end_fills_request_model_from_response_when_missing() -> None:
     assert span2.attributes.get(tracing.Attrs.RESPONSE_MODEL) == "gpt-4o-2026-04-01"
 
 
+class CompletionLLM(BaseLLM):
+    @property
+    def _llm_type(self) -> str:
+        return "completion"
+
+    def _generate(
+        self,
+        prompts: List[str],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> LLMResult:
+        return LLMResult(
+            generations=[
+                [Generation(text="ok", generation_info={"finish_reason": "stop"})]
+                for _ in prompts
+            ],
+            llm_output={
+                "token_usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                "model_name": "gpt-35-turbo-instruct",
+            },
+        )
+
+
+def test_text_completion_llm_span_ends(span_exporter: InMemorySpanExporter) -> None:
+    """Text completion LLMs return `Generation`, which has no `message`."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+
+    result = CompletionLLM().invoke("hi", config=RunnableConfig(callbacks=[tracer]))
+
+    assert result == "ok"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "text_completion gpt-35-turbo-instruct"
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes is not None
+    assert span.attributes.get(tracing.Attrs.OPERATION_NAME) == "text_completion"
+    assert span.attributes.get(tracing.Attrs.RESPONSE_FINISH_REASONS) == '["stop"]'
+    assert span.attributes.get(tracing.Attrs.USAGE_INPUT_TOKENS) == 3
+    assert span.attributes.get(tracing.Attrs.USAGE_OUTPUT_TOKENS) == 1
+    assert not tracer._spans
+
+
 def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     t = tracing.AzureAIOpenTelemetryTracer()
     run_id = uuid4()
@@ -1978,6 +2027,39 @@ def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:
     assert attrs.get(tracing.Attrs.RETRIEVER_QUERY) == "q"
     results = json.loads(attrs[tracing.Attrs.RETRIEVER_RESULTS])
     assert len(results) == 3
+
+
+class PolicyRetriever(BaseRetriever):
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        return [Document(page_content="doc", metadata={"source": "a"})]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("run_name", [None, "policy_search"])
+async def test_retriever_span_uses_retriever_name(
+    span_exporter: InMemorySpanExporter,
+    use_async: bool,
+    run_name: Optional[str],
+) -> None:
+    """LangChain passes `serialized=None` and the retriever name as `name`."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+    retriever = PolicyRetriever()
+    config = RunnableConfig(callbacks=[tracer])
+    if run_name:
+        config["run_name"] = run_name
+
+    if use_async:
+        await retriever.ainvoke("q", config=config)
+    else:
+        retriever.invoke("q", config=config)
+
+    expected_name = run_name or "PolicyRetriever"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == f"execute_tool {expected_name}"
+    assert span.attributes is not None
+    assert span.attributes.get(tracing.Attrs.TOOL_NAME) == expected_name
 
 
 def test_parser_start_end(monkeypatch: pytest.MonkeyPatch) -> None:

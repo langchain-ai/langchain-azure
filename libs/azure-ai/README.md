@@ -1,18 +1,20 @@
 # langchain-azure-ai
 
-This package contains the LangChain integration for Microsoft Foundry (formerly known Azure AI). To learn more about how to use this package, see the LangChain documentation in [Microsoft Foundry](https://aka.ms/azureai/langchain).
+This package integrates Microsoft Foundry with LangChain, LangGraph, and Deep Agents. For setup and examples, see the [Microsoft Foundry development guide](https://aka.ms/azureai/langchain).
 
 ## Start here
 
 | I want to... | Start with |
 | --- | --- |
-| Call a Foundry model from LangChain or LangGraph | [Model quick start](#microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Call Microsoft Foundry models from LangChain, LangGraph, or Deep Agents | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
+| Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#decisions-api-experimental) |
 | Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
-| Build and deploy my first hosted agent | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
-| Compose a graph with managed Foundry agent nodes | [Agent Service quick start](#microsoft-foundry-agent-service) |
-| Add guardrails or Azure tools | [Content Safety](#unified-moderation-guardrails) and [tools](#microsoft-foundry-tools) |
-| Trace graph, model, and tool calls | [Application Insights tracing](#auto-tracing-to-azure-application-insights) |
-| Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#durable-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
+| Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
+| Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
+| Access agents on Microsoft Foundry Agent Service | [Agent Service quick start](#accessing-agents-on-microsoft-foundry-agent-service) |
+| Apply guardrails or use Foundry tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [Microsoft Foundry Tools](#using-microsoft-foundry-tools) |
+| Trace graph, model, and tool calls | [Application Insights tracing](#tracing-with-azure-application-insights) |
+| Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#persisting-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
 | Store long-term memory across threads | [Azure Cosmos DB store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory) |
 
 ## Installation
@@ -33,8 +35,8 @@ For using tracing capabilities with OpenTelemetry, you need to add the extras `o
 pip install -U langchain-azure-ai[opentelemetry]
 ```
 
-For hosting LangGraph agents with the Responses protocol, install the
-`hosting` extra:
+For hosting LangGraph agents with the Responses or Invocations protocol,
+install the `hosting` extra:
 
 ```bash
 pip install -U langchain-azure-ai[hosting]
@@ -48,29 +50,48 @@ pip install -U langchain-azure-ai[v1]
 
 ## Quick Start with langchain-azure-ai
 
-The `langchain-azure-ai` package uses the Microsoft Foundry family of SDKs and client libraries for Azure to provide first-class support of Microsoft Foundry capabilities in LangChain and LangGraph.
+The `langchain-azure-ai` package connects LangChain, LangGraph, and Deep Agents applications to Microsoft Foundry models, agents, tools, and services.
 
 This package includes:
 
-* [Microsoft Foundry Models inference](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models)
-* [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware)
-* [Microsoft Foundry Agent Service](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents)
-* [LangGraph hosting for Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting)
-* [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools) (including Azure AI Content Understanding, Document Intelligence, and more)
+* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), or [Decisions API (experimental)](#decisions-api-experimental).
+* **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
+* **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
+* **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
+* **Using Microsoft Foundry Tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
+* **Searching documents (vector store):** index and search documents with [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores).
 
-Here's a quick start example to show you how to get started with the Chat Completions model. For more details and tutorials see [Get started with LangChain and LangGraph with Foundry](https://aka.ms/azureai/langchain).
+For more details and tutorials, see the [Microsoft Foundry development guide](https://aka.ms/azureai/langchain).
 
-### Microsoft Foundry Models
+<a id="microsoft-foundry-models"></a>
+
+### Calling Microsoft Foundry models
+
+Prefer Microsoft Entra ID authentication with `DefaultAzureCredential`.
+For local development, sign in with `az login`.
+
+#### Responses API
+
+Call a Microsoft Foundry model using the Responses API:
+
+> [!NOTE]
+> LangGraph agents manage conversation history in their state.
+> We recommend `store=False` to disable model-side response storage for these agents.
+> For direct model calls, your code can manage history by passing prior messages,
+> or use `store=True` with `previous_response_id` to continue a conversation
+> using model-side storage.
 
 ```python
+from azure.identity import DefaultAzureCredential
 from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
-    credential="your-api-key", #if using Entra ID you can should use DefaultAzureCredential() instead
-    model="gpt-5"
+    credential=DefaultAzureCredential(),
+    model="gpt-5",  # your model deployment name
+    use_responses_api=True,
+    store=False,  # Disable model-side response storage.
 )
 
 messages = [
@@ -88,7 +109,7 @@ model.invoke(messages).pretty_print()
 Ciao!
 ```
 
-You can also use builtin tools with them:
+You can also use built-in tools with the Responses API:
 
 ```python
 from langchain_azure_ai.tools.builtin import ImageGenerationTool
@@ -99,45 +120,94 @@ result = model_with_image_gen.invoke(
 )
 ```
 
-Models in Microsoft Foundry Models are OpenAI-compatible and can be used with the class:
+#### Chat Completions API
+
+> [!NOTE]
+> For new apps, consider building on the **Responses API** instead of Chat Completions.
+
+Call an OpenAI-compatible Foundry model using the Chat Completions API:
 
 ```python
+from langchain_azure_ai.chat_models import AzureAIOpenAIApiChatModel
+
 model = AzureAIOpenAIApiChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    # With DefaultAzureCredential(), explicitly set use_responses_api=False.
     credential="your-api-key",
-    model="Mistral-Large-3"
+    model="Mistral-Large-3",  # your model deployment name
 )
+
+model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 ```
 
-### Unified moderation guardrails
+#### Decisions API (experimental)
 
-Use a Content Safety guardrail policy with any LangChain `create_agent` agent:
-
-```python
-from langchain.agents import create_agent
-from langchain_azure_ai.agents.middleware import AzureContentSafetyPolicyMiddleware
-
-agent = create_agent(
-    model=model,
-    middleware=[
-        AzureContentSafetyPolicyMiddleware(
-            policy_id="your-guardrail-id",
-            endpoint="https://your-resource.cognitiveservices.azure.com",
-        )
-    ],
-)
-```
-
-This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits agent and model input/output and tool arguments/results to the service; the guardrail policy controls each intervention point. The same text may be checked at both agent and model boundaries. A blocked policy verdict raises `ContentSafetyViolationError`; allowed transformations are applied, and non-blocking findings are available via `get_content_safety_annotations`. Agent/model hooks screen text; tool hooks screen JSON-encoded arguments and results. See the [runnable example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/unified-moderation/basic_usage.py).
-
-### Microsoft Foundry Agent Service
-
-Compose complex graphs by using agents running in the Agent Service:
+Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
+`langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
 
 ```python
 from azure.identity import DefaultAzureCredential
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_azure_ai.agents import AgentServiceFactory
+from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
+
+decisions = AzureAIOpenAIApiDecisions(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential=DefaultAzureCredential(),
+    model="your-decisions-deployment",  # your Decisions model deployment name
+)
+
+answer = decisions.invoke({
+    "state": "Please refund the duplicate charge.",
+    "questions": {"refund": Noul(instructions="Is a refund requested?")},
+})
+print(answer.nouls["refund"].noul)  # probability that a refund is requested
+```
+
+For API concepts and prerequisites, see the
+[Azure OpenAI Decisions API documentation](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
+
+#### Embeddings
+
+Generate embeddings for search and retrieval using an embedding model deployment:
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_azure_ai.embeddings import AzureAIOpenAIApiEmbeddingsModel
+
+embeddings = AzureAIOpenAIApiEmbeddingsModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
+    credential=DefaultAzureCredential(),
+    model="text-embedding-3-small",  # your embedding model deployment name
+)
+
+query_vector = embeddings.embed_query("What is Microsoft Foundry?")
+document_vectors = embeddings.embed_documents(
+    ["Microsoft Foundry helps you build AI applications."]
+)
+```
+
+<a id="microsoft-foundry-agent-service"></a>
+
+### Accessing agents on Microsoft Foundry Agent Service
+
+Create a managed Foundry agent and add it as a LangGraph node.
+
+For local development, install the package and sign in:
+
+```bash
+pip install -U langchain-azure-ai
+az login
+```
+
+Using `create_prompt_agent(..., trace=True)` also requires the `opentelemetry` extra.
+
+Set your project endpoint and model deployment name. This creates a version
+of `my-echo-agent` in your project:
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_core.messages import HumanMessage
+from langgraph.graph import END, START, StateGraph
+from langchain_azure_ai.agents import AgentServiceAgentState, AgentServiceFactory
 from langchain_azure_ai.utils.agents import pretty_print
 
 factory = AgentServiceFactory(
@@ -145,13 +215,20 @@ factory = AgentServiceFactory(
     credential=DefaultAzureCredential()
 )
 
-echo_node = factory.get_agent_node(name="my-echo-agent", version="latest")
+echo_node = factory.create_prompt_agent_node(
+    name="my-echo-agent",
+    model="gpt-4.1",  # your model deployment name
+    instructions="Always reply with the opposite of what the user says.",
+)
 ```
 
 Agent Service nodes run in Microsoft Foundry but can be added to any graph:
 
 ```python
+graph = StateGraph(AgentServiceAgentState)
 graph.add_node("expert_node", echo_node)
+graph.add_edge(START, "expert_node")
+graph.add_edge("expert_node", END)
 ```
 
 Use the graph as usual:
@@ -174,7 +251,39 @@ Name: my-echo-agent
 You're not a genius and you don't love programming!
 ```
 
+### Applying Content Safety guardrails via middleware
+
+Pass Content Safety middleware to LangChain's `create_agent` or Deep Agents'
+`create_deep_agent`. This example uses `create_agent`:
+
+```python
+from langchain.agents import create_agent
+from langchain_azure_ai.agents.middleware import AzureContentSafetyPolicyMiddleware
+
+agent = create_agent(
+    model=model,
+    middleware=[
+        AzureContentSafetyPolicyMiddleware(
+            policy_id="your-guardrail-id",
+            endpoint="https://your-resource.cognitiveservices.azure.com",
+        )
+    ],
+)
+```
+
+This preview integration requires `azure-ai-contentsafety>=1.1.0b1`. It submits agent and model input/output and tool arguments/results to the service; the guardrail policy controls each intervention point. The same text may be checked at both agent and model boundaries. A blocked policy verdict raises `ContentSafetyViolationError`; allowed transformations are applied, and non-blocking findings are available via `get_content_safety_annotations`. Agent/model hooks screen text; tool hooks screen JSON-encoded arguments and results. See the [runnable example](https://github.com/langchain-ai/langchain-azure/blob/main/samples/unified-moderation/basic_usage.py).
+
 ### Hosting LangGraph agents on Microsoft Foundry
+
+These hosts accept compiled LangGraph graphs, including those returned by
+LangChain's `create_agent` and Deep Agents' `create_deep_agent`. For a complete
+Deep Agents example, see the [Deep Agents hosting sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/12_deep_agents/README.md).
+
+> [!TIP]
+> To choose between Responses and Invocations, see
+> [Which protocol should I use?](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents#which-protocol-should-i-use).
+
+#### Responses protocol
 
 **Already have a compiled LangGraph graph?** Keep its implementation,
 model, and tools. Point `langgraph.json` at its exported graph, as shown
@@ -186,22 +295,13 @@ pip install -U "langchain-azure-ai[hosting]"
 python -m langchain_azure_ai.agents.hosting.run --protocol responses
 ```
 
-Use `--protocol invocations` for the Invocations endpoint; see the
-[Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md).
 For prerequisites, local requests, and Azure deployment, follow the
 [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
 or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
 
 For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
 
-You can also host the graph directly from Python, as shown below.
-For a Responses API host, install the hosting extra. It includes
-the Agent Server version that uses a local file-backed ``FoundryStateStore``
-outside Foundry hosting:
-
-```bash
-pip install -U langchain-azure-ai[hosting]
-```
+You can also host the graph directly from Python, as shown below:
 
 ```python
 from langchain_azure_ai.agents.hosting import ResponsesHostServer
@@ -212,55 +312,17 @@ if __name__ == "__main__":
     ResponsesHostServer(graph).run()
 ```
 
-`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint. `InvocationsHostServer` serves the generic `/invocations` endpoint for applications that want to define their own JSON request and response shape.
+`ResponsesHostServer` serves the OpenAI Responses-style `/responses` endpoint.
+The graph's input state must include a `messages` field.
+It supports JSON and streaming responses, background execution, conversation
+steering, and human-in-the-loop interrupts.
 
-For current feature support and configuration combinations, see
-[Responses hosting overview](docs/hosting/responses.md) and
-[Invocations hosting overview](docs/hosting/invocations.md).
+Conversation steering (`steerable_conversations=True`) and crash recovery
+(`resilient_background=True`) are experimental and emit feature-level
+`ExperimentalWarning` warnings when enabled.
 
-Both hosts accept `ResponsesServerOptions`. For the Invocations host,
-`resilient_background=True` enables durable background turns and
-`steerable_conversations=True` lets a new turn supersede an active turn in the
-same `agent_session_id`:
-
-```python
-from langchain_azure_ai.agents.hosting import (
-  InvocationsHostServer,
-  ResponsesServerOptions,
-)
-
-graph = build_my_checkpointed_graph()
-server = InvocationsHostServer(
-  graph,
-  options=ResponsesServerOptions(
-    resilient_background=True,
-    steerable_conversations=True,
-  ),
-)
-```
-
-Set `"background": true` in the request body to receive a `202` invocation
-envelope. Poll `GET /invocations/{invocation_id}` for the final `response`, or
-cancel it with `POST /invocations/{invocation_id}/cancel`. Background streaming
-is not supported. Active invocation status does not expire; terminal invocation
-results remain retrievable for 30 days. Resilient background execution requires
-a LangGraph checkpointer; use a durable checkpointer for hosted production deployments.
-Callers can also send `previous_invocation_id` to enforce linear extension of a
-session chain.
-
-When a checkpointed graph calls `interrupt()`, the Invocations host adds an
-`output` array containing the same paired `function_call` and
-`mcp_approval_request` items as `ResponsesHostServer`. Resume the graph by
-sending a matching `function_call_output` or `mcp_approval_response` item as
-the next request's `message` list. Streaming requests emit these as
-`output_item` SSE events. Existing string `message` requests and responses
-without pending interrupts keep their original shape. A valid
-`function_call_output` takes precedence over `mcp_approval_response` items for
-the same interrupt. Without one, conflicting `approve: true` and
-`approve: false` responses for the same interrupt fail the whole request and
-leave all pending interrupts unchanged. For a recognized LangChain
-`HumanInTheLoopMiddleware` request, every action must also allow the selected
-decision; otherwise the whole request fails and all interrupts remain pending.
+For current feature support and configuration combinations, see the
+[Responses hosting overview](docs/hosting/responses.md).
 
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
@@ -273,56 +335,50 @@ Checkpointed multi-turn conversations use an explicit `conversation.id`
 or run with `steerable_conversations=True`. Both modes are linear and preserve
 the latest LangGraph checkpoint for subsequent turns.
 
-**[Experimental] Response branching:** To branch from a completed response, enable
-`ResponsesHostServer(graph, enable_response_branching=True)` with a
-history-preserving checkpointer, steering disabled, and no externally supplied
-`app`. Send
-`{"input": "Alternative follow-up", "previous_response_id": "<parent-response-id>"}`.
-The host restores that response's exact saved checkpoint, so two requests
-referencing the same parent create independent siblings. Each child saves its
-own checkpoint reference without advancing the shared conversation head.
-The parent response and its checkpoint must still be retained, and the graph
-must have finished; paused-parent branching is not supported.
-See the [response branching design](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_branching.md)
-for the target contract and current implementation gaps.
+**[Experimental] Response branching:** Enable `enable_response_branching=True`
+with a history-preserving checkpointer to branch from a completed response
+using `previous_response_id`. Enabling it emits an `ExperimentalWarning`. See the
+[branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md)
+for branching, rewind, regeneration, and setup requirements.
 
-For checkpointed graphs, each request resolves its saved input checkpoint reference
-once, including the saved task reference on recovery. Interrupt inspection and
-graph startup reuse exact reads of that checkpoint and its pending writes.
-Latest-checkpoint queries still reach storage so LangGraph can protect historical
-branches and recover superseded checkpoints. These checks do not change the
-request's input reference. Checkpoints and pending writes
-are persisted at the graph's normal durability boundaries, including intermediate
-steps and any checkpoint saved at completion. After graph execution and its
-required writes finish, the host updates the conversation's checkpoint reference
-for the next turn.
-The host applies this behavior through a saver decorator, including for
-`FoundryCheckpointSaver`, `CosmosDBSaver`, and in-memory savers.
-Requests without a saved input reference use the saver's normal latest selection.
-`ResponsesHostServer` serves a shallow copy of the supplied graph when decorating
-its checkpointer; mutable configuration may remain shared with the original
-graph.
-`InvocationsHostServer` retains its existing execution path.
+#### Invocations protocol
 
-Responses handlers check or create factory-managed Foundry checkpoint and
-conversation-chain stores on first use, then reuse their clients without
-additional store-existence checks. Thread deletion through the saver resets
-that handler's client binding and blocks acquisitions for the same store until
-deletion ends. Whole-store deletion invalidates all consumer and user bindings
-for that endpoint and store; isolated deletion retains other users' bindings.
-Already-borrowed clients can continue item operations. An item operation that
-raises `FoundryStorageNotFoundError` invalidates its cached binding and propagates
-the error; the next borrow resolves the store again. Missing item reads returned
-as `None` do not invalidate the binding.
+Use `InvocationsHostServer` to serve your graph through the `/invocations` endpoint:
 
-The Responses transcript provider is selected by the underlying `azure-ai-agentserver-responses` runtime. The version in the lockfile defaults to `FileResponseStore` locally. Tests can pass an in-memory provider explicitly. Foundry-hosted containers use the Foundry-backed storage provider when the platform environment variables are present. This transcript store is separate from the LangGraph checkpointer, which stores graph runtime state.
+```python
+from langchain_azure_ai.agents.hosting import InvocationsHostServer
 
-### Durable graph state
+graph = build_my_graph()  # returns a compiled LangGraph graph
+
+if __name__ == "__main__":
+    InvocationsHostServer(graph).run()
+```
+
+To launch with `langgraph.json`, use `--protocol invocations`.
+
+`InvocationsHostServer` also supports background execution, conversation steering,
+and human-in-the-loop interrupts. Enable `resilient_background=True` for durable
+background turns, or `steerable_conversations=True` to let a new turn supersede an
+active turn in the same `agent_session_id`. Resilient background execution requires
+a LangGraph checkpointer; use a durable checkpointer for hosted production
+deployments.
+
+Steering and durable background recovery are experimental and emit feature-level
+`ExperimentalWarning` warnings when enabled.
+
+See the [Invocations hosting overview](docs/hosting/invocations.md) for
+configuration, request formats, polling, cancellation, and interrupt handling, and the
+[Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md)
+for setup and deployment.
+
+<a id="durable-graph-state"></a>
+
+### Persisting graph state
 
 Use `FoundryCheckpointSaver` to persist LangGraph runtime state, including
 checkpoints and pending writes, in **Foundry State Store** so a hosted graph
 can resume across turns and container restarts. It is an async-only
-checkpointer, separate from the Responses transcript store described above.
+checkpointer, separate from the Responses transcript store.
 Compile the graph with the saver and keep its async context open for the
 host's lifetime:
 
@@ -339,9 +395,15 @@ async def main() -> None:
     await ResponsesHostServer(graph).run_async()
 ```
 
-`FoundryCheckpointSaver` is intended for a Foundry-hosted agent using container
-protocol `2.0.0`, which supplies the request context required by the state-store
-API. Use an in-memory or database-backed LangGraph saver for local development.
+Locally, `FoundryCheckpointSaver` uses files under
+`~/.agentserver/state_stores`. Set `AGENTSERVER_STATE_ROOT` to choose another
+state root. Reuse that directory and the same conversation/thread ID across
+local restarts. These files stay on the local machine.
+
+Foundry-hosted agents use **Foundry State Store** with container protocol
+`2.0.0`, which supplies the hosted request context. See
+[storage choices](docs/hosting/responses.md#storage-choices) for the separate
+roles of graph checkpoints, conversation references, and response storage.
 
 For an end-to-end example that selects an in-memory saver locally and
 `FoundryCheckpointSaver` when hosted, see the
@@ -354,9 +416,11 @@ compatible. Cross-thread long-term memory is a separate concern; use a
 rather than a checkpointer for that purpose.
 
 
-### Auto tracing to Azure Application Insights
+<a id="auto-tracing-to-azure-application-insights"></a>
 
-To trace your LangChain / LangGraph applications with Azure Application Insights, first install the OpenTelemetry extras:
+### Tracing with Azure Application Insights
+
+To trace your LangChain, LangGraph, or Deep Agents applications with Azure Application Insights, first install the OpenTelemetry extras:
 
 ```bash
 pip install -U langchain-azure-ai[opentelemetry]
@@ -378,7 +442,9 @@ enable_auto_tracing(
 
 For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights.py`](https://github.com/langchain-ai/langchain-azure/blob/main/samples/enable_auto_tracing_appinsights.py).
 
-### Microsoft Foundry Tools
+<a id="microsoft-foundry-tools"></a>
+
+### Using Microsoft Foundry Tools
 
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
 
@@ -386,6 +452,36 @@ Azure AI Content Understanding is also available as a document loader via `Azure
 
 
 ## Changelog
+
+- **1.4.0**:
+
+  - **[NEW, Experimental]** We added `AzureAIOpenAIApiDecisions` for Azure OpenAI Decisions API integrations, including Foundry project endpoints and API key or Microsoft Entra ID authentication. [#1343](https://github.com/langchain-ai/langchain-azure/pull/1343)
+  - We promoted `InvocationsHostServer` and `ResponsesHostServer` out of experimental status without changing their public interfaces. Conversation steering, resilient background execution, and response branching remain experimental and emit `ExperimentalWarning` when enabled. [#1373](https://github.com/langchain-ai/langchain-azure/pull/1373)
+  - **[Breaking change]:** We tightened v2 agent MCP approval validation. Use boolean decisions, objects with a boolean `approve` and optional string `reason`, or the strings `"true"` and `"false"`. Other values, including previously accepted shortcuts such as `"yes"` and `"deny"`, now raise validation errors instead of being converted to approval decisions. [#1337](https://github.com/langchain-ai/langchain-azure/pull/1337) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+
+    Migration tip: Replace `Command(resume="yes")` with `Command(resume=True)` and `Command(resume="deny")` with `Command(resume=False)`. To include a reason, use `Command(resume={"approve": False, "reason": "..."})`. For approval `ToolMessage` content, use `"true"` / `"false"` or a JSON string such as `'{"approve": false, "reason": "..."}'`.
+
+  - We fixed v2 agent input and output schemas to respect LangChain middleware annotations. Compatibility note: Private fields, including `jump_to`, are now ignored in input and omitted from `invoke()` results, so callers relying on their previous exposure must update their code. These fields remain available to middleware and checkpointers, and `stream_mode="values"` still includes the full state. [#1372](https://github.com/langchain-ai/langchain-azure/pull/1372) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed v2 agents to execute every parallel function call, present every MCP approval request, and submit all corresponding outputs in order for both regular invocation and message streaming. [#1345](https://github.com/langchain-ai/langchain-azure/pull/1345) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzurePromptShieldMiddleware` to screen tool results before the agent model sees them, with the configured error, replace, or continue behavior. [#1377](https://github.com/langchain-ai/langchain-azure/pull/1377) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzureAIMemoryMiddleware` to track processed messages per thread, send each new turn without a checkpointer, and recover queued or failed updates still present in checkpointed messages after recreation. Initial history sends only the latest turn, and summarization messages are excluded. [#1347](https://github.com/langchain-ai/langchain-azure/pull/1347) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We made `ResponsesHostServer` reject `resilient_background=True` without a LangGraph checkpointer at construction, including when an existing `app` is supplied. [#1351](https://github.com/langchain-ai/langchain-azure/pull/1351)
+  - We deferred optional tracing imports in v1 and v2 `AgentServiceFactory` until `create_prompt_agent(trace=True)`, so disabling tracing no longer requires the `opentelemetry` extra. Requests with tracing enabled validate these dependencies before creating a remote agent. [#1349](https://github.com/langchain-ai/langchain-azure/pull/1349)
+  - We expanded the Invocations and Responses hosting references and added a guide for deploying LangGraph as a Foundry hosted agent. [#1333](https://github.com/langchain-ai/langchain-azure/pull/1333) [#1334](https://github.com/langchain-ai/langchain-azure/pull/1334) [#1268](https://github.com/langchain-ai/langchain-azure/pull/1268)
+
+- **1.3.1**:
+
+  - We added a hosting telemetry flag that records whether response branching is enabled. [#1307](https://github.com/langchain-ai/langchain-azure/pull/1307)
+  - We fixed `AzureSearch.add_texts()` and `aadd_texts()` to upload texts supplied as generators or other one-shot iterables instead of silently returning no results. [#1330](https://github.com/langchain-ai/langchain-azure/pull/1330) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzureSearch.from_embeddings()` and `afrom_embeddings()` to accept constructor options without forwarding them to document uploads, while preserving supplied document keys. [#1328](https://github.com/langchain-ai/langchain-azure/pull/1328) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed Azure Search authentication to use a supplied token credential or the default Azure credential when the API key is empty or omitted. Nonempty API keys retain precedence. [#1327](https://github.com/langchain-ai/langchain-azure/pull/1327) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed Azure Search custom field names to resolve when each store is constructed, so `AZURESEARCH_FIELDS_*` settings work after import and remain consistent across synchronous and asynchronous operations. [#918](https://github.com/langchain-ai/langchain-azure/pull/918) Thanks to [@cr-sbarbouche](https://github.com/cr-sbarbouche).
+  - We fixed Azure Search retriever filtering so `search_kwargs={"filter": ...}` no longer returns unfiltered results or raises `TypeError`. For 1.3.0 and earlier, use `search_kwargs={"filters": ...}` as a workaround. Passing both names now raises `ValueError`. [#1303](https://github.com/langchain-ai/langchain-azure/pull/1303) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed asynchronous Azure Search MMR searches to return an empty list when no documents match. [#817](https://github.com/langchain-ai/langchain-azure/pull/817) Thanks to [@0xDevNinja](https://github.com/0xDevNinja).
+  - We fixed `AzureAIChatCompletionsModel` to send zero-valued settings such as `temperature=0` and `seed=0`, and to let per-call options override model defaults without duplicate-keyword errors. [#1269](https://github.com/langchain-ai/langchain-azure/pull/1269) Thanks to [@pcbeingused333](https://github.com/pcbeingused333).
+  - We fixed `AzureAIImageAnalysisTool` construction and visual-feature handling, included `caption` and `denseCaptions` in its output, and surfaced service failures instead of returning an empty result. [#1302](https://github.com/langchain-ai/langchain-azure/pull/1302) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We fixed `AzureAIOpenTelemetryTracer` to use the retriever's run or class name for retriever spans when no serialized name is available. [#1321](https://github.com/langchain-ai/langchain-azure/pull/1321) Thanks to [@hyeonsang010716](https://github.com/hyeonsang010716).
+  - We improved documentation for SDK setup, Agent Service, durable state, and hosting. [#1299](https://github.com/langchain-ai/langchain-azure/pull/1299) [#1308](https://github.com/langchain-ai/langchain-azure/pull/1308) [#1309](https://github.com/langchain-ai/langchain-azure/pull/1309) [#1315](https://github.com/langchain-ai/langchain-azure/pull/1315) [#1329](https://github.com/langchain-ai/langchain-azure/pull/1329)
 
 - **1.3.0**:
 

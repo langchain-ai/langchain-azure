@@ -39,6 +39,7 @@ from langgraph.types import Command, Interrupt
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
+from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.agents.hosting import (
     HostingFeature,
     InvocationsHostServer,
@@ -126,6 +127,43 @@ def test_constructor_registers_steerable_conversations_feature() -> None:
     expected = HostingFeature.INVOCATIONS | HostingFeature.STEERABLE_CONVERSATIONS
     assert server._hosting_features == expected
     add_process_features.assert_called_once_with(expected)
+
+
+@pytest.mark.parametrize("host_class", [InvocationsHostServer, ResponsesHostServer])
+@pytest.mark.parametrize(
+    ("options", "expected_features"),
+    [
+        (None, ()),
+        (ResponsesServerOptions(), ()),
+        (
+            ResponsesServerOptions(resilient_background=True),
+            ("resilient_background",),
+        ),
+        (
+            ResponsesServerOptions(steerable_conversations=True),
+            ("steerable_conversations",),
+        ),
+        (
+            ResponsesServerOptions(
+                resilient_background=True, steerable_conversations=True
+            ),
+            ("resilient_background", "steerable_conversations"),
+        ),
+    ],
+)
+def test_constructor_warns_only_for_enabled_experimental_features(
+    host_class: type[InvocationsHostServer] | type[ResponsesHostServer],
+    options: ResponsesServerOptions | None,
+    expected_features: tuple[str, ...],
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    host_class(make_checkpointed_echo_graph(), options=options)
+
+    warnings = [item for item in recwarn if item.category is ExperimentalWarning]
+    assert len(warnings) == len(expected_features)
+    for feature in expected_features:
+        assert any(feature in str(item.message) for item in warnings)
+    assert all(item.filename == __file__ for item in warnings)
 
 
 @pytest.mark.parametrize(
