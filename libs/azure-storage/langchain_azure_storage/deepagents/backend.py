@@ -1078,7 +1078,8 @@ class AzureBlobBackend(BackendProtocol):
 
         Args:
             pattern: Literal substring to search for.
-            path: Directory scope for the search (default: ``"/"``).
+            path: Directory to search recursively, or a single file to search
+                on its own (default: ``"/"``).
             glob: Optional glob to pre-filter files, using the same contract as
                 ``glob()``: a pattern without a slash (e.g. ``"*.py"``) matches
                 file names at any depth, a pattern with a slash is matched
@@ -1103,7 +1104,7 @@ class AzureBlobBackend(BackendProtocol):
 
         failed: list[str] = []
         container = self._get_sync_container()
-        blobs = self._list_target_blobs_sync(container, search_path)
+        blobs = self._list_grep_blobs_sync(container, search_path)
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
         def scan(blob: Any) -> list[GrepMatch]:
@@ -1150,7 +1151,8 @@ class AzureBlobBackend(BackendProtocol):
 
         Args:
             pattern: Literal substring to search for.
-            path: Directory scope for the search (default: ``"/"``).
+            path: Directory to search recursively, or a single file to search
+                on its own (default: ``"/"``).
             glob: Optional glob to pre-filter files, using the same contract as
                 ``glob()``: a pattern without a slash (e.g. ``"*.py"``) matches
                 file names at any depth, a pattern with a slash is matched
@@ -1175,7 +1177,7 @@ class AzureBlobBackend(BackendProtocol):
 
         failed: list[str] = []
         container = await self._get_async_container()
-        blobs = await self._list_target_blobs_async(container, search_path)
+        blobs = await self._list_grep_blobs_async(container, search_path)
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
         # Concurrency bound must not come from the chunking below: an uncapped
@@ -1367,18 +1369,51 @@ class AzureBlobBackend(BackendProtocol):
     def _list_target_blobs_sync(
         self, container: ContainerClient, path: str
     ) -> list[Any]:
-        # glob()/grep() treat *path* as a directory (per the BackendProtocol
-        # contract), so we recursively list everything under its prefix.
+        # *path* is listed as a directory: everything under its prefix,
+        # recursively. glob() stops there; grep() also accepts a single file,
+        # see `_list_grep_blobs_sync`.
         return self._list_blobs_sync(container, get_prefix_for_path(self._prefix, path))
 
     async def _list_target_blobs_async(
         self, container: AsyncContainerClient, path: str
     ) -> list[Any]:
-        # glob()/grep() treat *path* as a directory (per the BackendProtocol
-        # contract), so we recursively list everything under its prefix.
+        # *path* is listed as a directory: everything under its prefix,
+        # recursively. glob() stops there; grep() also accepts a single file,
+        # see `_list_grep_blobs_sync`.
         return await self._list_blobs_async(
             container, get_prefix_for_path(self._prefix, path)
         )
+
+    def _list_grep_blobs_sync(self, container: ContainerClient, path: str) -> list[Any]:
+        # Unlike glob(), grep() also takes the path of a single file, as the
+        # other Deep Agents backends do: an agent often searches the one file it
+        # just wrote, and an empty result there reads as "no such text". Only a
+        # path with nothing under it can be a file, so a directory search issues
+        # no extra request, and the blob is fetched by its exact key so that a
+        # sibling sharing the name stem (``/a.txt`` vs ``/a.txt.bak``) is never
+        # read.
+        blobs = self._list_target_blobs_sync(container, path)
+        if blobs or path == "/":
+            return blobs
+        try:
+            return [
+                container.get_blob_client(self._blob_key(path)).get_blob_properties()
+            ]
+        except ResourceNotFoundError:
+            return []
+
+    async def _list_grep_blobs_async(
+        self, container: AsyncContainerClient, path: str
+    ) -> list[Any]:
+        # See `_list_grep_blobs_sync`.
+        blobs = await self._list_target_blobs_async(container, path)
+        if blobs or path == "/":
+            return blobs
+        try:
+            blob_client = container.get_blob_client(self._blob_key(path))
+            return [await blob_client.get_blob_properties()]
+        except ResourceNotFoundError:
+            return []
 
     def _list_blobs_sync(self, container: ContainerClient, prefix: str) -> list[Any]:
         return [blob for blob in container.list_blobs(name_starts_with=prefix or None)]
