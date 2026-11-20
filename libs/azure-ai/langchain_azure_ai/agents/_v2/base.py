@@ -18,7 +18,19 @@ import binascii
 import json
 import logging
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
@@ -61,7 +73,7 @@ from openai.types.responses.response_input_item_param import (
 from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -133,16 +145,16 @@ def _get_agent_state(
 # ---------------------------------------------------------------------------
 
 
-def _function_call_to_ai_message(
-    func_call: ResponseFunctionToolCall,
+def _function_calls_to_ai_message(
+    func_calls: Sequence[ResponseFunctionToolCall],
 ) -> AIMessage:
-    """Convert a V2 ``ResponseFunctionToolCall`` to a LangChain ``AIMessage``.
+    """Convert V2 ``ResponseFunctionToolCall`` items to a LangChain ``AIMessage``.
 
     Args:
-        func_call: The function call item from the response output.
+        func_calls: The function call items from the response output.
 
     Returns:
-        An ``AIMessage`` with the corresponding ``tool_calls``.
+        An ``AIMessage`` with one entry in ``tool_calls`` per function call.
     """
     tool_calls: List[ToolCall] = [
         ToolCall(
@@ -150,14 +162,15 @@ def _function_call_to_ai_message(
             name=func_call.name,
             args=json.loads(func_call.arguments),
         )
+        for func_call in func_calls
     ]
     return AIMessage(content="", tool_calls=tool_calls)
 
 
-def _mcp_approval_to_ai_message(
-    approval_request: McpApprovalRequestOutputItem,
+def _mcp_approvals_to_ai_message(
+    approval_requests: Sequence[McpApprovalRequestOutputItem],
 ) -> AIMessage:
-    """Convert a V2 ``McpApprovalRequestOutputItem`` to a LangChain ``AIMessage``.
+    """Convert V2 MCP approval requests to a LangChain ``AIMessage``.
 
     MCP approval requests are surfaced as tool calls so they can flow through
     the standard LangGraph REACT tool-call loop.  The synthetic tool name is
@@ -166,12 +179,12 @@ def _mcp_approval_to_ai_message(
     whether to approve.
 
     Args:
-        approval_request: The MCP approval request item from the response
+        approval_requests: The MCP approval request items from the response
             output.
 
     Returns:
-        An ``AIMessage`` whose ``tool_calls`` list contains one entry
-        representing the approval request.
+        An ``AIMessage`` whose ``tool_calls`` list contains one entry per
+        approval request.
     """
     tool_calls: List[ToolCall] = [
         ToolCall(
@@ -183,6 +196,7 @@ def _mcp_approval_to_ai_message(
                 "arguments": approval_request.arguments,
             },
         )
+        for approval_request in approval_requests
     ]
     return AIMessage(content="", tool_calls=tool_calls)
 
@@ -256,6 +270,43 @@ def _get_v2_tool_definitions(
     return tool_definitions
 
 
+class _McpApprovalObject(BaseModel):
+    """An MCP approval decision with an optional reason."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    approve: bool
+    reason: Optional[str] = None
+
+
+_McpApprovalValue = Union[StrictBool, Literal["true", "false"], _McpApprovalObject]
+
+
+class _McpApprovalDecision(RootModel[_McpApprovalValue]):
+    """``True`` / ``False``, ``"true"`` / ``"false"``, or an approval object."""
+
+
+def _parse_approval_decision(decision: Any) -> Tuple[bool, Optional[str]]:
+    """Validate an MCP approval decision.
+
+    Args:
+        decision: ``True`` / ``False``, ``"true"`` / ``"false"``, or a dict with
+            a boolean ``approve`` and an optional string ``reason``.
+
+    Returns:
+        The ``approve`` value and the ``reason``, if any.
+
+    Raises:
+        pydantic.ValidationError: If ``decision`` has any other shape or value.
+    """
+    value = _McpApprovalDecision.model_validate(decision).root
+    if isinstance(value, _McpApprovalObject):
+        return value.approve, value.reason
+    if isinstance(value, bool):
+        return value, None
+    return value == "true", None
+
+
 def _approval_message_to_output(
     tool_message: ToolMessage,
 ) -> McpApprovalResponse:
@@ -273,33 +324,26 @@ def _approval_message_to_output(
 
     Returns:
         A ``McpApprovalResponse`` ready to be sent back to the Responses API.
-    """
-    content = tool_message.content
-    approve = True
-    reason: Optional[str] = None
 
+    Raises:
+        pydantic.ValidationError: If the content isn't one of the accepted
+            shapes.
+        ValueError: If the message has no ``tool_call_id``.
+    """
+    content: Any = tool_message.content
+
+    if isinstance(content, list):
+        # E.g. [{"type": "text", "text": "true"}]
+        content = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
     if isinstance(content, str):
         try:
-            parsed = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            parsed = content
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            pass
 
-        if isinstance(parsed, dict):
-            approve = bool(parsed.get("approve", True))
-            reason = parsed.get("reason")
-        else:
-            # Plain string: "true"/"false" (case-insensitive)
-            approve = str(parsed).lower() not in ("false", "0", "no", "deny")
-    elif isinstance(content, dict):
-        approve = bool(content.get("approve", True))
-        reason = content.get("reason")
-    elif isinstance(content, list):
-        # E.g. [{"type": "text", "text": "true"}]
-        text_parts = [
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        ]
-        combined = " ".join(text_parts).strip().lower()
-        approve = combined not in ("false", "0", "no", "deny")
+    approve, reason = _parse_approval_decision(content)
 
     if tool_message.tool_call_id is None:
         raise ValueError(
@@ -344,6 +388,29 @@ def _get_input_from_state(state: StateSchema) -> BaseMessage:
             "{'messages': [HumanMessage(content='...')]}) when invoking the agent."
         )
     return messages[-1]
+
+
+def _get_tool_messages_from_state(state: StateSchema) -> List[ToolMessage]:
+    """Extract the tool messages at the end of the state's messages.
+
+    A response can ask for several function calls or MCP approvals at once,
+    and each one is answered by its own ``ToolMessage``.
+
+    Args:
+        state: The current state, whose latest message is a ``ToolMessage``.
+
+    Returns:
+        The trailing ``ToolMessage`` instances, in order.
+    """
+    messages = (
+        state["messages"] if isinstance(state, dict) else getattr(state, "messages")
+    )
+    tool_messages: List[ToolMessage] = []
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage):
+            break
+        tool_messages.append(message)
+    return tool_messages[::-1]
 
 
 def _content_from_human_message(
@@ -675,24 +742,22 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             # There are pending function calls – return them as tool calls
             self.pending_function_calls = function_calls
             self.pending_mcp_approvals = []
-            for fc in function_calls:
-                generations.append(
-                    ChatGeneration(
-                        message=_function_call_to_ai_message(fc),
-                        generation_info={},
-                    )
+            generations.append(
+                ChatGeneration(
+                    message=_function_calls_to_ai_message(function_calls),
+                    generation_info={},
                 )
+            )
         elif mcp_approvals:
             # There are MCP approval requests – surface as tool calls
             self.pending_mcp_approvals = mcp_approvals
             self.pending_function_calls = []
-            for ar in mcp_approvals:
-                generations.append(
-                    ChatGeneration(
-                        message=_mcp_approval_to_ai_message(ar),
-                        generation_info={},
-                    )
+            generations.append(
+                ChatGeneration(
+                    message=_mcp_approvals_to_ai_message(mcp_approvals),
+                    generation_info={},
                 )
+            )
         else:
             # Completed response – extract text and any generated files.
             self.pending_function_calls = []
@@ -1213,9 +1278,10 @@ AgentServiceBaseTool`
 
         try:
             if isinstance(message, ToolMessage):
+                tool_messages = _get_tool_messages_from_state(state)
                 logger.info(
-                    "Submitting tool message (tool_call_id=%s)",
-                    message.tool_call_id,
+                    "Submitting tool messages (tool_call_ids=%s)",
+                    [m.tool_call_id for m in tool_messages],
                 )
 
                 input_items: ResponseInputParam = []
@@ -1225,9 +1291,11 @@ AgentServiceBaseTool`
                 # only the converter function differs.
                 if pending_type == "mcp_approval":
                     logger.info("Submitting MCP approval response")
-                    input_items = [_approval_message_to_output(message)]
+                    input_items = [
+                        _approval_message_to_output(m) for m in tool_messages
+                    ]
                 elif pending_type == "function_call":
-                    input_items = [_tool_message_to_output(message)]
+                    input_items = [_tool_message_to_output(m) for m in tool_messages]
                 else:
                     raise RuntimeError(
                         "No pending function calls or MCP approval requests "

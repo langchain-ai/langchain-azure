@@ -33,11 +33,11 @@ or keyword argument; all other constructor parameters are keyword-only.
 | Constructor parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `graph` | `Runnable[GraphInputT, GraphOutputT]` | Required | The graph or runnable to serve. |
-| `app` | `InvocationAgentServerHost \| None` | `None` | Attach to an existing Invocations app, or create one when omitted. |
-| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two options are used by this wrapper. |
+| `app` | `InvocationAgentServerHost \| None` | `None` | Use an existing app, or create one from the arguments passed to `InvocationsHostServer` when `app=None`. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. Only these two fields configure `InvocationsHostServer`, whether `app` is supplied or created automatically; other fields have no effect. |
 | `output_parser` | `Callable[[GraphOutputT], str] \| None` | `None` | Synchronously extract final non-streaming response text; the default uses the last AI message. This does not change SSE token output. |
-| `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
-| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown on the created app. |
+| `applicationinsights_connection_string` | `str \| None` | `None` | Configure Application Insights when `app=None`; ignored when an existing `app` is supplied. |
+| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown when `app=None`; ignored when an existing `app` is supplied. |
 
 The host, `InvocationAgentServerHost`, and `ResponsesServerOptions` are available
 from `langchain_azure_ai.agents.hosting`. Import `Runnable` from
@@ -45,9 +45,23 @@ from `langchain_azure_ai.agents.hosting`. Import `Runnable` from
 types describe the runnable; request parsing and output conversion still use
 the defaults below unless customized.
 
+> [!WARNING]
+> Conversation steering (`options.steerable_conversations=True`) and long-running
+> crash recovery (`options.resilient_background=True`) are experimental. Each
+> emits its own `ExperimentalWarning` when enabled. Both are disabled by default;
+> ordinary host construction does not emit an experimental warning.
+
 > [!NOTE]
-> When supplying `app`, configure its telemetry and shutdown settings on that
-> app. The wrapper still reads `options` to configure invocation execution.
+> When `app=None`, pass `applicationinsights_connection_string` and
+> `graceful_shutdown_timeout` directly to `InvocationsHostServer`. When supplying
+> an existing `app`, configure these settings when creating
+> `InvocationAgentServerHost`; passing them to `InvocationsHostServer` does not
+> change the supplied app.
+>
+> In both cases, pass `options` to `InvocationsHostServer` to configure resilience
+> and steering. Only `resilient_background` and `steerable_conversations` are
+> used; other fields have no effect.
+>
 > Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 
 ### Lifecycle and accessors

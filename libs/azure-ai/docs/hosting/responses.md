@@ -33,23 +33,39 @@ positional or keyword argument; all other constructor parameters are keyword-onl
 | Constructor parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `graph` | `CompiledStateGraph` | Required | The compiled graph to serve. |
-| `app` | `ResponsesAgentServerHost \| None` | `None` | Attach to an existing Agent Server app, or create one when omitted. |
-| `options` | `ResponsesServerOptions \| None` | `None` | Use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. |
-| `store` | `ResponseProviderProtocol \| None` | `None` | If not specified, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
+| `app` | `ResponsesAgentServerHost \| None` | `None` | Use an existing app, or create one from the arguments passed to `ResponsesHostServer` when `app=None`. |
+| `options` | `ResponsesServerOptions \| None` | `None` | Configure the app created when `app=None`. If omitted, use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. With an existing `app`, these two fields must match the values used to create it; they are not inferred or checked. |
+| `store` | `ResponseProviderProtocol \| None` | `None` | Configure response storage when `app=None`; ignored when an existing `app` is supplied. If omitted with `app=None`, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
 | `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
 | `enable_response_branching` | `bool` | `False` | Continue from a named response's exact graph checkpoint. |
-| `prefix` | `str` | `""` | Add a prefix to the protocol routes. |
-| `applicationinsights_connection_string` | `str \| None` | `None` | Configure telemetry on the created app. |
-| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown on the created app. |
+| `prefix` | `str` | `""` | Add a prefix to the protocol routes when `app=None`; ignored when an existing `app` is supplied. |
+| `applicationinsights_connection_string` | `str \| None` | `None` | Configure Application Insights when `app=None`; ignored when an existing `app` is supplied. |
+| `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown when `app=None`; ignored when an existing `app` is supplied. |
 
 The host, options, provider, and conversation-chain protocol types are available
 from `langchain_azure_ai.agents.hosting`. `CompiledStateGraph` is defined in
 `langgraph.graph.state`.
 
+> [!WARNING]
+> Response branching (`enable_response_branching=True`), conversation steering
+> (`options.steerable_conversations=True`), and long-running crash recovery
+> (`options.resilient_background=True`) are experimental. Each emits its own
+> `ExperimentalWarning` when enabled. All are disabled by default; ordinary
+> host construction does not emit an experimental warning.
+
 > [!NOTE]
-> When supplying `app`, configure its host-level settings, including response
-> storage, route prefix, telemetry, and shutdown, on that app. Pass the same
-> `options` to the app and the wrapper so their runtime settings agree.
+> When `app=None`, pass `store`, `prefix`,
+> `applicationinsights_connection_string`, and `graceful_shutdown_timeout`
+> directly to `ResponsesHostServer`. When supplying an existing `app`, configure
+> these settings when creating `ResponsesAgentServerHost`; passing them to
+> `ResponsesHostServer` does not change the supplied app.
+>
+> With an existing `app`, `resilient_background` and `steerable_conversations`
+> in the `options` passed to `ResponsesHostServer` must match the values used
+> to create `app`. These values are not automatically inferred from `app` or
+> checked for consistency. Passing the same options instance to both
+> constructors is the simplest way to keep them aligned.
+>
 > Supply the graph's [checkpointer](https://docs.langchain.com/oss/python/langgraph/checkpointers) when compiling it.
 > The constructor's `store` provider and the request's `store` retention flag
 > are separate controls.

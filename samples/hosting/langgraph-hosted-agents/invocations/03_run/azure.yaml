@@ -1,0 +1,25 @@
+name: langchain-azure-agent-run-invocations
+
+infra:
+  provider: microsoft.foundry
+
+services:
+  langchain-azure-agent-run-invocations:
+    project: .
+    host: azure.ai.agent
+    language: docker
+    kind: hosted
+    name: langchain-azure-agent-run-invocations
+    startupCommand: python -m langchain_azure_ai.agents.hosting.run --protocol invocations
+    docker:
+      path: Dockerfile
+    container:
+      resources:
+        cpu: "0.25"
+        memory: 0.5Gi
+    environmentVariables:
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: invocations
+        version: 1.0.0

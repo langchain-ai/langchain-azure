@@ -38,9 +38,6 @@ from langchain_azure_ai.agents._v1.prebuilt.declarative import (
     _get_tool_resources,
 )
 from langchain_azure_ai.agents._v1.prebuilt.tools import AgentServiceBaseTool
-from langchain_azure_ai.callbacks.tracers.inference_tracing import (
-    AzureAIOpenTelemetryTracer,
-)
 from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__package__)
@@ -449,12 +446,22 @@ PromptBasedAgentNode`
             interrupt_after: A list of node names to interrupt after.
             trace: Whether to enable tracing. When enabled, an OpenTelemetry tracer
                 will be created using the project endpoint and credential provided
-                to the factory.
+                to the factory. Requires the ``opentelemetry`` extra. When False,
+                the factory does not load or attach this tracer.
             debug: Whether to enable debug mode.
 
         Returns:
             A CompiledStateGraph representing the agent workflow.
+
+        Raises:
+            ImportError: If tracing is enabled and its optional dependencies
+                are not installed.
         """
+        if trace:
+            from langchain_azure_ai.callbacks.tracers.inference_tracing import (
+                AzureAIOpenTelemetryTracer,
+            )
+
         logger.info("Creating agent with name: %s", name)
 
         if state_schema is None:

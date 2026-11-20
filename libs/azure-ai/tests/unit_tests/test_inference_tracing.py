@@ -18,8 +18,12 @@ pytest.importorskip("opentelemetry")
 pytest.importorskip("langchain_core")
 
 from langchain_core.agents import AgentAction  # noqa: E402
-from langchain_core.callbacks import CallbackManagerForRetrieverRun  # noqa: E402
+from langchain_core.callbacks import (  # noqa: E402
+    CallbackManagerForLLMRun,
+    CallbackManagerForRetrieverRun,
+)
 from langchain_core.documents import Document  # noqa: E402
+from langchain_core.language_models import BaseLLM  # noqa: E402
 from langchain_core.messages import (  # noqa: E402
     AIMessage,
     BaseMessage,
@@ -27,7 +31,7 @@ from langchain_core.messages import (  # noqa: E402
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
+from langchain_core.outputs import ChatGeneration, Generation, LLMResult  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
@@ -1961,6 +1965,48 @@ def test_llm_end_fills_request_model_from_response_when_missing() -> None:
     )
     assert span2.attributes.get(tracing.Attrs.REQUEST_MODEL) == "gpt-4o"
     assert span2.attributes.get(tracing.Attrs.RESPONSE_MODEL) == "gpt-4o-2026-04-01"
+
+
+class CompletionLLM(BaseLLM):
+    @property
+    def _llm_type(self) -> str:
+        return "completion"
+
+    def _generate(
+        self,
+        prompts: List[str],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> LLMResult:
+        return LLMResult(
+            generations=[
+                [Generation(text="ok", generation_info={"finish_reason": "stop"})]
+                for _ in prompts
+            ],
+            llm_output={
+                "token_usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                "model_name": "gpt-35-turbo-instruct",
+            },
+        )
+
+
+def test_text_completion_llm_span_ends(span_exporter: InMemorySpanExporter) -> None:
+    """Text completion LLMs return `Generation`, which has no `message`."""
+    tracer = tracing.AzureAIOpenTelemetryTracer(auto_configure_azure_monitor=False)
+
+    result = CompletionLLM().invoke("hi", config=RunnableConfig(callbacks=[tracer]))
+
+    assert result == "ok"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "text_completion gpt-35-turbo-instruct"
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes is not None
+    assert span.attributes.get(tracing.Attrs.OPERATION_NAME) == "text_completion"
+    assert span.attributes.get(tracing.Attrs.RESPONSE_FINISH_REASONS) == '["stop"]'
+    assert span.attributes.get(tracing.Attrs.USAGE_INPUT_TOKENS) == 3
+    assert span.attributes.get(tracing.Attrs.USAGE_OUTPUT_TOKENS) == 1
+    assert not tracer._spans
 
 
 def test_retriever_start_end(monkeypatch: pytest.MonkeyPatch) -> None:

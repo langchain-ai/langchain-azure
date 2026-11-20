@@ -196,6 +196,64 @@ def test_allowed_transform_and_annotation(
     )
 
 
+_TEXT_LIST_CONTENT = pytest.mark.parametrize(
+    "content",
+    [["original"], [{"type": "input_text", "text": "original"}]],
+    ids=["str", "input_text"],
+)
+
+
+@_TEXT_LIST_CONTENT
+def test_allowed_transform_of_text_list_content(
+    middleware: AzureContentSafetyPolicyMiddleware, content: list[Any]
+) -> None:
+    message = HumanMessage(content=content)
+    client = MagicMock(
+        unified_moderate=MagicMock(
+            return_value=_result(content="safe replacement", decision="transform")
+        )
+    )
+    with patch.object(middleware, "_get_sync_client", return_value=client):
+        middleware.before_agent({"messages": [message]}, runtime=RUNTIME)
+    assert client.unified_moderate.call_args.args[0].content == "original"
+    assert message.text == "safe replacement"
+
+
+@pytest.mark.asyncio
+@_TEXT_LIST_CONTENT
+async def test_async_allowed_transform_of_text_list_content(
+    middleware: AzureContentSafetyPolicyMiddleware, content: list[Any]
+) -> None:
+    message = HumanMessage(content=content)
+    client = MagicMock(
+        unified_moderate=AsyncMock(
+            return_value=_result(content="safe replacement", decision="transform")
+        )
+    )
+    with patch.object(middleware, "_get_async_client", return_value=client):
+        await middleware.abefore_agent({"messages": [message]}, runtime=RUNTIME)
+    assert message.text == "safe replacement"
+
+
+def test_transform_rejects_non_text_blocks(
+    middleware: AzureContentSafetyPolicyMiddleware,
+) -> None:
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": "original"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+        ]
+    )
+    client = MagicMock(
+        unified_moderate=MagicMock(
+            return_value=_result(content="safe replacement", decision="transform")
+        )
+    )
+    with patch.object(middleware, "_get_sync_client", return_value=client):
+        with pytest.raises(ValueError, match="non-text blocks"):
+            middleware.before_agent({"messages": [message]}, runtime=RUNTIME)
+
+
 def test_allowed_detection_is_not_blocked(
     middleware: AzureContentSafetyPolicyMiddleware,
 ) -> None:

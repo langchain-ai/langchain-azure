@@ -8,16 +8,20 @@ import itertools
 import json
 import logging
 from typing import (
+    Annotated,
     Any,
     Callable,
     Dict,
     Hashable,
+    List,
     Literal,
     Optional,
     Sequence,
     Set,
     Type,
     Union,
+    get_args,
+    get_origin,
     get_type_hints,
 )
 
@@ -28,7 +32,7 @@ from azure.ai.projects.models import (
 )
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
-from langchain.agents.middleware.types import AgentMiddleware
+from langchain.agents.middleware.types import AgentMiddleware, OmitFromSchema
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils import pre_init
@@ -42,27 +46,39 @@ from langgraph.prebuilt.chat_agent_executor import (
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer, interrupt
-from pydantic import BaseModel, ConfigDict
-from typing_extensions import TypedDict
+from pydantic import BaseModel, ConfigDict, RootModel, StrictStr, model_validator
+from typing_extensions import NotRequired, Required, TypedDict
 
 from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
     ResponsesAgentNode,
     _get_v2_tool_definitions,
+    _McpApprovalValue,
+    _parse_approval_decision,
 )
 from langchain_azure_ai.agents._v2.prebuilt.tools import AgentServiceBaseTool
-from langchain_azure_ai.callbacks.tracers.inference_tracing import (
-    AzureAIOpenTelemetryTracer,
-)
 from langchain_azure_ai.utils.env import get_project_endpoint
 
 logger = logging.getLogger(__package__)
 
 
+def _is_omitted(field_type: Any, omit_flag: Literal["input", "output"]) -> bool:
+    """Return whether a field is marked with ``OmitFromSchema`` for ``omit_flag``."""
+    if get_origin(field_type) in {Required, NotRequired}:
+        field_type = get_args(field_type)[0]
+    if get_origin(field_type) is not Annotated:
+        return False
+    return any(
+        isinstance(meta, OmitFromSchema) and getattr(meta, omit_flag) is True
+        for meta in get_args(field_type)[1:]
+    )
+
+
 def _resolve_state_schema(
     state_schemas: "set[type]",
     schema_name: str,
+    omit_flag: Optional[Literal["input", "output"]] = None,
 ) -> "type":
     """Merge multiple TypedDict schemas into a single TypedDict.
 
@@ -74,6 +90,9 @@ def _resolve_state_schema(
         state_schemas: A set of TypedDict (or dataclass-like) types whose
             fields should be merged.
         schema_name: The ``__name__`` to give to the resulting TypedDict.
+        omit_flag: If set, leave out the fields marked with
+            ``OmitFromSchema`` for ``"input"`` or ``"output"``, such as
+            ``PrivateStateAttr`` fields.
 
     Returns:
         A new TypedDict type that contains all fields from all schemas.
@@ -82,6 +101,12 @@ def _resolve_state_schema(
     for schema in state_schemas:
         hints = get_type_hints(schema, include_extras=True)
         all_annotations.update(hints)
+    if omit_flag is not None:
+        all_annotations = {
+            field_name: field_type
+            for field_name, field_type in all_annotations.items()
+            if not _is_omitted(field_type, omit_flag)
+        }
     return TypedDict(schema_name, all_annotations)  # type: ignore[operator]
 
 
@@ -115,6 +140,50 @@ def external_tools_condition(
     return "__end__"
 
 
+class _McpApprovalInterruptItem(TypedDict):
+    """One approval request in the ``_mcp_approval_node`` interrupt value."""
+
+    id: StrictStr
+    server_label: Optional[StrictStr]
+    tool_name: Optional[StrictStr]
+    arguments: Optional[StrictStr]
+
+
+_McpApprovalResumeValue = Union[_McpApprovalValue, List[_McpApprovalInterruptItem]]
+
+
+def _mcp_approval_resume_schema(
+    interrupt_payload: List[Dict[str, Any]],
+) -> Type[RootModel[_McpApprovalResumeValue]]:
+    """Return the resume schema for an ``_mcp_approval_node`` interrupt.
+
+    A list resume value is only accepted when it equals ``interrupt_payload``,
+    which is how the Responses host approves.
+
+    Args:
+        interrupt_payload: The value passed to ``interrupt``.
+
+    Returns:
+        A model class to pass as ``response_schema``.
+    """
+
+    class _McpApprovalResume(RootModel[_McpApprovalResumeValue]):
+        """Resume value accepted by ``_mcp_approval_node``."""
+
+        # Strict, so a tuple or other sequence isn't coerced into a list
+        # after the echo check.
+        model_config = ConfigDict(strict=True)
+
+        @model_validator(mode="before")
+        @classmethod
+        def _check_echo(cls, value: Any) -> Any:
+            if isinstance(value, list) and value != interrupt_payload:
+                raise ValueError("A list resume value must equal the interrupt value.")
+            return value
+
+    return _McpApprovalResume
+
+
 def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     r"""Pause execution for human approval of MCP tool calls.
 
@@ -143,6 +212,10 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
     Returns:
         A dict with ``messages`` containing ``ToolMessage`` instances for
         each approval request, ready for the agent to continue.
+
+    Raises:
+        pydantic.ValidationError: If the resume value is not one of the shapes
+            above. Nothing is saved, so the interrupt can be answered again.
     """
     ai_message = state["messages"][-1]
     approval_requests = [
@@ -164,17 +237,20 @@ def _mcp_approval_node(state: MessagesState) -> Dict[str, list]:
         }
         for tc in approval_requests
     ]
-    decision = interrupt(interrupt_payload)
+    decision = interrupt(
+        interrupt_payload,
+        response_schema=_mcp_approval_resume_schema(interrupt_payload),
+    ).root
 
-    # Convert the human decision into a content string.
-    if isinstance(decision, bool):
-        content = json.dumps({"approve": decision})
-    elif isinstance(decision, dict):
-        content = json.dumps(decision)
-    elif isinstance(decision, str):
-        content = decision
+    if isinstance(decision, list):
+        # The Responses host approves by echoing the interrupt value back.
+        approve, reason = True, None
     else:
-        content = json.dumps({"approve": bool(decision)})
+        approve, reason = _parse_approval_decision(decision)
+    response: Dict[str, Any] = {"approve": approve}
+    if reason is not None:
+        response["reason"] = reason
+    content = json.dumps(response)
 
     tool_messages = [
         ToolMessage(content=content, tool_call_id=tc["id"]) for tc in approval_requests
@@ -599,7 +675,10 @@ ResponsesAgentNode`
             store: Store to use.
             interrupt_before: Nodes to interrupt before.
             interrupt_after: Nodes to interrupt after.
-            trace: Whether to enable tracing.
+            trace: Whether to create and attach an OpenTelemetry tracer using the
+                factory's project endpoint and credential. Requires the
+                ``opentelemetry`` extra. When False, the factory does not load
+                or attach this tracer.
             debug: Whether to enable debug mode.
             middleware: A sequence of
                 :class:`~langchain.agents.middleware.types.AgentMiddleware` instances
@@ -626,7 +705,16 @@ ResponsesAgentNode`
 
         Returns:
             A compiled ``StateGraph`` representing the agent workflow.
+
+        Raises:
+            ImportError: If tracing is enabled and its optional dependencies
+                are not installed.
         """
+        if trace:
+            from langchain_azure_ai.callbacks.tracers.inference_tracing import (
+                AzureAIOpenTelemetryTracer,
+            )
+
         logger.info("Creating V2 agent with name: %s", name)
 
         # ------------------------------------------------------------------ #
@@ -690,12 +778,18 @@ ResponsesAgentNode`
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
-        input_schema = resolved_state_schema
+        input_schema = _resolve_state_schema(state_schemas, "InputSchema", "input")
+        output_schema = _resolve_state_schema(state_schemas, "OutputSchema", "output")
 
         # ------------------------------------------------------------------ #
         # 4. Build the graph
         # ------------------------------------------------------------------ #
-        builder = StateGraph(resolved_state_schema, context_schema=context_schema)  # type: ignore[var-annotated]
+        builder = StateGraph(  # type: ignore[var-annotated]
+            resolved_state_schema,
+            context_schema=context_schema,
+            input_schema=input_schema,
+            output_schema=output_schema,
+        )
 
         logger.info("Adding ResponsesAgentNode")
         prompt_node = self.create_prompt_agent_node(
@@ -711,7 +805,7 @@ ResponsesAgentNode`
         builder.add_node(
             "foundryAgent",
             prompt_node,
-            input_schema=input_schema,
+            input_schema=resolved_state_schema,
             metadata=prompt_node.get_metadata(),
         )
         logger.info("ResponsesAgentNode added")
@@ -781,7 +875,7 @@ ResponsesAgentNode`
                 builder.add_node(
                     f"{m.name}.before_agent",
                     before_node,
-                    input_schema=input_schema,
+                    input_schema=resolved_state_schema,
                 )
 
             if (
@@ -802,7 +896,7 @@ ResponsesAgentNode`
                 builder.add_node(
                     f"{m.name}.after_agent",
                     after_node,
-                    input_schema=input_schema,
+                    input_schema=resolved_state_schema,
                 )
 
         # ------------------------------------------------------------------ #
