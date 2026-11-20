@@ -224,3 +224,122 @@ async def test_async_put_writes_and_get_tuple(
     retrieved = await async_saver.aget_tuple(config)
     assert retrieved is not None
     assert retrieved.pending_writes == [("task-1", "channel_a", "value_a")]
+
+
+def test_sync_list_without_namespace_spans_namespaces_and_threads(
+    sync_saver: AzureTableStorageSaver,
+) -> None:
+    tid = f"sync_ns_{uuid.uuid4().hex[:8]}"
+    other = f"{tid}x"  # shares the thread-id prefix; must not leak into `tid`
+    for thread, ns, cp_id in [
+        (tid, "", "cp_001"),
+        (tid, "sub|node:1", "cp_002"),
+        (other, "", "cp_003"),
+    ]:
+        config = {"configurable": {"thread_id": thread, "checkpoint_ns": ns}}
+        sync_saver.put(config, _checkpoint(cp_id), {}, {})
+
+    one_thread = list(sync_saver.list({"configurable": {"thread_id": tid}}))
+    assert [c.checkpoint["id"] for c in one_thread] == ["cp_002", "cp_001"]
+    assert [c.config["configurable"]["checkpoint_ns"] for c in one_thread] == [
+        "sub|node:1",
+        "",
+    ]
+
+    everything = list(sync_saver.list(None))
+    assert [c.checkpoint["id"] for c in everything] == ["cp_003", "cp_002", "cp_001"]
+
+
+def test_sync_list_checkpoint_id_and_non_ascii_ids(
+    sync_saver: AzureTableStorageSaver,
+) -> None:
+    tid = f"sync_ids_{uuid.uuid4().hex[:8]}"
+    cp_ids = ["cp_001", "~cp", "é-cp"]
+    for cp_id in cp_ids:
+        config = {"configurable": {"thread_id": tid, "checkpoint_ns": ""}}
+        sync_saver.put(config, _checkpoint(cp_id), {}, {})
+    write_config = {
+        "configurable": {"thread_id": tid, "checkpoint_ns": "", "checkpoint_id": "é-cp"}
+    }
+    sync_saver.put_writes(write_config, [("channel_a", "value_a")], "~task")
+
+    latest = sync_saver.get_tuple({"configurable": {"thread_id": tid}})
+    assert latest is not None
+    assert latest.checkpoint["id"] == "é-cp"
+    assert latest.pending_writes == [("~task", "channel_a", "value_a")]
+
+    listed = list(sync_saver.list({"configurable": {"thread_id": tid}}))
+    assert [c.checkpoint["id"] for c in listed] == ["é-cp", "~cp", "cp_001"]
+
+    only_one = list(
+        sync_saver.list(
+            {"configurable": {"thread_id": tid, "checkpoint_id": "~cp"}},
+        )
+    )
+    assert [c.checkpoint["id"] for c in only_one] == ["~cp"]
+
+
+def test_sync_put_persists_config_metadata(sync_saver: AzureTableStorageSaver) -> None:
+    tid = f"sync_meta_{uuid.uuid4().hex[:8]}"
+    config = {
+        "configurable": {"thread_id": tid, "checkpoint_ns": ""},
+        "metadata": {"user_id": "u1"},
+    }
+    sync_saver.put(config, _checkpoint("cp_001"), {"source": "input"}, {})
+
+    listed = list(sync_saver.list(None, filter={"user_id": "u1"}))
+    assert [c.checkpoint["id"] for c in listed] == ["cp_001"]
+    assert listed[0].metadata == {"source": "input", "user_id": "u1"}
+
+
+def test_sync_put_writes_mixed_batch_upserts_only_special_channel(
+    sync_saver: AzureTableStorageSaver,
+) -> None:
+    tid = f"sync_mixed_{uuid.uuid4().hex[:8]}"
+    config = {
+        "configurable": {"thread_id": tid, "checkpoint_ns": "", "checkpoint_id": "cp_1"}
+    }
+    sync_saver.put(config, _checkpoint("cp_1"), {}, {})
+    sync_saver.put_writes(config, [("channel_a", "first"), ("__resume__", "old")], "t")
+    sync_saver.put_writes(config, [("channel_a", "second"), ("__resume__", "new")], "t")
+
+    retrieved = sync_saver.get_tuple(config)
+    assert retrieved is not None
+    assert retrieved.pending_writes == [
+        ("t", "__resume__", "new"),
+        ("t", "channel_a", "first"),
+    ]
+
+
+async def test_async_list_without_namespace_spans_namespaces_and_threads(
+    async_saver: AzureTableStorageSaver,
+) -> None:
+    tid = f"async_ns_{uuid.uuid4().hex[:8]}"
+    other = f"{tid}x"
+    for thread, ns, cp_id in [
+        (tid, "", "cp_001"),
+        (tid, "sub|node:1", "cp_002"),
+        (other, "", "cp_003"),
+    ]:
+        config = {"configurable": {"thread_id": thread, "checkpoint_ns": ns}}
+        await async_saver.aput(config, _checkpoint(cp_id), {}, {})
+    await async_saver.aput_writes(
+        {
+            "configurable": {
+                "thread_id": tid,
+                "checkpoint_ns": "sub|node:1",
+                "checkpoint_id": "cp_002",
+            }
+        },
+        [("channel_a", "value_a")],
+        "~task",
+    )
+
+    one_thread = [
+        c async for c in async_saver.alist({"configurable": {"thread_id": tid}})
+    ]
+    assert [c.checkpoint["id"] for c in one_thread] == ["cp_002", "cp_001"]
+    assert one_thread[0].pending_writes == [("~task", "channel_a", "value_a")]
+
+    everything = [c async for c in async_saver.alist(None)]
+    assert [c.checkpoint["id"] for c in everything] == ["cp_003", "cp_002", "cp_001"]

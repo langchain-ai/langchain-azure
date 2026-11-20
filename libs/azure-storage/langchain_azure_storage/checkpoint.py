@@ -24,6 +24,7 @@ from langgraph.checkpoint.base import (
     CheckpointMetadata,
     CheckpointTuple,
     get_checkpoint_id,
+    get_checkpoint_metadata,
 )
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
@@ -146,12 +147,16 @@ def _get_chunked(entity: dict[str, Any], prefix: str) -> tuple[str, bytes]:
 
 def _checkpoint_tuple_from_entity(
     serde: SerializerProtocol,
-    thread_id: str,
-    checkpoint_ns: str,
     entity: dict[str, Any],
     pending_writes: list[tuple[str, str, Any]] | None,
 ) -> CheckpointTuple:
-    """Build a CheckpointTuple from a checkpoint entity."""
+    """Build a CheckpointTuple from a checkpoint entity.
+
+    The thread and namespace come from the entity itself so listings that
+    span namespaces or threads report each checkpoint's own scope.
+    """
+    thread_id = entity["thread_id"]
+    checkpoint_ns = entity["checkpoint_ns"]
     checkpoint_id = _parse_checkpoint_row_key(entity["RowKey"])
     checkpoint = serde.loads_typed(_get_chunked(entity, "checkpoint"))
     metadata = serde.loads_typed(_get_chunked(entity, "metadata"))
@@ -228,14 +233,41 @@ def _write_entity(
     return entity
 
 
-def _checkpoints_query(partition_key: str, before_id: str | None) -> tuple[str, dict]:
-    """Build the OData filter selecting all checkpoint entities in a partition."""
-    query_filter = "PartitionKey eq @pk and RowKey ge @lo and RowKey lt @hi"
-    parameters = {
-        "pk": partition_key,
-        "lo": f"checkpoint{_KEY_SEPARATOR}",
-        "hi": f"checkpoint{_KEY_SEPARATOR}~",
-    }
+def _prefix_upper_bound(prefix: str) -> str:
+    """Return the exclusive upper bound of every string starting with *prefix*.
+
+    Callers always pass a prefix ending in the separator, so bumping its last
+    character covers every continuation. A fixed sentinel such as ``~`` does
+    not: keys may legally contain characters that sort after it.
+    """
+    return prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
+def _checkpoints_query(
+    thread_id: str | None,
+    checkpoint_ns: str | None,
+    checkpoint_id: str | None = None,
+    before_id: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Build the OData filter selecting checkpoint entities.
+
+    ``thread_id=None`` spans every thread, and ``checkpoint_ns=None`` spans
+    every namespace of the thread, mirroring LangGraph's reference savers.
+    """
+    row_prefix = f"checkpoint{_KEY_SEPARATOR}"
+    query_filter = "RowKey ge @lo and RowKey lt @hi"
+    parameters = {"lo": row_prefix, "hi": _prefix_upper_bound(row_prefix)}
+    if thread_id is not None and checkpoint_ns is not None:
+        query_filter += " and PartitionKey eq @pk"
+        parameters["pk"] = _partition_key(thread_id, checkpoint_ns)
+    elif thread_id is not None:
+        partition_prefix = f"{thread_id}{_KEY_SEPARATOR}"
+        query_filter += " and PartitionKey ge @plo and PartitionKey lt @phi"
+        parameters["plo"] = partition_prefix
+        parameters["phi"] = _prefix_upper_bound(partition_prefix)
+    if checkpoint_id:
+        query_filter += " and RowKey eq @id"
+        parameters["id"] = _checkpoint_row_key(checkpoint_id)
     if before_id:
         query_filter += " and RowKey lt @before"
         parameters["before"] = _checkpoint_row_key(before_id)
@@ -244,13 +276,31 @@ def _checkpoints_query(partition_key: str, before_id: str | None) -> tuple[str, 
 
 def _writes_query(partition_key: str, checkpoint_id: str) -> tuple[str, dict]:
     """Build the OData filter selecting all writes for one checkpoint."""
+    row_prefix = f"writes{_KEY_SEPARATOR}{checkpoint_id}{_KEY_SEPARATOR}"
     query_filter = "PartitionKey eq @pk and RowKey ge @lo and RowKey lt @hi"
     parameters = {
         "pk": partition_key,
-        "lo": f"writes{_KEY_SEPARATOR}{checkpoint_id}{_KEY_SEPARATOR}",
-        "hi": f"writes{_KEY_SEPARATOR}{checkpoint_id}{_KEY_SEPARATOR}~",
+        "lo": row_prefix,
+        "hi": _prefix_upper_bound(row_prefix),
     }
     return query_filter, parameters
+
+
+def _list_scope(
+    config: RunnableConfig | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Return the (thread_id, checkpoint_ns, checkpoint_id) a `list` call selects.
+
+    Each field is ``None`` when the caller left it unconstrained.
+    """
+    if not config:
+        return None, None, None
+    thread_id = config["configurable"]["thread_id"]
+    checkpoint_ns = config["configurable"].get("checkpoint_ns")
+    _validate_key_part(thread_id, "thread_id")
+    if checkpoint_ns is not None:
+        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+    return thread_id, checkpoint_ns, get_checkpoint_id(config)
 
 
 def _sort_writes(entities: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -406,24 +456,34 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         with self._sync_lock:
             if self._sync_table_client is not None:
                 return self._sync_table_client
-            if self._connection_string:
-                client = TableClient.from_connection_string(
-                    self._connection_string,
-                    self._table_name,
-                    user_agent=USER_AGENT,
-                )
-            else:
-                credential = self._resolve_sync_credential(self._credential)
-                client = TableClient(
-                    self._endpoint,
-                    self._table_name,
-                    credential=credential,
-                    user_agent=USER_AGENT,
-                )
+            client: TableClient | None = None
             try:
-                client.create_table()
-            except ResourceExistsError:
-                pass
+                if self._connection_string:
+                    client = TableClient.from_connection_string(
+                        self._connection_string,
+                        self._table_name,
+                        user_agent=USER_AGENT,
+                    )
+                else:
+                    credential = self._resolve_sync_credential(self._credential)
+                    client = TableClient(
+                        self._endpoint,
+                        self._table_name,
+                        credential=credential,
+                        user_agent=USER_AGENT,
+                    )
+                try:
+                    client.create_table()
+                except ResourceExistsError:
+                    pass
+            except BaseException:
+                # Nothing is cached yet, so close() can't release these later.
+                if client is not None:
+                    client.close()
+                if self._sync_owned_credential is not None:
+                    self._sync_owned_credential.close()
+                    self._sync_owned_credential = None
+                raise
             self._sync_table_client = client
             return client
 
@@ -434,24 +494,35 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         async with self._async_lock:
             if self._async_table_client is not None:
                 return self._async_table_client
-            if self._connection_string:
-                client = AsyncTableClient.from_connection_string(
-                    self._connection_string,
-                    self._table_name,
-                    user_agent=USER_AGENT,
-                )
-            else:
-                credential = await self._resolve_async_credential(self._credential)
-                client = AsyncTableClient(
-                    self._endpoint,
-                    self._table_name,
-                    credential=credential,
-                    user_agent=USER_AGENT,
-                )
+            client: AsyncTableClient | None = None
             try:
-                await client.create_table()
-            except ResourceExistsError:
-                pass
+                if self._connection_string:
+                    client = AsyncTableClient.from_connection_string(
+                        self._connection_string,
+                        self._table_name,
+                        user_agent=USER_AGENT,
+                    )
+                else:
+                    credential = await self._resolve_async_credential(self._credential)
+                    client = AsyncTableClient(
+                        self._endpoint,
+                        self._table_name,
+                        credential=credential,
+                        user_agent=USER_AGENT,
+                    )
+                try:
+                    await client.create_table()
+                except ResourceExistsError:
+                    pass
+            except BaseException:
+                # Includes asyncio.CancelledError. Nothing is cached yet, so
+                # aclose() can't release these later.
+                if client is not None:
+                    await client.close()
+                if self._async_owned_credential is not None:
+                    await self._async_owned_credential.close()
+                    self._async_owned_credential = None
+                raise
             self._async_table_client = client
             return client
 
@@ -519,7 +590,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             except ResourceNotFoundError:
                 return None
         else:
-            query_filter, parameters = _checkpoints_query(partition_key, None)
+            query_filter, parameters = _checkpoints_query(thread_id, checkpoint_ns)
             row_keys = [
                 e["RowKey"]
                 for e in table.query_entities(
@@ -538,9 +609,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             self.serde,
             list(table.query_entities(write_filter, parameters=write_parameters)),
         )
-        return _checkpoint_tuple_from_entity(
-            self.serde, thread_id, checkpoint_ns, entity, pending_writes
-        )
+        return _checkpoint_tuple_from_entity(self.serde, entity, pending_writes)
 
     def list(
         self,
@@ -552,6 +621,11 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
     ) -> Iterator[CheckpointTuple]:
         """List checkpoints from Azure Table Storage.
 
+        Mirrors LangGraph's reference savers: only the fields supplied in
+        ``config`` constrain the result. ``config=None`` lists every thread,
+        omitting ``checkpoint_ns`` lists every namespace of the thread, and a
+        ``checkpoint_id`` restricts the result to that checkpoint.
+
         Args:
             config: Base configuration for filtering checkpoints.
             filter: Additional filtering criteria.
@@ -561,31 +635,28 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         Yields:
             Matching checkpoint tuples, most recent first.
         """
-        if not config:
-            return
-        thread_id = config["configurable"]["thread_id"]
-        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
-        _validate_key_part(thread_id, "thread_id")
-        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+        thread_id, checkpoint_ns, config_checkpoint_id = _list_scope(config)
         if limit is not None and limit < 1:
             raise ValueError("limit must be a positive integer")
 
-        partition_key = _partition_key(thread_id, checkpoint_ns)
         before_id = get_checkpoint_id(before) if before else None
         table = self._get_sync_table()
 
-        query_filter, parameters = _checkpoints_query(partition_key, before_id)
+        query_filter, parameters = _checkpoints_query(
+            thread_id, checkpoint_ns, config_checkpoint_id, before_id
+        )
         entities = list(table.query_entities(query_filter, parameters=parameters))
         # ponytail: Table Storage has no server-side ORDER BY, so results are
         # sorted client-side. Fine for typical per-thread history sizes; add
         # a secondary index (or server-side paging) if a thread ever
-        # accumulates enough checkpoints for this to matter.
+        # accumulates enough checkpoints for this to matter. `config=None`
+        # scans the whole table, so it is only suitable for small tables.
         entities.sort(key=lambda e: e["RowKey"], reverse=True)
 
         count = 0
         for entity in entities:
             checkpoint_tuple = _checkpoint_tuple_from_entity(
-                self.serde, thread_id, checkpoint_ns, entity, pending_writes=None
+                self.serde, entity, pending_writes=None
             )
             if filter:
                 metadata = checkpoint_tuple.metadata or {}
@@ -593,7 +664,9 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
                     continue
 
             checkpoint_id = _parse_checkpoint_row_key(entity["RowKey"])
-            write_filter, write_parameters = _writes_query(partition_key, checkpoint_id)
+            write_filter, write_parameters = _writes_query(
+                entity["PartitionKey"], checkpoint_id
+            )
             pending_writes = _writes_from_entities(
                 self.serde,
                 list(table.query_entities(write_filter, parameters=write_parameters)),
@@ -640,7 +713,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             thread_id,
             checkpoint_ns,
             checkpoint,
-            metadata,
+            get_checkpoint_metadata(config, metadata),
             config["configurable"].get("checkpoint_id"),
         )
         table = self._get_sync_table()
@@ -678,7 +751,6 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         _validate_key_part(task_id, "task_id")
 
         partition_key = _partition_key(thread_id, checkpoint_ns)
-        is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
         table = self._get_sync_table()
 
         for idx, (channel, value) in enumerate(writes):
@@ -692,7 +764,10 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
                 channel,
                 value,
             )
-            if is_upsert:
+            # Special channels (error/interrupt/resume) may change on retry,
+            # regular writes stay create-only; decided per write so a mixed
+            # batch can't pin a stale special value.
+            if channel in WRITES_IDX_MAP:
                 table.upsert_entity(entity, mode=UpdateMode.REPLACE)
             else:
                 try:
@@ -730,7 +805,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             except ResourceNotFoundError:
                 return None
         else:
-            query_filter, parameters = _checkpoints_query(partition_key, None)
+            query_filter, parameters = _checkpoints_query(thread_id, checkpoint_ns)
             row_keys = [
                 e["RowKey"]
                 async for e in table.query_entities(
@@ -752,9 +827,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             )
         ]
         pending_writes = _writes_from_entities(self.serde, write_entities)
-        return _checkpoint_tuple_from_entity(
-            self.serde, thread_id, checkpoint_ns, entity, pending_writes
-        )
+        return _checkpoint_tuple_from_entity(self.serde, entity, pending_writes)
 
     async def alist(
         self,
@@ -766,6 +839,11 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
     ) -> AsyncIterator[CheckpointTuple]:
         """List checkpoints from Azure Table Storage asynchronously.
 
+        Mirrors LangGraph's reference savers: only the fields supplied in
+        ``config`` constrain the result. ``config=None`` lists every thread,
+        omitting ``checkpoint_ns`` lists every namespace of the thread, and a
+        ``checkpoint_id`` restricts the result to that checkpoint.
+
         Args:
             config: Base configuration for filtering checkpoints.
             filter: Additional filtering criteria.
@@ -775,20 +853,16 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         Yields:
             Matching checkpoint tuples, most recent first.
         """
-        if not config:
-            return
-        thread_id = config["configurable"]["thread_id"]
-        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
-        _validate_key_part(thread_id, "thread_id")
-        _validate_key_part(checkpoint_ns, "checkpoint_ns")
+        thread_id, checkpoint_ns, config_checkpoint_id = _list_scope(config)
         if limit is not None and limit < 1:
             raise ValueError("limit must be a positive integer")
 
-        partition_key = _partition_key(thread_id, checkpoint_ns)
         before_id = get_checkpoint_id(before) if before else None
         table = await self._get_async_table()
 
-        query_filter, parameters = _checkpoints_query(partition_key, before_id)
+        query_filter, parameters = _checkpoints_query(
+            thread_id, checkpoint_ns, config_checkpoint_id, before_id
+        )
         entities = [
             e async for e in table.query_entities(query_filter, parameters=parameters)
         ]
@@ -797,7 +871,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         count = 0
         for entity in entities:
             checkpoint_tuple = _checkpoint_tuple_from_entity(
-                self.serde, thread_id, checkpoint_ns, entity, pending_writes=None
+                self.serde, entity, pending_writes=None
             )
             if filter:
                 metadata = checkpoint_tuple.metadata or {}
@@ -805,7 +879,9 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
                     continue
 
             checkpoint_id = _parse_checkpoint_row_key(entity["RowKey"])
-            write_filter, write_parameters = _writes_query(partition_key, checkpoint_id)
+            write_filter, write_parameters = _writes_query(
+                entity["PartitionKey"], checkpoint_id
+            )
             write_entities = [
                 e
                 async for e in table.query_entities(
@@ -855,7 +931,7 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
             thread_id,
             checkpoint_ns,
             checkpoint,
-            metadata,
+            get_checkpoint_metadata(config, metadata),
             config["configurable"].get("checkpoint_id"),
         )
         table = await self._get_async_table()
@@ -893,7 +969,6 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
         _validate_key_part(task_id, "task_id")
 
         partition_key = _partition_key(thread_id, checkpoint_ns)
-        is_upsert = all(w[0] in WRITES_IDX_MAP for w in writes)
         table = await self._get_async_table()
 
         for idx, (channel, value) in enumerate(writes):
@@ -907,7 +982,10 @@ class AzureTableStorageSaver(BaseCheckpointSaver):
                 channel,
                 value,
             )
-            if is_upsert:
+            # Special channels (error/interrupt/resume) may change on retry,
+            # regular writes stay create-only; decided per write so a mixed
+            # batch can't pin a stale special value.
+            if channel in WRITES_IDX_MAP:
                 await table.upsert_entity(entity, mode=UpdateMode.REPLACE)
             else:
                 try:

@@ -324,6 +324,10 @@ saver = AzureTableStorageSaver.from_connection_string(
 
 `AzureTableStorageSaver` creates its underlying Azure SDK clients (and, unless you pass a `credential`, a `DefaultAzureCredential`) lazily on first use and reuses them across calls. Call `close()`/`aclose()` (or use the saver as a sync/async context manager) to release them once you're done.
 
+### Listing checkpoints
+
+`list`/`alist` follow LangGraph's reference savers: only the fields present in `config` narrow the result. A `thread_id` alone lists every namespace of that thread, a `checkpoint_id` selects that one checkpoint, and `config=None` lists every thread. Table Storage has no server-side ordering, so results are sorted client-side, and `list(None)` scans the whole table. Scope calls to a `thread_id` on large tables.
+
 ### Checkpoint size
 
 Azure Table Storage caps each entity property at 64 KiB and each entity at 1 MiB. `AzureTableStorageSaver` transparently splits large serialized checkpoints, metadata, and writes across multiple properties to work around the per-property limit; if a single checkpoint's total serialized size still exceeds the 1 MiB entity limit, the underlying Azure SDK raises an error.
