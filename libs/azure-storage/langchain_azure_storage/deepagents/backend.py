@@ -1104,7 +1104,10 @@ class AzureBlobBackend(BackendProtocol):
 
         failed: list[str] = []
         container = self._get_sync_container()
-        blobs = self._list_grep_blobs_sync(container, search_path)
+        try:
+            blobs = self._list_grep_blobs_sync(container, search_path)
+        except AzureError:
+            return _grep_failure_result([search_path])
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
         def scan(blob: Any) -> list[GrepMatch]:
