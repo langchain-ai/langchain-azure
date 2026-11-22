@@ -20,6 +20,7 @@ from typing import (
     Collection,
     Dict,
     Iterable,
+    Iterator,
     List,
     Literal,
     NamedTuple,
@@ -55,6 +56,7 @@ from langchain_core.utils import get_from_env
 from langchain_core.vectorstores import VectorStore
 from pydantic import ConfigDict, model_validator
 
+from langchain_azure_ai._api.base import warn_deprecated
 from langchain_azure_ai.vectorstores.utils import maximal_marginal_relevance
 
 logger = logging.getLogger()
@@ -67,6 +69,33 @@ FIELDS_CONTENT_VECTOR = "content_vector"
 FIELDS_METADATA = "metadata"
 
 MAX_UPLOAD_BATCH_SIZE = 1000
+
+
+def _prepare_keys(
+    keys: Optional[List[str]],
+    key_encoding: Literal["preserve", "base64", "legacy"],
+    *,
+    is_async: bool = False,
+) -> Iterator[str]:
+    if key_encoding not in ("preserve", "base64", "legacy"):
+        raise ValueError(f"Unknown key_encoding: {key_encoding!r}")
+    if keys and is_async and key_encoding == "legacy":
+        warn_deprecated(
+            'key_encoding="legacy"',
+            since="1.4.0",
+            message=(
+                'key_encoding="legacy" is deprecated and will be removed in the '
+                'next major release. Pass key_encoding="preserve" to keep keys '
+                'as given, or key_encoding="base64" to keep encoded keys.'
+            ),
+            stacklevel=3,
+        )
+    if keys and (
+        key_encoding == "preserve" or (key_encoding == "legacy" and not is_async)
+    ):
+        return iter(keys)
+    source = iter(keys) if keys else (str(uuid.uuid4()) for _ in itertools.count())
+    return (base64.urlsafe_b64encode(key.encode()).decode("ascii") for key in source)
 
 
 class _FieldNames(NamedTuple):
@@ -542,9 +571,30 @@ class AzureSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         *,
         keys: Optional[List[str]] = None,
+        key_encoding: Literal["preserve", "base64", "legacy"] = "legacy",
         **kwargs: Any,
     ) -> List[str]:
-        """Add texts data to an existing index."""
+        """Add texts to an existing index.
+
+        Args:
+            texts: Iterable of text strings to add.
+            metadatas: Optional list of metadata dicts.
+            keys: Optional list of keys; otherwise uses IDs from kwargs or UUIDs.
+            key_encoding: Caller-key handling: "preserve" stores keys as given;
+                "base64" URL-safe-base64-encodes them. The deprecated default,
+                "legacy", preserves sync keys and encodes async keys, and will be
+                removed in the next major release. Generated UUID keys are always
+                URL-safe-base64-encoded. Use "base64" to update encoded keys in an
+                existing index, or "preserve" for consistent unencoded keys.
+            **kwargs: Additional keyword arguments, including document IDs.
+
+        Returns:
+            List of stored IDs.
+
+        Raises:
+            ValueError: If key_encoding is unknown.
+            LangChainException: If an upload fails.
+        """
         texts = list(texts)
         # batching support if embedding function is an Embeddings object
         if isinstance(self.embedding_function, Embeddings):
@@ -555,17 +605,15 @@ class AzureSearch(VectorStore):
         else:
             embeddings = [self.embedding_function(x) for x in texts]
 
-        if len(embeddings) == 0:
-            logger.debug("Nothing to insert, skipping.")
-            return []
-
         # when `keys` are not passed in and there is `ids` in kwargs, use those instead
         # base class expects `ids` passed in rather than `keys`
         # https://github.com/langchain-ai/langchain/blob/4cdaca67dc51dba887289f56c6fead3c1a52f97d/libs/core/langchain_core/vectorstores/base.py#L65
         if (not keys) and ("ids" in kwargs) and (len(kwargs["ids"]) == len(embeddings)):
             keys = kwargs["ids"]
 
-        return self.add_embeddings(zip(texts, embeddings), metadatas, keys=keys)
+        return self.add_embeddings(
+            zip(texts, embeddings), metadatas, keys=keys, key_encoding=key_encoding
+        )
 
     async def aadd_texts(
         self,
@@ -573,6 +621,7 @@ class AzureSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         *,
         keys: Optional[List[str]] = None,
+        key_encoding: Literal["preserve", "base64", "legacy"] = "legacy",
         **kwargs: Any,
     ) -> List[str]:
         """Asynchronously add texts data to an existing index.
@@ -580,11 +629,21 @@ class AzureSearch(VectorStore):
         Args:
             texts: Iterable of text strings to add.
             metadatas: Optional list of metadata dicts.
-            keys: Optional list of keys.
-            **kwargs: Additional keyword arguments.
+            keys: Optional list of keys; otherwise uses IDs from kwargs or UUIDs.
+            key_encoding: Caller-key handling: "preserve" stores keys as given;
+                "base64" URL-safe-base64-encodes them. The deprecated default,
+                "legacy", preserves sync keys and encodes async keys, and will be
+                removed in the next major release. Generated UUID keys are always
+                URL-safe-base64-encoded. Use "base64" to update encoded keys in an
+                existing index, or "preserve" for consistent unencoded keys.
+            **kwargs: Additional keyword arguments, including document IDs.
 
         Returns:
             List of IDs for the added texts.
+
+        Raises:
+            ValueError: If key_encoding is unknown.
+            LangChainException: If an upload fails.
         """
         texts = list(texts)
         if isinstance(self.embedding_function, Embeddings):
@@ -604,17 +663,15 @@ class AzureSearch(VectorStore):
             else:
                 embeddings = [self.embedding_function(x) for x in texts]
 
-        if len(embeddings) == 0:
-            logger.debug("Nothing to insert, skipping.")
-            return []
-
         # when `keys` are not passed in and there is `ids` in kwargs, use those instead
         # base class expects `ids` passed in rather than `keys`
         # https://github.com/langchain-ai/langchain/blob/4cdaca67dc51dba887289f56c6fead3c1a52f97d/libs/core/langchain_core/vectorstores/base.py#L65
         if (not keys) and ("ids" in kwargs) and (len(kwargs["ids"]) == len(embeddings)):
             keys = kwargs["ids"]
 
-        return await self.aadd_embeddings(zip(texts, embeddings), metadatas, keys=keys)
+        return await self.aadd_embeddings(
+            zip(texts, embeddings), metadatas, keys=keys, key_encoding=key_encoding
+        )
 
     def add_embeddings(
         self,
@@ -622,24 +679,35 @@ class AzureSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         *,
         keys: Optional[List[str]] = None,
+        key_encoding: Literal["preserve", "base64", "legacy"] = "legacy",
     ) -> List[str]:
         """Add embeddings to an existing index.
 
-        Each document is stored under the key from ``keys`` as given, or under a
-        base64-url-encoded uuid when ``keys`` is not supplied.
+        Args:
+            text_embeddings: Iterable of text and embedding pairs.
+            metadatas: Optional list of metadata dicts.
+            keys: Optional list of caller-supplied keys; otherwise generates UUIDs.
+            key_encoding: Caller-key handling: "preserve" stores keys as given;
+                "base64" URL-safe-base64-encodes them. The deprecated default,
+                "legacy", preserves sync keys and encodes async keys, and will be
+                removed in the next major release. Generated UUID keys are always
+                URL-safe-base64-encoded. Use "base64" to update encoded keys in an
+                existing index, or "preserve" for consistent unencoded keys.
+
+        Returns:
+            List of stored IDs.
+
+        Raises:
+            ValueError: If key_encoding is unknown.
+            LangChainException: If an upload fails.
         """
+        encoded_keys = _prepare_keys(keys, key_encoding)
         ids = []
 
         # Write data to index
         data = []
         for i, (text, embedding) in enumerate(text_embeddings):
-            # Use provided key otherwise use default key
-            if keys:
-                key = keys[i]
-            else:
-                key = str(uuid.uuid4())
-                # Encoding key for Azure Search valid characters
-                key = base64.urlsafe_b64encode(bytes(key, "utf-8")).decode("ascii")
+            key = next(encoded_keys)
 
             metadata = metadatas[i] if metadatas else {}
             # Add data to index
@@ -689,32 +757,35 @@ class AzureSearch(VectorStore):
         metadatas: Optional[List[dict]] = None,
         *,
         keys: Optional[List[str]] = None,
+        key_encoding: Literal["preserve", "base64", "legacy"] = "legacy",
     ) -> List[str]:
-        """Add embeddings to an existing index.
+        """Asynchronously add embeddings to an existing index.
 
-        Each document is stored under the key from ``keys`` as given, or under a
-        base64-url-encoded uuid when ``keys`` is not supplied.
+        Args:
+            text_embeddings: Iterable of text and embedding pairs.
+            metadatas: Optional list of metadata dicts.
+            keys: Optional list of caller-supplied keys; otherwise generates UUIDs.
+            key_encoding: Caller-key handling: "preserve" stores keys as given;
+                "base64" URL-safe-base64-encodes them. The deprecated default,
+                "legacy", preserves sync keys and encodes async keys, and will be
+                removed in the next major release. Generated UUID keys are always
+                URL-safe-base64-encoded. Use "base64" to update encoded keys in an
+                existing index, or "preserve" for consistent unencoded keys.
 
-        Earlier releases also base64-url-encoded a caller-supplied ``keys`` entry on
-        this async path, so an index written through it with explicit keys holds those
-        documents under the encoded key
-        (``base64.urlsafe_b64encode(key.encode()).decode()``). Writing such a key again
-        now uses the key as given and therefore adds a second document instead of
-        updating the old one. To migrate, either delete the encoded documents or keep
-        passing the encoded key for them.
+        Returns:
+            List of stored IDs.
+
+        Raises:
+            ValueError: If key_encoding is unknown.
+            LangChainException: If an upload fails.
         """
+        encoded_keys = _prepare_keys(keys, key_encoding, is_async=True)
         ids = []
 
         # Write data to index
         data = []
         for i, (text, embedding) in enumerate(text_embeddings):
-            # Use provided key otherwise use default key
-            if keys:
-                key = keys[i]
-            else:
-                key = str(uuid.uuid4())
-                # Encoding key for Azure Search valid characters
-                key = base64.urlsafe_b64encode(bytes(key, "utf-8")).decode("ascii")
+            key = next(encoded_keys)
             metadata = metadatas[i] if metadatas else {}
             # Add data to index
             # Additional metadata to fields mapping
