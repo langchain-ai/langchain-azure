@@ -20,7 +20,6 @@ from typing import (
     Collection,
     Dict,
     Iterable,
-    Iterator,
     List,
     Literal,
     NamedTuple,
@@ -71,31 +70,33 @@ FIELDS_METADATA = "metadata"
 MAX_UPLOAD_BATCH_SIZE = 1000
 
 
-def _prepare_keys(
+def _prepare_key_encoding(
     keys: Optional[List[str]],
     key_encoding: Literal["preserve", "base64", "legacy"],
     *,
     is_async: bool = False,
-) -> Iterator[str]:
+) -> bool:
     if key_encoding not in ("preserve", "base64", "legacy"):
         raise ValueError(f"Unknown key_encoding: {key_encoding!r}")
     if keys and is_async and key_encoding == "legacy":
         warn_deprecated(
             'key_encoding="legacy"',
-            since="1.4.0",
-            message=(
-                'key_encoding="legacy" is deprecated and will be removed in the '
-                'next major release. Pass key_encoding="preserve" to keep keys '
+            since="1.5.0",
+            removal="2.0.0",
+            addendum=(
+                'Pass key_encoding="preserve" to keep keys '
                 'as given, or key_encoding="base64" to keep encoded keys.'
             ),
             stacklevel=3,
         )
-    if keys and (
-        key_encoding == "preserve" or (key_encoding == "legacy" and not is_async)
-    ):
-        return iter(keys)
-    source = iter(keys) if keys else (str(uuid.uuid4()) for _ in itertools.count())
-    return (base64.urlsafe_b64encode(key.encode()).decode("ascii") for key in source)
+    return key_encoding == "base64" or (key_encoding == "legacy" and is_async)
+
+
+def _encode_key(key: Optional[str], encode: bool) -> str:
+    if key is None:
+        key = str(uuid.uuid4())
+        encode = True
+    return base64.urlsafe_b64encode(key.encode()).decode("ascii") if encode else key
 
 
 class _FieldNames(NamedTuple):
@@ -605,6 +606,10 @@ class AzureSearch(VectorStore):
         else:
             embeddings = [self.embedding_function(x) for x in texts]
 
+        if len(embeddings) == 0:
+            logger.debug("Nothing to insert, skipping.")
+            return []
+
         # when `keys` are not passed in and there is `ids` in kwargs, use those instead
         # base class expects `ids` passed in rather than `keys`
         # https://github.com/langchain-ai/langchain/blob/4cdaca67dc51dba887289f56c6fead3c1a52f97d/libs/core/langchain_core/vectorstores/base.py#L65
@@ -663,6 +668,10 @@ class AzureSearch(VectorStore):
             else:
                 embeddings = [self.embedding_function(x) for x in texts]
 
+        if len(embeddings) == 0:
+            logger.debug("Nothing to insert, skipping.")
+            return []
+
         # when `keys` are not passed in and there is `ids` in kwargs, use those instead
         # base class expects `ids` passed in rather than `keys`
         # https://github.com/langchain-ai/langchain/blob/4cdaca67dc51dba887289f56c6fead3c1a52f97d/libs/core/langchain_core/vectorstores/base.py#L65
@@ -701,13 +710,13 @@ class AzureSearch(VectorStore):
             ValueError: If key_encoding is unknown.
             LangChainException: If an upload fails.
         """
-        encoded_keys = _prepare_keys(keys, key_encoding)
+        encode_keys = _prepare_key_encoding(keys, key_encoding)
         ids = []
 
         # Write data to index
         data = []
         for i, (text, embedding) in enumerate(text_embeddings):
-            key = next(encoded_keys)
+            key = _encode_key(keys[i] if keys else None, encode_keys)
 
             metadata = metadatas[i] if metadatas else {}
             # Add data to index
@@ -779,13 +788,13 @@ class AzureSearch(VectorStore):
             ValueError: If key_encoding is unknown.
             LangChainException: If an upload fails.
         """
-        encoded_keys = _prepare_keys(keys, key_encoding, is_async=True)
+        encode_keys = _prepare_key_encoding(keys, key_encoding, is_async=True)
         ids = []
 
         # Write data to index
         data = []
         for i, (text, embedding) in enumerate(text_embeddings):
-            key = next(encoded_keys)
+            key = _encode_key(keys[i] if keys else None, encode_keys)
             metadata = metadatas[i] if metadatas else {}
             # Add data to index
             # Additional metadata to fields mapping

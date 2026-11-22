@@ -548,7 +548,7 @@ async def test_async_generated_ids_are_encoded(key_encoding: Any) -> None:
 @pytest.mark.parametrize(
     "key_encoding", [None, "legacy", "preserve", "base64", "invalid"]
 )
-@pytest.mark.parametrize("data_case", ["provided", "generated", "empty"])
+@pytest.mark.parametrize("data_case", ["provided", "generated", "empty", "short"])
 async def test_key_encoding(
     is_async: bool, method: str, key_encoding: Optional[str], data_case: str
 ) -> None:
@@ -567,7 +567,7 @@ async def test_key_encoding(
     kwargs: Dict[str, Any] = {}
     if key_encoding is not None:
         kwargs["key_encoding"] = key_encoding
-    if data_case == "provided":
+    if data_case in ("provided", "short"):
         kwargs["keys" if method == "embeddings" else "ids"] = ["caller/key"]
     payloads: Dict[str, List[Any]] = {
         "embeddings": [("text", [1.0] * DEFAULT_VECTOR_DIMENSION)],
@@ -575,6 +575,9 @@ async def test_key_encoding(
         "documents": [Document(page_content="text")],
     }
     payload = payloads[method] if data_case != "empty" else []
+    if data_case == "short":
+        kwargs["keys"] = ["caller/key"]
+        payload *= 2
     add = getattr(vector_store, f"{'a' if is_async else ''}add_{method}")
 
     async def invoke() -> List[str]:
@@ -587,8 +590,15 @@ async def test_key_encoding(
         warnings.catch_warnings(record=True) as caught,
     ):
         warnings.simplefilter("always", DeprecationWarning)
-        if key_encoding == "invalid":
+        if key_encoding == "invalid" and (
+            data_case != "empty" or method == "embeddings"
+        ):
             with pytest.raises(ValueError, match="Unknown key_encoding"):
+                await invoke()
+            upload.assert_not_called()
+            return
+        if data_case == "short":
+            with pytest.raises(IndexError):
                 await invoke()
             upload.assert_not_called()
             return
@@ -601,9 +611,12 @@ async def test_key_encoding(
     if should_warn:
         assert caught[0].category is DeprecationWarning
         message = str(caught[0].message)
-        assert "next major release" in message
-        assert 'key_encoding="preserve"' in message
-        assert 'key_encoding="base64"' in message
+        assert message == (
+            'key_encoding="legacy" is deprecated as of langchain-azure-ai==1.5.0 '
+            "and will be removed in 2.0.0. "
+            'Pass key_encoding="preserve" to keep keys as given, or '
+            'key_encoding="base64" to keep encoded keys.'
+        )
     if data_case == "empty":
         assert ids == []
         upload.assert_not_called()
