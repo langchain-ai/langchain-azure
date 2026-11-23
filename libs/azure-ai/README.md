@@ -142,15 +142,14 @@ model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 
 #### Decisions API (experimental)
 
-Use `AzureAIOpenAIApiDecisionsClassifier` to ask typed questions about a state.
-Use a model deployment that supports the Decisions API. In
-`langchain-azure-ai==1.4.0`, use `AzureAIOpenAIApiDecisions` instead.
+Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
+`langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
 
 ```python
 from azure.identity import DefaultAzureCredential
-from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisionsClassifier, Noul
+from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
 
-decisions = AzureAIOpenAIApiDecisionsClassifier(
+decisions = AzureAIOpenAIApiDecisions(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential=DefaultAzureCredential(),
     model="your-decisions-deployment",  # your Decisions model deployment name
