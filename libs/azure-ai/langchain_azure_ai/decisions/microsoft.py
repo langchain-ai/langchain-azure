@@ -45,7 +45,7 @@ _TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 _JSON_STATE = TypeAdapter(str | dict[str, JsonValue] | list[JsonValue])
 
 
-class AzureAIMicrosoftDecisions(BaseDecisionModel):
+class AzureAIMicrosoftDecisionsClassifier(BaseDecisionModel):
     """Ask typed questions with a Microsoft Decision deployment in Foundry.
 
     The deployment must use a compatible System One request and response format.
@@ -102,7 +102,7 @@ class AzureAIMicrosoftDecisions(BaseDecisionModel):
         return SecretStr(credential) if isinstance(credential, str) else credential
 
     @model_validator(mode="after")
-    def _configure_endpoint(self) -> "AzureAIMicrosoftDecisions":
+    def _configure_endpoint(self) -> "AzureAIMicrosoftDecisionsClassifier":
         if self.endpoint is not None and self.project_endpoint is not None:
             raise ValueError("Provide only one of `endpoint` and `project_endpoint`.")
         if self.endpoint is None and self.project_endpoint is None:
@@ -131,7 +131,7 @@ class AzureAIMicrosoftDecisions(BaseDecisionModel):
         return self
 
     @model_validator(mode="after")
-    def _configure_auth(self) -> "AzureAIMicrosoftDecisions":
+    def _configure_auth(self) -> "AzureAIMicrosoftDecisionsClassifier":
         credential = self.credential
         if isinstance(credential, (TokenCredential, AsyncTokenCredential)):
             self._async_token = _make_async_token_provider(credential, _TOKEN_SCOPE)

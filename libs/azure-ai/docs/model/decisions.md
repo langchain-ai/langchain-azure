@@ -4,7 +4,7 @@
 
 | Models | Adapter | API path |
 | --- | --- | --- |
-| Compatible Microsoft Decision models, verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisions` | `/providers/microsoft/v1/systemone` |
+| Compatible Microsoft Decision models, verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisionsClassifier` | `/providers/microsoft/v1/systemone` |
 | `gpt-6-luna` | `AzureAIOpenAIApiDecisions` | `/openai/v1/decisions` |
 
 ## Shared interface
@@ -29,15 +29,15 @@ name. Both adapters derive the resource URL from the project URL and default to
 
 To switch between compatible Microsoft Decision deployments, change only
 `DECISION_DEPLOYMENT_NAME`. For a `gpt-6-luna` deployment, also replace
-`AzureAIMicrosoftDecisions` with `AzureAIOpenAIApiDecisions` in the import and
-constructor. The request and response code stays the same.
+`AzureAIMicrosoftDecisionsClassifier` with `AzureAIOpenAIApiDecisions` in the
+import and constructor. The request and response code stays the same.
 
 ```python
 import os
 
-from langchain_azure_ai.decisions import AzureAIMicrosoftDecisions, Choice
+from langchain_azure_ai.decisions import AzureAIMicrosoftDecisionsClassifier, Choice
 
-decisions = AzureAIMicrosoftDecisions(
+decisions = AzureAIMicrosoftDecisionsClassifier(
     project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
     model=os.environ["DECISION_DEPLOYMENT_NAME"],
 )
@@ -60,7 +60,7 @@ print(result.choices["team"].choice)
 
 ### Microsoft Decision
 
-`AzureAIMicrosoftDecisions` accepts text, JSON objects, and JSON arrays. It
+`AzureAIMicrosoftDecisionsClassifier` accepts text, JSON objects, and JSON arrays. It
 does not convert LangChain messages or send image assets. To use an API key,
 pass it as `credential`. To skip project URL resolution, pass the Foundry
 resource URL as `endpoint`. See the [Microsoft Decision model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision).

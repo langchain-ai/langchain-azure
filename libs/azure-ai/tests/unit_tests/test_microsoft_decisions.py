@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import SecretStr
 
 from langchain_azure_ai.decisions import (
-    AzureAIMicrosoftDecisions,
+    AzureAIMicrosoftDecisionsClassifier,
     Choice,
     ClassifierRequest,
     ClassifierResponse,
@@ -115,7 +115,7 @@ def test_systemone_contract(
         )
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
-        decisions = AzureAIMicrosoftDecisions(
+        decisions = AzureAIMicrosoftDecisionsClassifier(
             endpoint=None if use_project else ENDPOINT + "/",
             project_endpoint=PROJECT_ENDPOINT + "/" if use_project else None,
             model=deployment,
@@ -171,7 +171,7 @@ async def test_entra_auth(async_credential: bool) -> None:
     transport = httpx.MockTransport(handle)
     with httpx.Client(transport=transport) as client:
         async with httpx.AsyncClient(transport=transport) as async_client:
-            decisions = AzureAIMicrosoftDecisions(
+            decisions = AzureAIMicrosoftDecisionsClassifier(
                 endpoint=ENDPOINT,
                 model="deployment",
                 credential=credential,
@@ -208,7 +208,7 @@ async def test_entra_auth(async_credential: bool) -> None:
     ],
 )
 def test_invalid_request(classifier_input: ClassifierRequest, message: str) -> None:
-    decisions = AzureAIMicrosoftDecisions(
+    decisions = AzureAIMicrosoftDecisionsClassifier(
         endpoint=ENDPOINT, model="deployment", credential="test-key"
     )
     with pytest.raises(ValueError, match=message):
@@ -234,7 +234,7 @@ def test_api_errors(status: int, body: dict, error: type[Exception]) -> None:
     with httpx.Client(
         transport=httpx.MockTransport(handle), follow_redirects=True
     ) as client:
-        decisions = AzureAIMicrosoftDecisions(
+        decisions = AzureAIMicrosoftDecisionsClassifier(
             endpoint=ENDPOINT,
             model="deployment",
             credential="test-key",
@@ -249,20 +249,22 @@ def test_api_errors(status: int, body: dict, error: type[Exception]) -> None:
 )
 def test_requires_resource_endpoint(suffix: str) -> None:
     with pytest.raises(ValueError, match="HTTPS Foundry.*endpoint"):
-        AzureAIMicrosoftDecisions(
+        AzureAIMicrosoftDecisionsClassifier(
             endpoint=ENDPOINT + suffix, model="deployment", credential="test-key"
         )
 
 
 def test_project_endpoint_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_AI_PROJECT_ENDPOINT", PROJECT_ENDPOINT)
-    decisions = AzureAIMicrosoftDecisions(model="deployment", credential="test-key")
+    decisions = AzureAIMicrosoftDecisionsClassifier(
+        model="deployment", credential="test-key"
+    )
     assert decisions.project_endpoint == PROJECT_ENDPOINT
 
 
 def test_rejects_conflicting_endpoints() -> None:
     with pytest.raises(ValueError, match="Provide only one"):
-        AzureAIMicrosoftDecisions(
+        AzureAIMicrosoftDecisionsClassifier(
             project_endpoint=PROJECT_ENDPOINT,
             endpoint=ENDPOINT,
             model="deployment",
