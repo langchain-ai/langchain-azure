@@ -11,9 +11,12 @@ Complete [Prepare Foundry resources](01-prepare-resources.md). Run commands from
 The hosting runner requires the `hosting` extra described in the [hosting package installation guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#install-the-package). Add this dependency before starting the host:
 
 ```shell
+uv python pin 3.13
 uv add --python 3.13 --prerelease allow --upgrade-package langchain-azure-ai "langchain-azure-ai[hosting]"
 uv pip check
 ```
+
+The Python pin records local interpreter selection in `.python-version`. Keep it aligned with the deployment runtime: selecting Python for one install does not necessarily control a later CLI-created environment. See [uv Python version requests](https://docs.astral.sh/uv/concepts/python-versions/#python-version-files).
 
 The command selects Python 3.13, records the dependency in `pyproject.toml`, updates `uv.lock`, and installs the latest compatible version. The [uv dependency guide](https://docs.astral.sh/uv/concepts/projects/dependencies/#adding-dependencies) explains these project file updates. The upgrade option requests the latest compatible release when the package is already declared.
 

@@ -77,9 +77,11 @@ services:
 
 The Python runtime starts the file specified by `codeConfiguration.entryPoint`. In this example, it runs `python main.py`. The [azure.yaml authoring guide](https://learn.microsoft.com/azure/foundry/agents/how-to/author-azure-yaml) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code) describe the other deployment settings.
 
+When adding `environmentVariables`, use a list of `name`/`value` objects, not a mapping. Include the variables the application actually requires; do not make an optional setting mandatory by adding an unresolved placeholder. Run `azd ai agent doctor --local-only` to check the delivered service definition and configuration before packaging. This check does not establish remote deployment or runtime behavior.
+
 ### Prepare runtime dependencies
 
-In this example, the remote build installs dependencies from the root `requirements.txt`. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
+In this example, the remote build installs dependencies from the root `requirements.txt`. A locally installable PEP 621 `pyproject.toml` does not by itself establish that the selected remote builder supports that dependency workflow. Include the application's runtime dependencies and choose compatible versions. For the Foundry-model path used in the configuration examples, these include:
 
 ```text
 deepagents>=0.6.12
