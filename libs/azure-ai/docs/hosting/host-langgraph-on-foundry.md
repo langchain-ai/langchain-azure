@@ -14,6 +14,8 @@ Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need
 
 Identify required state from the original launch path and documented client workflow, not only the exported graph. LangGraph development/server runtimes can supply checkpointing outside that graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. Another host does not inherit that runtime service.
 
+A graph without an explicit checkpointer is not necessarily stateless. For example, the Deep Research workflow launches with `langgraph dev`, saves the request and report through Deep Agents file tools, and exposes those files as thread state. Because the default Deep Agents backend stores virtual files in graph state, reusing that export unchanged in a different host can allow a research turn to finish but lose the files on the next turn. Treat the files and task progress as part of the migrated workflow, not as optional production enhancements.
+
 | Original state owner | Re-hosting responsibility |
 | --- | --- |
 | The source server/runtime | Supply an equivalent server-side owner and lifetime for the state required by existing workflows. Returning updated state and expecting callers to resubmit it is a client-contract change, not equivalent server-managed continuation. |
@@ -94,7 +96,7 @@ Plan required state ownership before local hosting or deployment, then complete 
 | Local | [2. Host and test the agent locally](langgraph-to-foundry/02-run-locally.md) | The existing graph runs through the local Responses host and completes a representative request. |
 | Deploy | [3. Prepare the agent for deployment](langgraph-to-foundry/03-prepare-deployment.md) | Deployment files, runtime dependencies, upload exclusions, connections, and environment variables are ready. |
 | Deploy | [4. Deploy and verify the agent](langgraph-to-foundry/04-deploy-and-verify.md) | The deployed agent has the required runtime access and completes a representative hosted request. |
-| Production readiness | [5. Enable persistence and recovery](langgraph-to-foundry/05-persistence-and-recovery.md) | Required state survives across turns and sessions; unfinished-request recovery is verified separately when needed. |
+| Design and verify | [5. Enable persistence and recovery](langgraph-to-foundry/05-persistence-and-recovery.md) | Before selecting the hosted entry point, preserve required state; after deployment, verify continuation. Check unfinished-request recovery separately when needed. |
 | Production readiness | [6. Inspect logs and traces](langgraph-to-foundry/06-diagnostics.md) | Logs and correlated traces show the expected model and tool operations for a request. |
 | Production readiness | [7. Evaluate the migrated agent](langgraph-to-foundry/07-evaluation.md) | The existing evaluation cases compare the original and hosted applications against the same criteria. |
 

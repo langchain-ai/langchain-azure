@@ -45,6 +45,10 @@ The existing root `langgraph.json` loads `./agent.py:agent`. The Responses host 
 
 > **Tip:** To continue using [LangGraph Studio](https://docs.langchain.com/langsmith/local-dev-testing) for local debugging, provide a separate graph entry point without a custom checkpointer. `langgraph dev` manages persistence itself and rejects graphs with an application-configured checkpointer. Keep `FoundryCheckpointSaver` on the Foundry entry point. Studio shows local graph state, not deployed Foundry checkpoints.
 
+If the same source must support both launchers, put the existing construction behind a factory that accepts a checkpointer. Keep the Studio export without an explicit checkpointer, and use the factory with the durable checkpointer in the Foundry export. Point the graph configuration loaded by the deployed launcher to the Foundry export. Confirm that this launcher, not just a standalone import, uses the selected checkpointer. If local credentials or resources are unavailable, report the persistence check as blocked instead of removing persistence from the deployed graph.
+
+Verify two separate requests under the same conversation identity: write a virtual file, then read the same file back without recreating it or supplying its contents again. If the required lifetime extends across hosted sessions, repeat the read from a different hosted session. A successful response, matching conversation ID, or report text in the first response is not proof that the underlying file survived.
+
 Include this construction in the initial deployment when required state is part of the migration. If updating an already deployed agent, redeploy it:
 
 ```shell
