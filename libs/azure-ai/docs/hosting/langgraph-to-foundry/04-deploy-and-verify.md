@@ -28,7 +28,7 @@ echo "$agentInfo" | jq .
 
 ### Grant runtime connection access
 
-Before invoking the agent, grant its instance identity `Foundry User` on the parent Foundry resource to read the connection credentials from [Configure project connections](03-prepare-deployment.md#configure-project-connections-for-third-party-endpoints). Skip this assignment if the identity already has sufficient access. See the [hosted agent permissions reference](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
+If the application retrieves secrets from the optional [project connection](03-prepare-deployment.md#configure-project-connections-for-third-party-endpoints) using the project SDK, grant its instance identity `Foundry User` on the parent Foundry resource before invoking the agent. Skip this assignment if that credential path is not used or if the identity already has sufficient access. See the [hosted agent permissions reference](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions).
 
 Use the identity returned above and the parent resource's ARM ID, not the project ID:
 

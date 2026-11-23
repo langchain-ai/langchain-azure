@@ -66,6 +66,7 @@ services:
     name: deep-research-foundry
     project: .
     language: python
+    startupCommand: python main.py
     protocols:
       - protocol: responses
         version: 2.0.0
@@ -75,7 +76,7 @@ services:
       dependencyResolution: remote_build
 ```
 
-The Python runtime starts the file specified by `codeConfiguration.entryPoint`. In this example, it runs `python main.py`. The [azure.yaml authoring guide](https://learn.microsoft.com/azure/foundry/agents/how-to/author-azure-yaml) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code) describe the other deployment settings.
+The remote Python runtime starts the file specified by `codeConfiguration.entryPoint`. The explicit `startupCommand` is for the local CLI path; it runs the same launcher from the application root using the prepared Python environment on `PATH`. Install the runtime dependencies before using this command. If you use uv to create or sync the local project environment, keep the `.python-version` pin alongside the local project files and verify that the local run uses the selected target Python minor version. A successful dependency install in a separate environment does not verify the submitted startup path. See the [azure.yaml reference](https://learn.microsoft.com/azure/foundry/agents/concepts/azure-yaml-reference) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code).
 
 When adding `environmentVariables`, use a list of `name`/`value` objects, not a mapping. Include the variables the application actually requires; do not make an optional setting mandatory by adding an unresolved placeholder. Run `azd ai agent doctor --local-only` to check the delivered service definition and configuration before packaging. This check does not establish remote deployment or runtime behavior.
 
@@ -147,9 +148,9 @@ Run `azd package` before deployment and inspect the upload for the declared laun
 
 ## Configure project connections for third-party endpoints
 
-Configure secure credential access for any third-party endpoints your application uses. This example stores the search API key in a Foundry project connection. Follow [Add a new connection to your project](https://learn.microsoft.com/azure/foundry/how-to/connections-add) to create the appropriate connection.
+Preserve the application's existing credential inputs unless a change is required. If it reads `ANTHROPIC_API_KEY` and `TAVILY_API_KEY`, keep those names and supply values through an approved runtime secret delivery mechanism. Do not copy a local `.env`, hard-code keys in `azure.yaml`, or add unresolved secret placeholders to the application. Verify the selected mechanism for the deployment mode before claiming hosted credential access works.
 
-If you keep an external model provider, store its credentials in a separate project connection and have your application retrieve them when initializing the model client. Use the same connection-access pattern shown below for the search client.
+The remainder of this section is an optional application-managed connection example. Use it if you choose to retrieve secrets through the project SDK instead of preserving the existing secret delivery path. Follow [Add a new connection to your project](https://learn.microsoft.com/azure/foundry/how-to/connections-add). If you explicitly choose this pattern for an external model too, use a separate connection for its credentials.
 
 This example uses a `CustomKeys` connection named `tavily-search` with target `https://api.tavily.com`. You can obtain a key from the [Tavily Python SDK quickstart](https://docs.tavily.com/sdk/python/quick-start) and store it in the connection's secret field named `api_key`.
 
@@ -197,9 +198,9 @@ The hosted agent identity also needs permission to read these connection credent
 
 ## Set environment variables
 
-The hosted runtime uses deployment configuration, not your local `.env`. Pass the model deployment name and connection name to the agent; the tool code from [Configure project connections](#configure-project-connections-for-third-party-endpoints) retrieves the secret at runtime. Foundry supplies the project endpoint automatically.
+The hosted runtime uses deployment configuration, not your local `.env`. Foundry supplies the project endpoint automatically. The configuration below applies only to the Foundry-model and project-connection example. Omit settings for paths your application does not use.
 
-The model settings below apply to the [Foundry-model path](../host-langgraph-on-foundry.md#model-choice). If you keep another provider, use the configuration required by that model client and retrieve its credentials through a project connection.
+If you keep another model provider, use the existing configuration required by that model client. Only set `TAVILY_CONNECTION_NAME` if you implemented the optional [project-connection path](#configure-project-connections-for-third-party-endpoints).
 
 This example uses the following values:
 
@@ -216,12 +217,14 @@ azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<deployment-name>"
 azd env set TAVILY_CONNECTION_NAME tavily-search
 ```
 
-Add these values to the agent service's `env` mapping in `azure.yaml`:
+For this source-code example, add these values to the agent service's `environmentVariables` list in `azure.yaml`:
 
 ```yaml
-env:
-  AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
-  TAVILY_CONNECTION_NAME: ${TAVILY_CONNECTION_NAME}
+environmentVariables:
+  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+    value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  - name: TAVILY_CONNECTION_NAME
+    value: ${TAVILY_CONNECTION_NAME}
 ```
 
 Add the connection name to the local `.env`:
@@ -232,7 +235,7 @@ TAVILY_CONNECTION_NAME=tavily-search
 
 ## Verify deployment preparation
 
-Restart the local host with the command from [Host and test the agent locally](02-run-locally.md) and verify that the application can search using the project connection before deployment. After this check succeeds, you can remove `TAVILY_API_KEY` from your local `.env`.
+Restart the local host with the configuration your application actually uses and verify a request that exercises its model and search tool. If you switched to an application-managed connection, verify that path before removing the old local API key. Verify hosted access separately after deployment.
 
 ## Next steps
 
