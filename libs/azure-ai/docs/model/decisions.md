@@ -9,7 +9,7 @@ currently using a `gpt-6-luna` deployment. Microsoft-Decision-1 uses the separat
 
 ## Interface
 
-`AzureAIOpenAIApiDecisions` implements LangChain's `BaseDecisionModel`, a
+`AzureAIOpenAIApiDecisionsClassifier` implements LangChain's `BaseDecisionModel`, a
 `Runnable[ClassifierRequest, ClassifierResponse]`. It accepts `state` and named
 Core questions, and returns typed answers keyed by
 question name:
@@ -49,3 +49,8 @@ URL; it does not call the project or Agent Service APIs.
 The upstream Runnable is beta, so the Azure adapter uses the existing
 `@experimental(...)` decorator and emits `ExperimentalWarning` on construction.
 No additional runtime opt-in flag is introduced.
+
+Use `AzureAIOpenAIApiDecisionsClassifier` in new code. The previous name,
+`AzureAIOpenAIApiDecisions`, remains an alias at both existing import paths.
+LangChain serialization keeps the original class ID so existing serialized
+Runnables can still be loaded with either name in `allowed_objects`.

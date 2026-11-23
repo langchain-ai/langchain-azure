@@ -15,11 +15,15 @@ from langchain_core.decisions import (
     State,
 )
 
-from langchain_azure_ai.decisions.openai import AzureAIOpenAIApiDecisions
+from langchain_azure_ai.decisions.openai import (
+    AzureAIOpenAIApiDecisions,
+    AzureAIOpenAIApiDecisionsClassifier,
+)
 
 __all__ = [
     "Answer",
     "AzureAIOpenAIApiDecisions",
+    "AzureAIOpenAIApiDecisionsClassifier",
     "Choice",
     "ChoiceAnswer",
     "ClassifierRequest",
