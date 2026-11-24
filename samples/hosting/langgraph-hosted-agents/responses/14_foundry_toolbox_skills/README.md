@@ -108,8 +108,8 @@ Toolbox and has no local fallback.
 Follow the parent's [Python setup](../../README.md#using-python) to create a
 virtual environment and fill in `.env` from [.env.example](.env.example).
 Install this sample's [requirements](requirements.txt) from published packages;
-it requires `langchain-azure-ai>=1.3.1` with the `hosting`, `opentelemetry`,
-and `tools` extras.
+it requires `langchain-azure-ai>=1.3.1` with the `hosting` and `opentelemetry`
+extras, plus `langchain-mcp-adapters` and `httpx` for Toolbox MCP access.
 
 Required environment variables:
 
@@ -120,9 +120,11 @@ Required environment variables:
 Local runs use the developer's credential; the deployed agent identity also
 needs access to the project's model and Toolbox. Follow the shared deployment
 guidance for identity setup. Telemetry is enabled by default through the
-[shared tracing setup](../../README.md#tracing); message content, tool
-arguments, and tool results are redacted unless content recording is explicitly
-enabled.
+[shared tracing setup](../../README.md#tracing): spans export to Azure Monitor
+(project-managed Application Insights) by default, or to OTLP/HTTP when
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+Message content, tool arguments, and tool results are redacted unless
+`AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` is set.
 
 From this sample directory, start the host:
 
