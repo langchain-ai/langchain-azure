@@ -1,16 +1,16 @@
-name: langchain-azure-toolbox-skills-responses
+name: langchain-azure-toolbox-responses
 
 infra:
   provider: microsoft.foundry
 
 services:
-  langchain-azure-toolbox-skills-responses:
+  langchain-azure-toolbox-responses:
     project: .
     host: azure.ai.agent
     language: docker
     kind: hosted
-    name: langchain-azure-toolbox-skills-responses
-    description: A LangChain agent that loads skills on demand from a Foundry Toolbox.
+    name: langchain-azure-toolbox-responses
+    description: A LangChain agent using skills and tools from a Foundry Toolbox.
     docker:
       remoteBuild: true
     container:
