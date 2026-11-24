@@ -1,0 +1,4 @@
+name: agent-skills
+description: Skills-only Foundry Toolbox for the LangChain skills sample.
+skills:
+  - name: release-notes

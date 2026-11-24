@@ -1,0 +1,129 @@
+"""Sample 14 - Responses API + Azure AI Foundry Toolbox skills.
+
+Demonstrates loading skills from an **Azure AI Foundry Toolbox** via
+``langchain_azure_ai.tools.AzureAIProjectToolbox`` and hosting the
+resulting LangGraph agent through the Responses API using
+``langchain_azure_ai.agents.hosting.ResponsesHostServer``.
+
+Only the Toolbox's skill catalog (``skill://index.json``) is fetched at
+startup and placed in the system prompt. When a skill matches the user's
+request, the model reads ``SKILL.md`` and supporting text on demand through
+``read_skill_resource``. No remote Toolbox tools are loaded.
+
+See README.md for skill setup, environment variables, and runnable requests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+from langchain_azure_ai.tools import AzureAIProjectToolbox
+from langchain_core.tools import BaseTool, ToolException, tool
+from langchain_openai import ChatOpenAI
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+load_dotenv()
+
+
+_AZURE_AI_SCOPE = "https://ai.azure.com/.default"
+
+
+def _build_chat_model() -> ChatOpenAI:
+    project_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"].rstrip("/")
+    deployment = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
+    credential = DefaultAzureCredential()
+    project = AIProjectClient(endpoint=project_endpoint, credential=credential)
+    openai_client = project.get_openai_client()
+    token_provider = get_bearer_token_provider(credential, _AZURE_AI_SCOPE)
+
+    return ChatOpenAI(
+        model=deployment,
+        base_url=str(openai_client.base_url),
+        api_key=token_provider,
+        use_responses_api=True,
+        # LangGraph manages message history instead of the model service.
+        store=False,
+        output_version="responses/v1",
+    )
+
+
+async def _load_toolbox_skills() -> tuple[BaseTool, str]:
+    """Fetch skill metadata and expose an on-demand skill resource reader.
+
+    ``project_endpoint`` is resolved from ``FOUNDRY_PROJECT_ENDPOINT``
+    automatically. The credential defaults to ``DefaultAzureCredential``
+    (so ``az login`` is enough for local dev). Each call opens a fresh
+    MCP session against the toolbox and closes it before returning.
+    """
+    toolbox_name = os.environ["TOOLBOX_NAME"]
+
+    toolbox = AzureAIProjectToolbox(toolbox_name=toolbox_name)
+    resources = await toolbox.aget_resources(uris="skill://index.json")
+    catalog = "\n\n".join(resource.as_string() for resource in resources)
+    if not catalog.strip():
+        raise ValueError("The Toolbox must provide skill://index.json.")
+    print(f"Loaded skill catalog from Foundry toolbox '{toolbox_name}'.")
+
+    @tool
+    async def read_skill_resource(uri: str) -> str:
+        """Read a skill's SKILL.md or supporting text from this Toolbox.
+
+        Use a skill:// URI from the catalog or a loaded skill. Read SKILL.md
+        before following a skill, then read references only when needed.
+        """
+        if not uri.startswith("skill://"):
+            raise ToolException("Use a skill:// URI from this Toolbox.")
+        try:
+            resources = await toolbox.aget_resources(uris=uri)
+        except Exception as exc:
+            raise ToolException(
+                "Could not read the skill resource. Check the skill:// URI "
+                "or retry if the Toolbox is temporarily unavailable."
+            ) from exc
+        content = "\n\n".join(resource.as_string() for resource in resources)
+        if not content.strip():
+            raise ToolException(f"No skill content returned for {uri}.")
+        return content
+
+    read_skill_resource.handle_tool_error = True
+    return read_skill_resource, catalog
+
+
+def main() -> None:
+    if os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(
+        "OTEL_EXPORTER_OTLP_ENDPOINT"
+    ):
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        enable_auto_tracing()
+    else:
+        enable_auto_tracing(auto_configure_azure_monitor=True)
+
+    read_skill_resource, catalog = asyncio.run(_load_toolbox_skills())
+    graph = create_agent(
+        _build_chat_model(),
+        tools=[read_skill_resource],
+        system_prompt=(
+            "Available skills are listed in the Toolbox catalog below. "
+            "When a skill matches the user's request, call read_skill_resource "
+            "with its SKILL.md URI before following its procedure. Read "
+            "supporting resources only when needed.\n\n" + catalog
+        ),
+    )
+    port = int(os.environ.get("PORT", "8088"))
+    ResponsesHostServer(graph).run(port=port)
+
+
+if __name__ == "__main__":
+    main()

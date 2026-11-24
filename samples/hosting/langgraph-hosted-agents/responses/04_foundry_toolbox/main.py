@@ -1,4 +1,4 @@
-"""Sample 04 - Responses API + Azure AI Foundry Toolbox tools and skills.
+"""Sample 07 - Responses API + Azure AI Foundry Toolbox tools.
 
 Demonstrates loading tools from an **Azure AI Foundry Toolbox** via
 ``langchain_azure_ai.tools.AzureAIProjectToolbox`` and hosting the
@@ -15,31 +15,56 @@ SharePoint search, etc.) behind one URL. ``AzureAIProjectToolbox``:
 - returns standard LangChain ``BaseTool`` instances ready to plug into
   any LangGraph / LangChain agent.
 
-Tools and the skill catalog are fetched once at startup. Only skill metadata
-enters the system prompt; the agent reads instructions and supporting text
-from the Toolbox on demand through ``read_skill_resource``.
+Because ``AzureAIProjectToolbox.get_tools()`` is asynchronous, we fetch
+the tools once at startup with ``asyncio.run(...)`` and then build the
+``create_agent`` graph synchronously - the same shape as
+sample 02, but with Foundry-managed tools instead of a local ``@tool``.
 
-See README.md for skill setup, environment variables, and runnable requests.
+Required environment variables (set in ``.env`` or your shell):
+
+    FOUNDRY_PROJECT_ENDPOINT        e.g. https://<acct>.services.ai.azure.com/api/projects/<proj>
+    AZURE_AI_MODEL_DEPLOYMENT_NAME  e.g. gpt-4o   (defaults to "gpt-4o")
+    TOOLBOX_NAME                    name of the toolbox configured in Foundry
+    PORT                            optional, defaults to 8088
+
+Run::
+
+    az login
+    cp .env.example .env  # then edit the values
+    pip install -r requirements.txt  # pulls in langchain-mcp-adapters + httpx
+    python main.py
+
+Then in another terminal (replace the prompt with one that exercises a
+tool in your toolbox)::
+
+    # Non-streaming
+    curl -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"What tools do you have available?","model":"gpt-4o"}'
+
+    # Streaming - intermediate function_call / function_call_output items
+    # are surfaced for every toolbox tool the agent invokes.
+    curl -N -X POST http://127.0.0.1:8088/responses -H 'Content-Type: application/json' -d '{"input":"<a question your toolbox can answer>","model":"gpt-4o","stream":true}'
 """
-
 from __future__ import annotations
 
 import asyncio
 import os
+from typing import List
 
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
+from langchain_core.tools import BaseTool
 from langchain.agents import create_agent
-from langchain_azure_ai.agents.hosting import ResponsesHostServer
-from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
-from langchain_azure_ai.tools import AzureAIProjectToolbox
-from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import ChatOpenAI
+
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
+from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
+from langchain_azure_ai.tools import AzureAIProjectToolbox
 
 load_dotenv()
 
@@ -66,8 +91,8 @@ def _build_chat_model() -> ChatOpenAI:
     )
 
 
-async def _load_toolbox() -> tuple[list[BaseTool], str]:
-    """Fetch tools and skill metadata, and expose an on-demand resource reader.
+async def _load_toolbox_tools() -> List[BaseTool]:
+    """Fetch the LangChain-compatible tool list from the Foundry Toolbox.
 
     ``project_endpoint`` is resolved from ``FOUNDRY_PROJECT_ENDPOINT``
     automatically. The credential defaults to ``DefaultAzureCredential``
@@ -81,41 +106,11 @@ async def _load_toolbox() -> tuple[list[BaseTool], str]:
     print(f"Loaded {len(tools)} tool(s) from Foundry toolbox '{toolbox_name}':")
     for t in tools:
         print(f"  - {t.name}")
-    resources = await toolbox.aget_resources(uris="skill://index.json")
-    catalog = "\n\n".join(resource.as_string() for resource in resources)
-    if not catalog.strip():
-        raise ValueError("The Toolbox must provide skill://index.json.")
-    print(f"Loaded skill catalog from Foundry toolbox '{toolbox_name}'.")
-
-    @tool
-    async def read_skill_resource(uri: str) -> str:
-        """Read a skill's SKILL.md or supporting text from this Toolbox.
-
-        Use a skill:// URI from the catalog or a loaded skill. Read SKILL.md
-        before following a skill, then read references only when needed.
-        """
-        if not uri.startswith("skill://"):
-            raise ToolException("Use a skill:// URI from this Toolbox.")
-        try:
-            resources = await toolbox.aget_resources(uris=uri)
-        except Exception as exc:
-            raise ToolException(
-                "Could not read the skill resource. Check the skill:// URI "
-                "or retry if the Toolbox is temporarily unavailable."
-            ) from exc
-        content = "\n\n".join(resource.as_string() for resource in resources)
-        if not content.strip():
-            raise ToolException(f"No skill content returned for {uri}.")
-        return content
-
-    read_skill_resource.handle_tool_error = True
-    return [*tools, read_skill_resource], catalog
+    return tools
 
 
 def main() -> None:
-    if os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT"
-    ):
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         provider = TracerProvider()
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
         trace.set_tracer_provider(provider)
@@ -123,17 +118,12 @@ def main() -> None:
     else:
         enable_auto_tracing(auto_configure_azure_monitor=True)
 
-    tools, catalog = asyncio.run(_load_toolbox())
-    graph = create_agent(
-        _build_chat_model(),
-        tools=tools,
-        system_prompt=(
-            "Available skills are listed in the Toolbox catalog below. "
-            "When a skill matches the user's request, call read_skill_resource "
-            "with its SKILL.md URI before following its procedure using the "
-            "toolbox tools. Read supporting resources only when needed.\n\n" + catalog
-        ),
-    )
+    # Fetch toolbox tools once at startup. The tools themselves are
+    # async-safe LangChain BaseTools that open their own MCP sessions
+    # on each invocation, so we don't need to keep an outer event loop.
+    tools = asyncio.run(_load_toolbox_tools())
+
+    graph = create_agent(_build_chat_model(), tools=tools)
     port = int(os.environ.get("PORT", "8088"))
     ResponsesHostServer(graph).run(port=port)
 

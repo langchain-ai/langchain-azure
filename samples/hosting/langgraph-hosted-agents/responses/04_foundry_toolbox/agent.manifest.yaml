@@ -1,7 +1,8 @@
 name: langchain-azure-agent-with-foundry-toolbox-responses
 description: >
-  A LangGraph agent that follows skills and calls tools from an Azure AI
-  Foundry Toolbox, hosted over the Responses protocol.
+  A LangGraph agent that loads its tools from an Azure AI Foundry
+  Toolbox (managed multi-MCP gateway), hosted over the Responses
+  protocol.
 metadata:
   tags:
     - LangChain
@@ -10,7 +11,6 @@ metadata:
     - Azure AI AgentServer
     - Responses Protocol
     - Foundry Toolbox
-    - Agent Skills
     - Streaming
 template:
   name: langchain-azure-agent-with-foundry-toolbox-responses

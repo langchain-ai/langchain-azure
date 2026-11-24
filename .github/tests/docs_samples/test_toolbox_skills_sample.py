@@ -1,4 +1,4 @@
-"""Exercise Toolbox skills and tools through the sample's native Responses host."""
+"""Exercise standalone Toolbox skills through the sample's native Responses host."""
 
 import asyncio
 import importlib.util
@@ -14,7 +14,6 @@ import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
 from mcp.types import TextResourceContents
 from pydantic import Field
 from starlette.testclient import TestClient
@@ -24,18 +23,21 @@ pytestmark = pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 
 SAMPLE = (
     Path(__file__).resolve().parents[3]
-    / "samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox"
+    / "samples/hosting/langgraph-hosted-agents/responses/14_foundry_toolbox_skills"
 )
-SKILL_URI = "skill://source-brief/SKILL.md"
+SKILL_URI = "skill://release-notes/SKILL.md"
 INDEX_URI = "skill://index.json"
-SKILL = (SAMPLE / "skill-src/source-brief/SKILL.md").read_text(encoding="utf-8")
+SKILL = (SAMPLE / "skill-src/release-notes/SKILL.md").read_text(encoding="utf-8")
 CATALOG = json.dumps(
     {
         "skills": [
             {
-                "name": "source-brief",
+                "name": "release-notes",
                 "type": "skill-md",
-                "description": "Research a topic or compare options using web search.",
+                "description": (
+                    "Turn raw commits, tickets, or change summaries into "
+                    "structured customer-facing release notes."
+                ),
                 "url": SKILL_URI,
             }
         ]
@@ -69,16 +71,18 @@ def call(name: str, **arguments: Any) -> AIMessage:
 @pytest.fixture
 def sample(docs_samples_dirs: list[Path], monkeypatch: pytest.MonkeyPatch) -> Any:
     if not any(SAMPLE.is_relative_to(directory) for directory in docs_samples_dirs):
-        pytest.skip("This smoke test covers the Foundry Toolbox sample.")
+        pytest.skip("This smoke test covers the Foundry Toolbox skills sample.")
     monkeypatch.setenv(
         "FOUNDRY_PROJECT_ENDPOINT", "https://example.test/api/projects/p"
     )
-    monkeypatch.setenv("TOOLBOX_NAME", "agent-tools")
+    monkeypatch.setenv("TOOLBOX_NAME", "agent-skills")
     monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
     monkeypatch.delenv("FOUNDRY_HOSTING_ENVIRONMENT", raising=False)
     for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
         monkeypatch.delenv(name, raising=False)
-    spec = importlib.util.spec_from_file_location("toolbox_sample", SAMPLE / "main.py")
+    spec = importlib.util.spec_from_file_location(
+        "toolbox_skills_sample", SAMPLE / "main.py"
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -87,29 +91,17 @@ def sample(docs_samples_dirs: list[Path], monkeypatch: pytest.MonkeyPatch) -> An
 
 @pytest.fixture
 def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    calls = []
-
-    @tool
-    def web_search(query: str) -> str:
-        """Search primary sources (simulated service boundary)."""
-        calls.append(("web_search", query))
-        return (
-            "Python 3.14 release notes: https://docs.python.org/3.14/whatsnew/3.14.html"
-        )
-
-    @tool
-    def code_interpreter(code: str) -> str:
-        """Calculate from the user's measurements (simulated service boundary)."""
-        calls.append(("code_interpreter", code))
-        assert code == "(250 - 200) / 250 * 100"
-        return "20.0"
-
     class Client:
-        resources = {INDEX_URI: [CATALOG], SKILL_URI: [SKILL]}
-        resource_reads: list[str] = []
+        def __init__(self) -> None:
+            self.resources: dict[str, list[str]] = {
+                INDEX_URI: [CATALOG],
+                SKILL_URI: [SKILL],
+            }
+            self.resource_reads: list[str] = []
+            self.fail_uris: set[str] = set()
 
         async def get_tools(self) -> list[Any]:
-            return [web_search, code_interpreter]
+            raise AssertionError("Standalone skills sample must not load Toolbox tools")
 
         @asynccontextmanager
         async def session(self, server_name: str) -> Any:
@@ -118,6 +110,8 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
         async def read_resource(self, uri: str) -> Any:
             self.resource_reads.append(uri)
+            if uri in self.fail_uris:
+                raise RuntimeError("transient toolbox failure")
             return SimpleNamespace(
                 contents=[
                     TextResourceContents(uri=uri, text=text)
@@ -129,7 +123,7 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(
         sample.AzureAIProjectToolbox, "_build_mcp_client", lambda _: client
     )
-    return SimpleNamespace(client=client, calls=calls)
+    return SimpleNamespace(client=client)
 
 
 def test_model_replays_tool_turn_without_provider_storage(
@@ -166,7 +160,7 @@ def test_model_replays_tool_turn_without_provider_storage(
         model = sample._build_chat_model()
         result = model.invoke(
             [
-                HumanMessage(content="Use source-brief."),
+                HumanMessage(content="Draft release notes."),
                 AIMessage(
                     content=[
                         {
@@ -189,7 +183,7 @@ def test_model_replays_tool_turn_without_provider_storage(
     "exporter",
     [None, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"],
 )
-def test_entrypoint_reads_skill_on_demand_then_calls_tools(
+def test_entrypoint_reads_skill_on_demand_without_toolbox_tools(
     sample: Any,
     mcp_boundary: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,16 +192,15 @@ def test_entrypoint_reads_skill_on_demand_then_calls_tools(
     exporter: str | None,
 ) -> None:
     final = (
-        "Recommendation: test the upgrade. Evidence: our latency fell 20%; "
-        "release guidance https://docs.python.org/3.14/whatsnew/3.14.html. "
-        "Open questions: production workload coverage."
+        "Highlights: added --timeout flag (default 30s). "
+        "Fixes: retry transient 429 responses. "
+        "Breaking Changes: dropped Python 3.10 support. "
+        "Upgrade Steps: 1. Upgrade to Python 3.11+."
     )
     model = ScriptedModel(
         messages=iter(
             [
                 call("read_skill_resource", uri=SKILL_URI),
-                call("web_search", query="Python 3.14 release notes"),
-                call("code_interpreter", code="(250 - 200) / 250 * 100"),
                 AIMessage(content=final),
             ]
         )
@@ -229,8 +222,12 @@ def test_entrypoint_reads_skill_on_demand_then_calls_tools(
             response = client.post(
                 "/responses",
                 json={
-                    "input": "Use source-brief to research Python 3.14 and calculate "
-                    "the latency reduction from our 250 ms and 200 ms benchmarks.",
+                    "input": (
+                        "Draft customer release notes for v2.0 from these commits: "
+                        "feat: add --timeout flag (default 30s); "
+                        "fix: retry transient 429 responses; "
+                        "breaking: drop Python 3.10 support."
+                    ),
                     "stream": stream,
                     "store": False,
                 },
@@ -258,7 +255,7 @@ def test_entrypoint_reads_skill_on_demand_then_calls_tools(
             for item in payload["output"]
             if item["type"] == "function_call"
         ]
-        assert names == ["read_skill_resource", "web_search", "code_interpreter"]
+        assert names == ["read_skill_resource"]
         text = "".join(
             part.get("text", "")
             for item in payload["output"]
@@ -275,25 +272,19 @@ def test_entrypoint_reads_skill_on_demand_then_calls_tools(
     else:
         tracing.assert_called_once_with(auto_configure_azure_monitor=True)
     assert mcp_boundary.client.resource_reads == [INDEX_URI, SKILL_URI]
-    assert [name for name, _ in mcp_boundary.calls] == [
-        "web_search",
-        "code_interpreter",
-    ]
-    assert model.tool_names == {
-        "read_skill_resource",
-        "web_search",
-        "code_interpreter",
-    }
+    assert model.tool_names == {"read_skill_resource"}
     first_prompt = str(model.requests[0][0].content)
     assert CATALOG in first_prompt
-    assert "Keep each claim with its source URL" not in first_prompt
+    assert "Rewrite internal commit jargon" not in first_prompt
     assert model.requests[1][-1].content == SKILL
 
 
 def test_unrelated_request_does_not_read_skill(sample: Any, mcp_boundary: Any) -> None:
-    tools, catalog = asyncio.run(sample._load_toolbox())
+    read_skill_resource, catalog = asyncio.run(sample._load_toolbox_skills())
     model = ScriptedModel(messages=iter([AIMessage(content="Hello!")]))
-    graph = sample.create_agent(model, tools=tools, system_prompt=catalog)
+    graph = sample.create_agent(
+        model, tools=[read_skill_resource], system_prompt=catalog
+    )
     result = asyncio.run(graph.ainvoke({"messages": [("user", "Hello")]}))
     assert result["messages"][-1].content == "Hello!"
     assert mcp_boundary.client.resource_reads == [INDEX_URI]
@@ -301,21 +292,31 @@ def test_unrelated_request_does_not_read_skill(sample: Any, mcp_boundary: Any) -
 
 
 def test_supporting_resource_is_read_on_demand(sample: Any, mcp_boundary: Any) -> None:
-    reference_uri = "skill://source-brief/references/guide.md"
+    reference_uri = "skill://release-notes/references/style.md"
     mcp_boundary.client.resources[reference_uri] = ["Reference text."]
-    tools, _ = asyncio.run(sample._load_toolbox())
+    read_skill_resource, _ = asyncio.run(sample._load_toolbox_skills())
     assert mcp_boundary.client.resource_reads == [INDEX_URI]
-    result = asyncio.run(tools[-1].ainvoke({"uri": reference_uri}))
+    result = asyncio.run(read_skill_resource.ainvoke({"uri": reference_uri}))
     assert result == "Reference text."
     assert mcp_boundary.client.resource_reads == [INDEX_URI, reference_uri]
 
 
 @pytest.mark.parametrize("uri", ["file:///secret.txt", "https://example.test/skill"])
 def test_reader_rejects_non_skill_uri(sample: Any, mcp_boundary: Any, uri: str) -> None:
-    tools, _ = asyncio.run(sample._load_toolbox())
-    result = asyncio.run(tools[-1].ainvoke({"uri": uri}))
+    read_skill_resource, _ = asyncio.run(sample._load_toolbox_skills())
+    result = asyncio.run(read_skill_resource.ainvoke({"uri": uri}))
     assert "Use a skill:// URI" in result
     assert mcp_boundary.client.resource_reads == [INDEX_URI]
+
+
+def test_reader_returns_sanitized_error_on_read_failure(
+    sample: Any, mcp_boundary: Any
+) -> None:
+    mcp_boundary.client.fail_uris.add(SKILL_URI)
+    read_skill_resource, _ = asyncio.run(sample._load_toolbox_skills())
+    result = asyncio.run(read_skill_resource.ainvoke({"uri": SKILL_URI}))
+    assert "Could not read the skill resource" in result
+    assert "transient toolbox failure" not in result
 
 
 @pytest.mark.parametrize("contents", [[], ["   "]])
@@ -325,8 +326,8 @@ def test_empty_skill_returns_tool_error(
     contents: list[str],
 ) -> None:
     mcp_boundary.client.resources[SKILL_URI] = contents
-    tools, _ = asyncio.run(sample._load_toolbox())
-    result = asyncio.run(tools[-1].ainvoke({"uri": SKILL_URI}))
+    read_skill_resource, _ = asyncio.run(sample._load_toolbox_skills())
+    result = asyncio.run(read_skill_resource.ainvoke({"uri": SKILL_URI}))
     assert "No skill content returned" in result
 
 
@@ -336,4 +337,4 @@ def test_empty_index_fails_at_startup(
 ) -> None:
     mcp_boundary.client.resources[INDEX_URI] = contents
     with pytest.raises(ValueError, match="must provide skill://index.json"):
-        asyncio.run(sample._load_toolbox())
+        asyncio.run(sample._load_toolbox_skills())

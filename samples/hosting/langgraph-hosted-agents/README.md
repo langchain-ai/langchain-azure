@@ -34,8 +34,8 @@ Choose its `azd` setup path before running or deploying:
 | `azure.yaml` in [Responses Run](responses/09_run/README.md#run-with-azd) or [Invocations Run](invocations/03_run/README.md#run-with-azd) | Use the sample's explicit hosting-module startup command and azd setup. |
 | `azure.yaml` in [Responses Resilient](responses/10_resilient/README.md#deploying-the-agent-to-foundry) or [Invocations Resilient](invocations/04_resilient/README.md#deploying-the-agent-to-foundry) | Initialize the independent azd project using that sample's deployment steps. |
 | `azure.yaml` in [Deep Agents](responses/12_deep_agents/SETUP.md) | Complete its resource setup and deployment steps. |
-| `azure.yaml` in [Foundry Toolbox](responses/04_foundry_toolbox/README.md#deploying-the-agent-to-foundry) | Initialize with an existing project, model, Toolbox, and registry connection using that sample's deployment steps. |
 | Both formats in [Branching](responses/13_branching/README.md#run-with-azd) | Follow the sample's existing-project setup. |
+| `azure.yaml` in [Foundry Toolbox Skills](responses/14_foundry_toolbox_skills/README.md#deploying-the-agent-to-foundry) | Initialize with an existing project, model, Toolbox, and registry connection using that sample's deployment steps. |
 
 ## Start here
 
@@ -51,6 +51,7 @@ for the concepts and protocol comparison.
 | Persist graph state in Foundry State Store | [Responses Workflows](responses/05_workflows/README.md) uses `FoundryCheckpointSaver` when hosted and an in-memory saver locally; see [durable graph state](../../../libs/azure-ai/README.md#durable-graph-state) |
 | Use the Invocations protocol with session continuity | [Invocations Basic](invocations/01_basic/README.md) |
 | Add local, remote MCP, or managed Toolbox tools | [Tools](responses/02_tools/README.md), [MCP](responses/03_mcp/README.md), or [Foundry Toolbox](responses/04_foundry_toolbox/README.md) |
+| Load Foundry Toolbox skills on demand | [Foundry Toolbox Skills](responses/14_foundry_toolbox_skills/README.md) |
 | Add tracing or human approval | [Observability](responses/07_observability/README.md) or [HITL](responses/08_hitl/README.md) |
 | Recover background work after a restart | [Responses Resilient](responses/10_resilient/README.md) or [Invocations Resilient](invocations/04_resilient/README.md) |
 | Branch, rewind, or regenerate from a completed response | [Responses Branching](responses/13_branching/README.md) |
@@ -67,7 +68,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 1 | [Basic](responses/01_basic/) | Minimal `create_agent` graph hosted as the Responses API. |
 | 2 | [Tools](responses/02_tools/) | `@tool` registration. Intermediate tool calls and results are surfaced as `function_call` / `function_call_output` output items. |
 | 3 | [MCP](responses/03_mcp/) | Tools loaded at startup from a remote MCP server (GitHub by default) via `langchain_mcp_adapters.client.MultiServerMCPClient`. |
-| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools and a skill catalog from the same Foundry Toolbox. The agent reads a relevant skill on demand, then follows it using web search and code execution. |
+| 4 | [Foundry Toolbox](responses/04_foundry_toolbox/) | Tools loaded at startup from an Azure AI Foundry Toolbox (managed multi-MCP gateway) via `langchain_azure_ai.tools.AzureAIProjectToolbox`. |
 | 5 | [Workflows](responses/05_workflows/) | Hand-built multi-node `StateGraph` (plan -> tools -> synthesize) hosted as the Responses API. |
 | 6 | [Files](responses/06_files/) | Image and file request attachments passed directly to a Responses-compatible model. |
 | 7 | [Observability](responses/07_observability/) | Standalone observability sample — minimal `create_agent` graph with GenAI OpenTelemetry tracing wired to the Foundry project's managed Application Insights, with `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true` enabled by default. |
@@ -77,6 +78,7 @@ use its README for requests, then follow [deployment](#deploying-the-agent-to-fo
 | 11 | [LangChain middleware](responses/11_middleware/) | Native `HumanInTheLoopMiddleware` approve/edit/reject plus the official `@before_model` message-limit function. |
 | 12 | [Deep Agents](responses/12_deep_agents/) | Official Deep Research workflow with planning, research subagents, Foundry web search, checkpoint-backed virtual files, and Azure Blob Storage integration for downloadable reports. |
 | 13 | [Branching](responses/13_branching/) | Remember a number to demonstrate branching, rewind, and regeneration with `previous_response_id`. |
+| 14 | [Foundry Toolbox Skills](responses/14_foundry_toolbox_skills/) | Skills loaded on demand from an Azure AI Foundry Toolbox via `AzureAIProjectToolbox.aget_resources()`, without loading remote Toolbox tools. |
 
 > This tree follows the Agent Framework's [`foundry-hosted-agents`](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents)
 > folder structure and naming style. Observability coverage for the
@@ -203,7 +205,7 @@ pip install -r requirements.txt
 
 # 3. Copy and fill in env vars
 cp .env.example .env
-# edit FOUNDRY_PROJECT_ENDPOINT (and TOOLBOX_NAME for responses/04_foundry_toolbox)
+# edit FOUNDRY_PROJECT_ENDPOINT (and TOOLBOX_NAME for responses/04_foundry_toolbox or responses/14_foundry_toolbox_skills)
 ```
 
 Alternatively, install the shared dev dependencies once at this
@@ -282,8 +284,9 @@ hosted-agent runtime.
 >   provisioned during `azd ai agent init`.
 > - `APPLICATIONINSIGHTS_CONNECTION_STRING` — the connection string for
 >   the project's Application Insights instance.
-> - `TOOLBOX_NAME` — for the [Foundry Toolbox sample](responses/04_foundry_toolbox/),
->   set this in the azd environment as described in its deployment steps.
+> - `TOOLBOX_NAME` — only for samples that declare a `kind: toolbox`
+>   resource in their `agent.manifest.yaml` (e.g.
+>   [responses/04_foundry_toolbox](responses/04_foundry_toolbox/)).
 >
 > Each sample's `main.py` reads these names directly, so no code
 > changes are required between local-dev and deployed.

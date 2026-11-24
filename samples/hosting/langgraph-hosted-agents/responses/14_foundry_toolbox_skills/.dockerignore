@@ -1,0 +1,11 @@
+.azure/
+.git/
+.venv*/
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.env.*
+!.env.example
