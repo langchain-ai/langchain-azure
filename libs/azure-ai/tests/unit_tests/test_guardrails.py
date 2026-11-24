@@ -1,9 +1,11 @@
 """Unit tests for the guardrails module."""
 
+import asyncio
 from typing import Annotated, Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from azure.core.exceptions import HttpResponseError, ServiceResponseTimeoutError
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
@@ -4088,3 +4090,386 @@ class TestProtectedMaterialContextExtractor:
         assert result is None  # no violation detected, returns None
         body = mock_rest.call_args[0][1]
         assert body["text"] == custom_text
+
+
+# ---------------------------------------------------------------------------
+# Tests for text longer than the per-request limit
+# ---------------------------------------------------------------------------
+
+_FLAGGED_TEXT = "flagged words"
+_LONG_TEXT = "Please summarize the meeting notes. " * 300 + _FLAGGED_TEXT
+
+
+def _analyze_text_flagging(sent: List[str]) -> Callable[[Any], Any]:
+    def analyze_text(options: Any) -> Any:
+        sent.append(options.text)
+        severity = 6 if _FLAGGED_TEXT in options.text else 0
+        return MagicMock(
+            categories_analysis=[MagicMock(category="Hate", severity=severity)],
+            blocklists_match=[],
+        )
+
+    return analyze_text
+
+
+def _detect_protected_material_flagging(
+    sent: List[str],
+) -> Callable[[str, Dict[str, Any], str], Dict[str, Any]]:
+    def send(path: str, body: Dict[str, Any], api_version: str) -> Dict[str, Any]:
+        sent.append(body["text"])
+        return {
+            "protectedMaterialAnalysis": {"detected": _FLAGGED_TEXT in body["text"]}
+        }
+
+    return send
+
+
+def _create_answer_agent(middleware: Any, answer: str = "ok") -> Any:
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import (
+        GenericFakeChatModel,
+    )
+
+    model = GenericFakeChatModel(messages=iter([AIMessage(content=answer)]))
+    return create_agent(model=model, middleware=[middleware])
+
+
+def _analyze_text_matching_blocklist(options: Any) -> Any:
+    match = MagicMock(blocklist_name="my-list", blocklist_item_text=_FLAGGED_TEXT)
+    return MagicMock(
+        categories_analysis=[],
+        blocklists_match=[match] if _FLAGGED_TEXT in options.text else [],
+    )
+
+
+def _assert_split_into_requests(sent: List[str], text: str) -> None:
+    assert len(sent) == 2
+    assert sent[0] == text[:10_000]
+    assert len(sent[1]) <= 10_000
+    assert text.endswith(sent[1])
+    assert sent[1].startswith(" ")
+    assert len(sent[0]) + len(sent[1]) - len(text) >= 128
+
+
+class TestLongTextScreening:
+    """Tests for text over the 10,000-character request limit."""
+
+    def test_create_agent_blocks_flagged_text_past_limit(self) -> None:
+        """Text after the first 10,000 characters should also be analysed."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_text_moderation(apply_to_output=False)
+        sent: List[str] = []
+        client = MagicMock()
+        client.analyze_text.side_effect = _analyze_text_flagging(sent)
+        agent = _create_answer_agent(m)
+        with patch.object(m, "_get_sync_client", return_value=client):
+            with pytest.raises(ContentSafetyViolationError):
+                agent.invoke({"messages": [HumanMessage(content=_LONG_TEXT)]})
+
+        _assert_split_into_requests(sent, _LONG_TEXT)
+
+    async def test_create_agent_blocks_flagged_text_past_limit_async(self) -> None:
+        """The async run should also analyse text after 10,000 characters."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_text_moderation(apply_to_output=False)
+        sent: List[str] = []
+        client = MagicMock()
+        client.analyze_text = AsyncMock(side_effect=_analyze_text_flagging(sent))
+        agent = _create_answer_agent(m)
+        with patch.object(m, "_get_async_client", return_value=client):
+            with pytest.raises(ContentSafetyViolationError):
+                await agent.ainvoke({"messages": [HumanMessage(content=_LONG_TEXT)]})
+
+        _assert_split_into_requests(sent, _LONG_TEXT)
+
+    def test_create_agent_blocks_protected_material_past_limit(self) -> None:
+        """Model output after 10,000 characters should also be checked."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_protected_material(apply_to_input=False)
+        sent: List[str] = []
+        agent = _create_answer_agent(m, answer=_LONG_TEXT)
+        with patch.object(
+            m,
+            "_send_rest_sync",
+            side_effect=_detect_protected_material_flagging(sent),
+        ):
+            with pytest.raises(ContentSafetyViolationError):
+                agent.invoke({"messages": [HumanMessage(content="hi")]})
+
+        _assert_split_into_requests(sent, _LONG_TEXT)
+
+    async def test_create_agent_blocks_protected_material_past_limit_async(
+        self,
+    ) -> None:
+        """The async run should also check output after 10,000 characters."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        m = _make_protected_material(apply_to_input=False)
+        sent: List[str] = []
+        agent = _create_answer_agent(m, answer=_LONG_TEXT)
+        with patch.object(
+            m,
+            "_send_rest_async",
+            new_callable=AsyncMock,
+            side_effect=_detect_protected_material_flagging(sent),
+        ):
+            with pytest.raises(ContentSafetyViolationError):
+                await agent.ainvoke({"messages": [HumanMessage(content="hi")]})
+
+        _assert_split_into_requests(sent, _LONG_TEXT)
+
+    def test_text_moderation_keeps_highest_severity_per_category(self) -> None:
+        """Each category should be reported once, with its highest severity."""
+        m = _make_text_moderation(exit_behavior="replace")
+        client = MagicMock()
+        client.analyze_text.side_effect = [
+            MagicMock(
+                categories_analysis=[
+                    MagicMock(category="Hate", severity=4),
+                    MagicMock(category="Violence", severity=0),
+                ],
+                blocklists_match=[],
+            ),
+            MagicMock(
+                categories_analysis=[
+                    MagicMock(category="Hate", severity=6),
+                    MagicMock(category="Violence", severity=4),
+                ],
+                blocklists_match=[],
+            ),
+        ]
+        msg = HumanMessage(content=_LONG_TEXT)
+        with patch.object(m, "_get_sync_client", return_value=client):
+            m.before_agent({"messages": [msg]}, runtime=None)
+
+        assert msg.content == (
+            "Content safety violation detected: "
+            "Hate (severity: 6), Violence (severity: 4)"
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "x " * 4990 + _FLAGGED_TEXT + "." + "x" * 1000,
+            "x " * 4996 + _FLAGGED_TEXT + "x" * 1000,
+        ],
+        ids=["before_limit", "across_limit"],
+    )
+    def test_blocklist_item_on_part_boundary_is_matched(self, text: str) -> None:
+        """A blocklist item on a part boundary should be reported once."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            BlocklistEvaluation,
+            ContentSafetyViolationError,
+        )
+
+        m = _make_text_moderation(blocklist_names=["my-list"], apply_to_output=False)
+        client = MagicMock()
+        client.analyze_text.side_effect = _analyze_text_matching_blocklist
+        with patch.object(m, "_get_sync_client", return_value=client):
+            with pytest.raises(ContentSafetyViolationError) as exc_info:
+                m.before_agent({"messages": [HumanMessage(content=text)]}, runtime=None)
+
+        assert exc_info.value.violations == [
+            BlocklistEvaluation(
+                category="blocklist", blocklist_name="my-list", text=_FLAGGED_TEXT
+            )
+        ]
+
+    def test_protected_material_reports_one_violation(self) -> None:
+        """Detections in several parts should be one violation, citing each once."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+            ProtectedMaterialEvaluation,
+        )
+
+        m = _make_protected_material(type="code")
+        citations = [{"license": "MIT", "sourceUrls": ["https://example.com/a"]}]
+        more_citations = [{"license": "BSD", "sourceUrls": ["https://example.com/b"]}]
+        responses = [
+            {
+                "protectedMaterialAnalysis": {
+                    "detected": True,
+                    "codeCitations": citations,
+                }
+            },
+            {
+                "protectedMaterialAnalysis": {
+                    "detected": True,
+                    "codeCitations": citations + more_citations,
+                }
+            },
+        ]
+        with patch.object(m, "_send_rest_sync", side_effect=responses):
+            with pytest.raises(ContentSafetyViolationError) as exc_info:
+                m.before_agent(
+                    {"messages": [HumanMessage(content=_LONG_TEXT)]}, runtime=None
+                )
+
+        (violation,) = exc_info.value.violations
+        assert isinstance(violation, ProtectedMaterialEvaluation)
+        assert violation.code_citations == citations + more_citations
+
+    @pytest.mark.parametrize(
+        "text", ["x" * 200, _LONG_TEXT], ids=["one_part", "two_parts"]
+    )
+    def test_protected_material_null_code_citations(self, text: str) -> None:
+        """A null ``codeCitations`` should be read as no code citations."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+            ProtectedMaterialEvaluation,
+        )
+
+        m = _make_protected_material(type="code")
+        response = {
+            "protectedMaterialAnalysis": {"detected": True, "codeCitations": None}
+        }
+        with patch.object(m, "_send_rest_sync", return_value=response):
+            with pytest.raises(ContentSafetyViolationError) as exc_info:
+                m.before_agent({"messages": [HumanMessage(content=text)]}, runtime=None)
+
+        (violation,) = exc_info.value.violations
+        assert isinstance(violation, ProtectedMaterialEvaluation)
+        assert violation.code_citations == []
+
+    @pytest.mark.parametrize(
+        "error_type", [HttpResponseError, ServiceResponseTimeoutError]
+    )
+    @pytest.mark.parametrize("kind", ["text_moderation", "protected_material"])
+    async def test_error_in_later_part_propagates(
+        self, kind: str, error_type: type
+    ) -> None:
+        """A service error in a later part should stop the hook, unhandled."""
+        text = "x" * 25_000
+        if kind == "text_moderation":
+            m = _make_text_moderation(exit_behavior="replace")
+            flagged: Any = MagicMock(
+                categories_analysis=[MagicMock(category="Hate", severity=6)],
+                blocklists_match=[],
+            )
+        else:
+            m = _make_protected_material(exit_behavior="replace")
+            flagged = {"protectedMaterialAnalysis": {"detected": True}}
+        responses = [flagged, error_type("Service error"), flagged]
+        msg = HumanMessage(content=text)
+
+        if kind == "text_moderation":
+            client = MagicMock()
+            client.analyze_text.side_effect = list(responses)
+            async_client = MagicMock()
+            async_client.analyze_text = AsyncMock(side_effect=list(responses))
+            with (
+                patch.object(m, "_get_sync_client", return_value=client),
+                patch.object(m, "_get_async_client", return_value=async_client),
+            ):
+                with pytest.raises(error_type):
+                    m.before_agent({"messages": [msg]}, runtime=None)
+                with pytest.raises(error_type):
+                    await m.abefore_agent({"messages": [msg]}, runtime=None)
+            calls = [
+                client.analyze_text.call_count,
+                async_client.analyze_text.await_count,
+            ]
+        else:
+            with (
+                patch.object(
+                    m, "_send_rest_sync", side_effect=list(responses)
+                ) as mock_rest,
+                patch.object(
+                    m,
+                    "_send_rest_async",
+                    new_callable=AsyncMock,
+                    side_effect=list(responses),
+                ) as mock_rest_async,
+            ):
+                with pytest.raises(error_type):
+                    m.before_agent({"messages": [msg]}, runtime=None)
+                with pytest.raises(error_type):
+                    await m.abefore_agent({"messages": [msg]}, runtime=None)
+            calls = [mock_rest.call_count, mock_rest_async.await_count]
+
+        assert calls == [2, 2]
+        assert msg.content == text
+
+    def test_text_at_limit_sent_in_one_request(self) -> None:
+        """Text within the limit should still be sent in one request."""
+        m = _make_text_moderation()
+        sent: List[str] = []
+        client = MagicMock()
+        client.analyze_text.side_effect = _analyze_text_flagging(sent)
+        text = "x" * 10_000
+        with patch.object(m, "_get_sync_client", return_value=client):
+            m.before_agent({"messages": [HumanMessage(content=text)]}, runtime=None)
+
+        assert sent == [text]
+
+    @pytest.mark.parametrize("kind", ["text_moderation", "protected_material"])
+    async def test_async_parts_sent_one_at_a_time(self, kind: str) -> None:
+        """The async hooks should not send the parts all at once."""
+        active = 0
+        max_active = 0
+
+        async def send(*args: Any) -> Any:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0)
+            active -= 1
+            if kind == "text_moderation":
+                return MagicMock(categories_analysis=[], blocklists_match=[])
+            return {"protectedMaterialAnalysis": {"detected": False}}
+
+        state = {"messages": [HumanMessage(content="x" * 25_000)]}
+        if kind == "text_moderation":
+            m = _make_text_moderation()
+            client = MagicMock()
+            client.analyze_text = AsyncMock(side_effect=send)
+            with patch.object(m, "_get_async_client", return_value=client):
+                await m.abefore_agent(state, runtime=None)
+            calls = client.analyze_text.await_count
+        else:
+            m = _make_protected_material()
+            with patch.object(
+                m, "_send_rest_async", new_callable=AsyncMock, side_effect=send
+            ) as mock_rest:
+                await m.abefore_agent(state, runtime=None)
+            calls = mock_rest.await_count
+
+        assert calls == 3
+        assert max_active == 1
+
+    def test_split_text_without_whitespace_or_with_blank_parts(self) -> None:
+        """Without whitespace, parts are cut at the limit; blank parts are dropped."""
+        from langchain_azure_ai.agents.middleware.content_safety._base import (
+            _split_text,
+        )
+
+        assert _split_text("x" * 25_000) == ["x" * 10_000] * 3
+        assert _split_text("x" * 10_000 + " " * 30_000 + "y") == [
+            "x" * 10_000,
+            "x" * 128 + " " * 9_872,
+            " " * 9_999 + "y",
+        ]
+
+    @pytest.mark.parametrize(
+        "text",
+        ["a" * 9_872 + " " * 128 + "x", "a" * 10_001],
+        ids=["blank_before_tail", "one_past_limit"],
+    )
+    def test_split_text_last_part_is_not_short(self, text: str) -> None:
+        """The last part should be the last 10,000 characters, not a short tail."""
+        from langchain_azure_ai.agents.middleware.content_safety._base import (
+            _split_text,
+        )
+
+        assert _split_text(text) == [text[:10_000], text[1:]]
