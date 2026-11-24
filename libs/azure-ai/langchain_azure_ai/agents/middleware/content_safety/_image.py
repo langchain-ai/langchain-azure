@@ -49,9 +49,12 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
     dedicated class keeps each concern focused and composable.
 
     The middleware extracts images from the most recent ``HumanMessage`` (input)
-    and, optionally, from the most recent ``AIMessage`` (output).  It supports:
+    and, optionally, from the most recent ``AIMessage`` (output).  It supports
+    ``image_url`` blocks, standard ``image`` blocks and Responses
+    ``input_image`` blocks with:
 
-    * **Base64 data URLs** – ``data:image/png;base64,<data>``
+    * **Base64 data** – ``data:image/png;base64,<data>`` URLs, or the
+      ``base64`` field of an ``image`` block
     * **HTTP(S) URLs** – publicly accessible image URLs
 
     Content is analyzed using the Azure AI Content Safety image analysis API.
@@ -387,6 +390,13 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         * ``{"type": "image_url", "image_url": "data:image/png;base64,<b64>"}``
         * ``{"type": "image_url", "image_url": "https://..."}``
         * ``{"type": "image_url", "image_url": {"url": "data:..." | "https://..."}}``
+        * ``{"type": "image", "base64": "<b64>", "mime_type": "image/png"}``
+        * ``{"type": "image", "url": "data:..." | "https://..."}``
+        * ``{"type": "image", "source_type": "base64" | "url", ...}``
+        * ``{"type": "input_image", "image_url": "data:..." | "https://..."}``
+
+        Image blocks that only reference a file by ID can't be sent for
+        analysis and are skipped with a warning.
 
         Returns:
             List of image dicts with either ``"content"`` (bytes for base64
@@ -399,13 +409,32 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         for block in msg.content:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") != "image_url":
+            block_type = block.get("type")
+            if block_type == "image":
+                # Standard blocks have ``base64`` or ``url``, and v0 blocks have
+                # ``source_type`` with ``data`` or ``url``.
+                data = block.get("base64") or (
+                    block.get("data") if block.get("source_type") == "base64" else None
+                )
+                if data:
+                    try:
+                        images.append({"content": base64.b64decode(data)})
+                    except Exception:
+                        logger.warning("Skipping malformed base64 image in message.")
+                    continue
+                url_str: str = block.get("url") or ""
+            elif block_type in ("image_url", "input_image"):
+                raw = block.get("image_url", "")
+                # Normalise: may be a string or a dict {"url": ...}
+                url_str = raw if isinstance(raw, str) else raw.get("url", "")
+            else:
                 continue
-
-            raw = block.get("image_url", "")
-            # Normalise: may be a string or a dict {"url": ...}
-            url_str: str = raw if isinstance(raw, str) else raw.get("url", "")
             if not url_str:
+                if block_type != "image_url":
+                    logger.warning(
+                        "Skipping image block without base64 data or a URL, "
+                        "such as one that references a file by ID."
+                    )
                 continue
 
             if url_str.startswith("data:"):
