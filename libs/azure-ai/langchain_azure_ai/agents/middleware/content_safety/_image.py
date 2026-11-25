@@ -30,7 +30,8 @@ class ImageModerationInput:
     Attributes:
         images: List of image descriptors.  Each entry is a dict with either a
             ``"content"`` key (``bytes`` for base64-decoded images) or a
-            ``"url"`` key (``str`` for HTTP(S) image URLs).
+            ``"url"`` key (``str`` for HTTP(S) image URLs, sent as ``blobUrl``,
+            the URL of an Azure Storage blob).
     """
 
     images: List[Dict[str, Any]]
@@ -52,7 +53,8 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
     and, optionally, from the most recent ``AIMessage`` (output).  It supports:
 
     * **Base64 data URLs** – ``data:image/png;base64,<data>``
-    * **HTTP(S) URLs** – publicly accessible image URLs
+    * **HTTP(S) URLs** – sent to the service as ``blobUrl``, the URL of an
+      Azure Storage blob that the Content Safety resource can read
 
     Content is analyzed using the Azure AI Content Safety image analysis API.
     When violations are detected, the middleware takes one of two actions:
@@ -351,7 +353,7 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         image_data = (
             ImageData(content=image["content"])
             if "content" in image
-            else ImageData(url=image["url"])
+            else ImageData(blob_url=image["url"])
         )
         options = AnalyzeImageOptions(
             image=image_data,
@@ -368,7 +370,7 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         image_data = (
             ImageData(content=image["content"])
             if "content" in image
-            else ImageData(url=image["url"])
+            else ImageData(blob_url=image["url"])
         )
         options = AnalyzeImageOptions(
             image=image_data,
