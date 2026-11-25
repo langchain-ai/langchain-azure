@@ -2938,11 +2938,13 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
 
 
 @pytest.mark.parametrize("superseded_at_entry", [False, True])
+@pytest.mark.parametrize("checkpoint_available", [True, False])
 async def test_superseded_recovery_preserves_conversation_progress(
     foundry_state_stores: dict[str, dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     superseded_at_entry: bool,
+    checkpoint_available: bool,
 ) -> None:
     from azure.ai.agentserver.responses import FileResponseStore
 
@@ -2985,6 +2987,10 @@ async def test_superseded_recovery_preserves_conversation_progress(
                 ).checkpoint_ref
                 break
     assert recovery_reference is not None and recovery_reference != first_reference
+    if not checkpoint_available:
+        recovery_reference = CheckpointRef(
+            recovery_reference.thread_id, "missing-checkpoint"
+        )
     context.is_recovery = True
     context.persisted_response = _response_object(
         context.response_id, checkpoint_ref=recovery_reference
@@ -2998,12 +3004,16 @@ async def test_superseded_recovery_preserves_conversation_progress(
             if isinstance(event, dict) and event["type"] == "response.in_progress":
                 cancellation.set()
         execute.assert_not_called()
-    assert event["type"] == "response.completed"
-
     next_config = await server.build_runnable_config(
         request, _context(response_id="resp-third")
     )
-    assert HostingRunnableConfig(next_config).checkpoint_ref == recovery_reference
+    next_reference = HostingRunnableConfig(next_config).checkpoint_ref
+    if checkpoint_available:
+        assert event["type"] == "response.completed"
+        assert next_reference == recovery_reference
+    else:
+        assert event["type"] == "response.failed"
+        assert next_reference == first_reference
 
 
 async def test_response_store_supports_linear_response_chain(

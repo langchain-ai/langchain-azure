@@ -1113,11 +1113,20 @@ class ResponsesHostServer:
                     checkpoint_reads.cache = None
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
+            response_linked = checkpoint_ref is None and bool(
+                request.get("previous_response_id")
+            )
+            recovered_conversation_superseded = (
+                checkpoint_ref is not None
+                and conversation_chain_id is not None
+                and cancellation_signal.is_set()
+                and not context.client_cancelled
+            )
             if self._graph_has_checkpointer and (
-                checkpoint_ref is None and request.get("previous_response_id")
+                response_linked or recovered_conversation_superseded
             ):
                 state = await self._graph.aget_state(config)
-                if self._is_response_branch(request, context):
+                if response_linked and self._is_response_branch(request, context):
                     _validate_branch_state(state, config)
                 elif (
                     HostingRunnableConfig(state.config).checkpoint_ref
