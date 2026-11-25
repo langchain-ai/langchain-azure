@@ -54,7 +54,7 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
     ``input_image`` blocks with:
 
     * **Base64 data** – ``data:image/png;base64,<data>`` URLs, or the
-      ``base64`` field of an ``image`` block
+      ``base64`` or ``data`` field of an ``image`` block
     * **HTTP(S) URLs** – publicly accessible image URLs
 
     Content is analyzed using the Azure AI Content Safety image analysis API.
@@ -395,8 +395,10 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
         * ``{"type": "image", "source_type": "base64" | "url", ...}``
         * ``{"type": "input_image", "image_url": "data:..." | "https://..."}``
 
-        Image blocks that only reference a file by ID can't be sent for
-        analysis and are skipped with a warning.
+        When an ``image`` block has more than one of ``base64``, ``data`` and
+        ``url``, each of them is extracted, since chat models don't agree on
+        which one they send.  Image blocks that only reference a file by ID
+        can't be sent for analysis and are skipped with a warning.
 
         Returns:
             List of image dicts with either ``"content"`` (bytes for base64
@@ -412,24 +414,19 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
             block_type = block.get("type")
             if block_type == "image":
                 # Standard blocks have ``base64`` or ``url``, and v0 blocks have
-                # ``source_type`` with ``data`` or ``url``.
-                data = block.get("base64") or (
-                    block.get("data") if block.get("source_type") == "base64" else None
-                )
-                if data:
-                    try:
-                        images.append({"content": base64.b64decode(data)})
-                    except Exception:
-                        logger.warning("Skipping malformed base64 image in message.")
-                    continue
-                url_str: str = block.get("url") or ""
+                # ``source_type`` with ``data`` or ``url``.  Chat models don't
+                # agree on which one they send when a block has more than one,
+                # so each one is screened.
+                data = [block.get("base64"), block.get("data")]
+                urls = [block.get("url")]
             elif block_type in ("image_url", "input_image"):
                 raw = block.get("image_url") or ""
                 # Normalise: may be a string or a dict {"url": ...}, or null
-                url_str = raw if isinstance(raw, str) else raw.get("url", "")
+                data = []
+                urls = [raw if isinstance(raw, str) else raw.get("url", "")]
             else:
                 continue
-            if not url_str:
+            if not any(data) and not any(urls):
                 if block_type != "image_url":
                     logger.warning(
                         "Skipping image block without base64 data or a URL, "
@@ -437,19 +434,31 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
                     )
                 continue
 
-            if url_str.startswith("data:"):
-                # Base64 data URL: data:<mime>;base64,<data>
+            block_images: List[Dict[str, Any]] = []
+            for b64 in filter(None, data):
                 try:
-                    _, rest = url_str.split(",", 1)
-                    images.append({"content": base64.b64decode(rest)})
+                    block_images.append({"content": base64.b64decode(b64)})
                 except Exception:
                     logger.warning("Skipping malformed base64 image in message.")
-            elif url_str.startswith(("http://", "https://")):
-                images.append({"url": url_str})
-            else:
-                logger.warning(
-                    "Skipping image with unsupported URL scheme: %s",
-                    url_str[:40],
-                )
+            for url_str in filter(None, urls):
+                if url_str.startswith("data:"):
+                    # Base64 data URL: data:<mime>;base64,<data>
+                    try:
+                        _, rest = url_str.split(",", 1)
+                        block_images.append({"content": base64.b64decode(rest)})
+                    except Exception:
+                        logger.warning("Skipping malformed base64 image in message.")
+                elif url_str.startswith(("http://", "https://")):
+                    block_images.append({"url": url_str})
+                else:
+                    logger.warning(
+                        "Skipping image with unsupported URL scheme: %s",
+                        url_str[:40],
+                    )
+            images.extend(
+                image
+                for i, image in enumerate(block_images)
+                if image not in block_images[:i]
+            )
 
         return images

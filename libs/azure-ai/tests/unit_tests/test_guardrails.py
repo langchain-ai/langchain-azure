@@ -906,6 +906,7 @@ class TestAzureContentModerationForImagesMiddlewareInit:
 
 
 _IMAGE_B64 = base64.b64encode(b"fake-image-bytes").decode()
+_OTHER_IMAGE_B64 = base64.b64encode(b"other-image-bytes").decode()
 
 
 class TestImageExtraction:
@@ -1059,6 +1060,80 @@ class TestImageExtraction:
         with caplog.at_level("WARNING"):
             assert self._cls()._images_from_message(msg) == []
         assert "Skipping image block" in caplog.text
+
+    @pytest.mark.parametrize(
+        "block,expected",
+        [
+            (
+                {
+                    "type": "image",
+                    "source_type": "base64",
+                    "data": _IMAGE_B64,
+                    "base64": _OTHER_IMAGE_B64,
+                    "mime_type": "image/png",
+                },
+                [{"content": b"other-image-bytes"}, {"content": b"fake-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "source_type": "url",
+                    "url": "https://example.com/photo.jpg",
+                    "base64": _OTHER_IMAGE_B64,
+                },
+                [
+                    {"content": b"other-image-bytes"},
+                    {"url": "https://example.com/photo.jpg"},
+                ],
+            ),
+            (
+                {
+                    "type": "image",
+                    "source_type": "id",
+                    "id": "file-abc",
+                    "base64": _OTHER_IMAGE_B64,
+                },
+                [{"content": b"other-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "base64": _IMAGE_B64,
+                    "url": "https://example.com/photo.jpg",
+                },
+                [
+                    {"content": b"fake-image-bytes"},
+                    {"url": "https://example.com/photo.jpg"},
+                ],
+            ),
+            (
+                {"type": "image", "base64": _IMAGE_B64, "data": _OTHER_IMAGE_B64},
+                [{"content": b"fake-image-bytes"}, {"content": b"other-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "base64": _IMAGE_B64,
+                    "url": f"data:image/png;base64,{_IMAGE_B64}",
+                },
+                [{"content": b"fake-image-bytes"}],
+            ),
+        ],
+        ids=[
+            "v0_base64_and_base64",
+            "v0_url_and_base64",
+            "v0_id_and_base64",
+            "base64_and_url",
+            "base64_and_data",
+            "same_image_twice",
+        ],
+    )
+    def test_each_image_in_a_block_is_extracted(
+        self, block: Dict[str, Any], expected: List[Dict[str, Any]]
+    ) -> None:
+        """Every image field of a block is extracted, as models read different ones."""
+        msg = HumanMessage(content=[block])
+        assert self._cls()._images_from_message(msg) == expected
 
     @pytest.mark.parametrize("image_url", [None, {"url": None}], ids=["null", "dict"])
     def test_image_url_block_with_null_url_skipped(self, image_url: Any) -> None:
@@ -1234,6 +1309,35 @@ class TestImageMiddlewareSync:
                 with pytest.raises(ContentSafetyViolationError):
                     m.before_agent({"messages": [msg]}, runtime=None)
         assert mock_client.analyze_image.call_count == 1
+
+    def test_before_agent_blocks_flagged_image_with_safe_extra_field(self) -> None:
+        """A flagged image is blocked when the block also has a safe one."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        with self._mock_sdk():
+            m = self._make_middleware(exit_behavior="error")
+            mock_client = MagicMock()
+            mock_client.analyze_image.side_effect = [
+                self._mock_response(severity=0),
+                self._mock_response(severity=6),
+            ]
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": _IMAGE_B64,
+                            "base64": _OTHER_IMAGE_B64,
+                            "mime_type": "image/png",
+                        }
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    m.before_agent({"messages": [msg]}, runtime=None)
+        assert mock_client.analyze_image.call_count == 2
 
     def test_after_agent_annotates_standard_image_block_output(self) -> None:
         """after_agent screens a standard ``image`` block in the model output."""
