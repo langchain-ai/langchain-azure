@@ -37,7 +37,7 @@ This package includes:
 * [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
 
-Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
+Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Microsoft Foundry](https://aka.ms/azureai/langchain).
 
 ### Install langchain-azure-ai
 

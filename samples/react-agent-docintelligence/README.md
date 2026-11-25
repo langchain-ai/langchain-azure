@@ -1,6 +1,6 @@
 # Document Intake & Analysis Pipeline
 
-This sample demonstrates how to build a **multi-agent document processing pipeline** using **LangGraph** and **Azure AI Foundry Agent Service**. Two specialized agents are composed in a custom `StateGraph` to parse, classify, and analyze documents end-to-end.
+This sample demonstrates how to build a **multi-agent document processing pipeline** using **LangGraph** and **Microsoft Foundry Agent Service**. Two specialized agents are composed in a custom `StateGraph` to parse, classify, and analyze documents end-to-end.
 
 ## Overview
 
@@ -29,7 +29,7 @@ A lightweight **bridging node** (`prepare_analysis`) converts the parser's outpu
 
 - Python 3.11 through 3.14
 - Azure subscription with access to:
-  - Azure AI Foundry project
+  - Microsoft Foundry project
   - Azure OpenAI Service (with GPT-4 deployment)
   - Azure AI Document Intelligence service
 - uv for dependency management
@@ -58,7 +58,7 @@ AZURE_AI_PROJECT_ENDPOINT="https://<resource>.services.ai.azure.com/api/projects
 
 ### 3. Deploy Required Azure Resources
 
-Ensure you have the following resources deployed in your Azure AI Foundry project:
+Ensure you have the following resources deployed in your Microsoft Foundry project:
 - **Azure OpenAI**: Deploy a GPT-4 model (the code references `gpt-4.1`)
 - **Azure AI Document Intelligence**: Enable the service in your project
 
@@ -134,7 +134,7 @@ analyst_node = service.create_prompt_agent_node(
 
 ### 2. Bridging Node
 
-Since each agent operates on its own Azure AI Foundry thread, a bridging function converts the parser's AI response into a `HumanMessage` for the analyst:
+Since each agent operates on its own Microsoft Foundry thread, a bridging function converts the parser's AI response into a `HumanMessage` for the analyst:
 
 ```python
 def prepare_analysis(state):
