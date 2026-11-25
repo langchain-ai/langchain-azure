@@ -1577,6 +1577,82 @@ class TestImageMiddlewareAsync:
 
 
 # ---------------------------------------------------------------------------
+# Tests for image analysis requests built with the SDK models
+# ---------------------------------------------------------------------------
+
+
+class TestImageAnalysisRequest:
+    """Tests for the ``analyze_image`` request, built with the real SDK models."""
+
+    @staticmethod
+    def _make_middleware() -> Any:
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            AzureContentModerationForImagesMiddleware,
+        )
+
+        return AzureContentModerationForImagesMiddleware(
+            endpoint="https://test.cognitiveservices.azure.com/",
+            credential="fake-key",
+        )
+
+    @staticmethod
+    def _safe_response() -> Any:
+        from azure.ai.contentsafety.models import AnalyzeImageResult
+
+        return AnalyzeImageResult(
+            {"categoriesAnalysis": [{"category": "Violence", "severity": 0}]}
+        )
+
+    @pytest.mark.parametrize(
+        "image_url,expected",
+        [
+            (
+                "https://example.blob.core.windows.net/images/photo.png",
+                {"blobUrl": "https://example.blob.core.windows.net/images/photo.png"},
+            ),
+            ("data:image/png;base64,aW1n", {"content": "aW1n"}),
+        ],
+        ids=["url", "data_url"],
+    )
+    def test_before_agent_sends_image(
+        self, image_url: str, expected: Dict[str, Any]
+    ) -> None:
+        """An image URL is sent as ``blobUrl``, and base64 data as ``content``."""
+        m = self._make_middleware()
+        mock_client = MagicMock()
+        mock_client.analyze_image.return_value = self._safe_response()
+        msg = HumanMessage(content=[{"type": "image_url", "image_url": image_url}])
+        with patch.object(m, "_get_sync_client", return_value=mock_client):
+            assert m.before_agent({"messages": [msg]}, runtime=None) is None
+        options = mock_client.analyze_image.call_args.args[0]
+        assert options.as_dict()["image"] == expected
+
+    @pytest.mark.parametrize(
+        "image_url,expected",
+        [
+            (
+                "https://example.blob.core.windows.net/images/photo.png",
+                {"blobUrl": "https://example.blob.core.windows.net/images/photo.png"},
+            ),
+            ("data:image/png;base64,aW1n", {"content": "aW1n"}),
+        ],
+        ids=["url", "data_url"],
+    )
+    async def test_abefore_agent_sends_image(
+        self, image_url: str, expected: Dict[str, Any]
+    ) -> None:
+        """Async version of :meth:`test_before_agent_sends_image`."""
+        m = self._make_middleware()
+        mock_client = MagicMock()
+        mock_client.analyze_image = AsyncMock(return_value=self._safe_response())
+        msg = HumanMessage(content=[{"type": "image_url", "image_url": image_url}])
+        with patch.object(m, "_get_async_client", return_value=mock_client):
+            assert await m.abefore_agent({"messages": [msg]}, runtime=None) is None
+        options = mock_client.analyze_image.call_args.args[0]
+        assert options.as_dict()["image"] == expected
+
+
+# ---------------------------------------------------------------------------
 # Tests for public imports of new middleware classes
 # ---------------------------------------------------------------------------
 
