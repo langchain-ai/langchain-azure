@@ -1042,8 +1042,14 @@ class TestImageExtraction:
             {"type": "image", "file_id": "file-abc"},
             {"type": "image", "source_type": "id", "id": "file-abc"},
             {"type": "input_image", "file_id": "file-abc", "detail": "auto"},
+            {
+                "type": "input_image",
+                "file_id": "file-abc",
+                "image_url": None,
+                "detail": "auto",
+            },
         ],
-        ids=["file_id", "v0_id", "input_image_file_id"],
+        ids=["file_id", "v0_id", "input_image_file_id", "input_image_null_url"],
     )
     def test_image_blocks_with_file_id_skipped_with_warning(
         self, block: Dict[str, Any], caplog: pytest.LogCaptureFixture
@@ -1053,6 +1059,12 @@ class TestImageExtraction:
         with caplog.at_level("WARNING"):
             assert self._cls()._images_from_message(msg) == []
         assert "Skipping image block" in caplog.text
+
+    @pytest.mark.parametrize("image_url", [None, {"url": None}], ids=["null", "dict"])
+    def test_image_url_block_with_null_url_skipped(self, image_url: Any) -> None:
+        """An ``image_url`` block with a null URL has nothing to send."""
+        msg = HumanMessage(content=[{"type": "image_url", "image_url": image_url}])
+        assert self._cls()._images_from_message(msg) == []
 
     def test_non_image_blocks_skipped(self) -> None:
         """Text blocks should not appear in the image list."""

@@ -424,8 +424,8 @@ class AzureContentModerationForImagesMiddleware(_AzureContentSafetyBaseMiddlewar
                     continue
                 url_str: str = block.get("url") or ""
             elif block_type in ("image_url", "input_image"):
-                raw = block.get("image_url", "")
-                # Normalise: may be a string or a dict {"url": ...}
+                raw = block.get("image_url") or ""
+                # Normalise: may be a string or a dict {"url": ...}, or null
                 url_str = raw if isinstance(raw, str) else raw.get("url", "")
             else:
                 continue
