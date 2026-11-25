@@ -1116,14 +1116,13 @@ class ResponsesHostServer:
             response_linked = checkpoint_ref is None and bool(
                 request.get("previous_response_id")
             )
-            recovered_conversation_superseded = (
+            recovered_superseded = (
                 checkpoint_ref is not None
-                and conversation_chain_id is not None
                 and cancellation_signal.is_set()
                 and not context.client_cancelled
             )
             if self._graph_has_checkpointer and (
-                response_linked or recovered_conversation_superseded
+                response_linked or recovered_superseded
             ):
                 state = await self._graph.aget_state(config)
                 if response_linked and self._is_response_branch(request, context):

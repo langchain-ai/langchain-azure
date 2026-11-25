@@ -2939,12 +2939,14 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
 
 @pytest.mark.parametrize("superseded_at_entry", [False, True])
 @pytest.mark.parametrize("checkpoint_available", [True, False])
-async def test_superseded_recovery_preserves_conversation_progress(
+@pytest.mark.parametrize("linkage", ["conversation", "response", "root"])
+async def test_superseded_recovery_validates_checkpoint_before_completion(
     foundry_state_stores: dict[str, dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     superseded_at_entry: bool,
     checkpoint_available: bool,
+    linkage: str,
 ) -> None:
     from azure.ai.agentserver.responses import FileResponseStore
 
@@ -2995,12 +2997,22 @@ async def test_superseded_recovery_preserves_conversation_progress(
     context.persisted_response = _response_object(
         context.response_id, checkpoint_ref=recovery_reference
     )
+    if linkage == "root":
+        context.conversation_id = None
 
+    recovery_request = _request(
+        conversation="conv-test" if linkage == "conversation" else None,
+        previous_response_id="resp-first" if linkage == "response" else None,
+        background=True,
+        stream=True,
+    )
     cancellation = asyncio.Event()
     if superseded_at_entry:
         cancellation.set()
     with patch.object(server.graph, "astream", wraps=server.graph.astream) as execute:
-        async for event in server.handle_create(request, context, cancellation):
+        async for event in server.handle_create(
+            recovery_request, context, cancellation
+        ):
             if isinstance(event, dict) and event["type"] == "response.in_progress":
                 cancellation.set()
         execute.assert_not_called()
@@ -3008,11 +3020,12 @@ async def test_superseded_recovery_preserves_conversation_progress(
         request, _context(response_id="resp-third")
     )
     next_reference = HostingRunnableConfig(next_config).checkpoint_ref
-    if checkpoint_available:
-        assert event["type"] == "response.completed"
+    assert event["type"] == (
+        "response.completed" if checkpoint_available else "response.failed"
+    )
+    if checkpoint_available and linkage == "conversation":
         assert next_reference == recovery_reference
     else:
-        assert event["type"] == "response.failed"
         assert next_reference == first_reference
 
 
