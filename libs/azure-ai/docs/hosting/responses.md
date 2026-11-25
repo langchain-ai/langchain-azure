@@ -11,7 +11,8 @@ run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/az
 It converts request items into graph input and resume commands, converts graph
 output into response items and events, and connects graph state to conversation
 and recovery context. The SDK provides protocol routing and the server lifecycle.
-See also [Invocations hosting](invocations.md).
+See also [Invocations hosting](invocations.md) and the
+[LangGraph-to-Foundry migration guide](host-langgraph-on-foundry.md).
 
 ## 1. Interface
 
@@ -289,7 +290,9 @@ branch child. Without saved progress, it processes the original input again.
 
 See the public
 [Agent Server resilience contract](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/docs/resilience-contract.md)
-for the protocol lifecycle.
+for the protocol lifecycle and the
+[Responses resiliency design](response_resiliency.md) for how this host
+composes Responses and LangGraph recovery boundaries.
 
 Client cancellation fails the handler with code `cancelled`. Shutdown recovery
 follows the conditions above.
