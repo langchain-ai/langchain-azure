@@ -574,6 +574,68 @@ def test_response_linkage_reemits_and_resumes_interrupts_without_chain_access(
     chain_set.assert_not_awaited()
 
 
+def test_interrupt_replay_without_conversation_head_can_be_resumed() -> None:
+    def pause(state: MessagesState) -> dict[str, Any]:
+        decision = interrupt("Approval needed")
+        return {"messages": [AIMessage(content=f"Approved: {decision}")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("pause", pause)
+    builder.add_edge(START, "pause")
+    builder.add_edge("pause", END)
+    saver = InMemorySaver()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(builder.compile(checkpointer=saver), store=provider)
+    with TestClient(server.app) as client:
+        assert client.portal is not None
+        config: RunnableConfig = {"configurable": {"thread_id": "conv-replay"}}
+        client.portal.call(
+            server.graph.ainvoke, {"messages": [HumanMessage("A")]}, config
+        )
+        paused = client.portal.call(server.graph.aget_state, config)
+        with (
+            patch.object(saver, "aget_tuple", wraps=saver.aget_tuple) as read,
+            patch.object(saver, "aput", wraps=saver.aput) as write,
+            patch.object(
+                saver, "aput_writes", wraps=saver.aput_writes
+            ) as write_pending,
+            patch.object(
+                server._conversation_chain_store,
+                "set",
+                wraps=server._conversation_chain_store.set,
+            ) as chain_set,
+        ):
+            repeated = _create(
+                client, input="still waiting", conversation="conv-replay"
+            )
+            read.assert_awaited_once()
+            assert read.call_args.args[0]["configurable"].get("checkpoint_id") is None
+            write.assert_not_awaited()
+            write_pending.assert_not_awaited()
+        approval = next(
+            item
+            for item in repeated["output"]
+            if item["type"] == "mcp_approval_request"
+        )
+        child = _create(
+            client,
+            previous_response_id=repeated["id"],
+            input=[
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval["id"],
+                    "approve": True,
+                }
+            ],
+        )
+        stored_repeated = client.portal.call(provider.get_response, repeated["id"])
+
+    assert repeated["status"] == child["status"] == "completed", child
+    assert _text(child) == "Approved: Approval needed"
+    assert _config(stored_repeated)["configurable"] == paused.config["configurable"]
+    chain_set.assert_awaited_once()
+
+
 @pytest.mark.parametrize("enable_response_branching", [False, True])
 def test_response_linkage_leaves_the_parent_conversation_head_unchanged(
     graph: CompiledStateGraph, enable_response_branching: bool

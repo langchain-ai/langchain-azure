@@ -34,6 +34,7 @@ from azure.ai.agentserver.responses.models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, Interrupt, StateSnapshot
 from starlette.testclient import TestClient
 from starlette.types import Message
@@ -52,6 +53,7 @@ from langchain_azure_ai.agents.hosting._responses import (
     CheckpointRef,
     FoundryConversationChainStore,
     HostingRunnableConfig,
+    TaskStorageManager,
 )
 from langchain_azure_ai.agents.hosting._responses_host import (
     METADATA_STEERABLE_CONVERSATION,
@@ -2935,6 +2937,50 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
     ]
 
     assert recovered_nodes == ["research"]
+
+
+@pytest.mark.parametrize("superseded_at_entry", [False, True])
+async def test_superseded_conversation_does_not_publish_a_deleted_checkpoint(
+    superseded_at_entry: bool,
+) -> None:
+    graph = make_checkpointed_echo_graph()
+    saver = graph.checkpointer
+    assert isinstance(saver, InMemorySaver)
+    server = ResponsesHostServer(graph)
+    request = _request(conversation="conv-test", stream=True)
+    first_events = [
+        event
+        async for event in server.handle_create(
+            request, _context(response_id="resp-first"), asyncio.Event()
+        )
+    ]
+    assert first_events[-1]["type"] == "response.completed"
+    context = _context(response_id="resp-second", current_text="second turn")
+    config = await server.build_runnable_config(request, context)
+    reference = HostingRunnableConfig(config).checkpoint_ref
+    assert reference is not None
+    await saver.adelete_thread(reference.thread_id)
+
+    cancellation = asyncio.Event()
+    if superseded_at_entry:
+        cancellation.set()
+    stream = server._new_stream(request, context)
+    with (
+        patch.object(server, "_new_stream", return_value=stream),
+        patch.object(server.graph, "astream") as execute,
+        patch.object(saver, "aget_tuple", wraps=saver.aget_tuple) as read,
+        patch.object(server._conversation_chain_store, "set") as chain_set,
+    ):
+        async for event in server.handle_create(request, context, cancellation):
+            if isinstance(event, dict) and event["type"] == "response.in_progress":
+                cancellation.set()
+
+    assert event["type"] == "response.failed"
+    assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
+    execute.assert_not_called()
+    chain_set.assert_not_awaited()
+    read.assert_awaited_once()
+    assert HostingRunnableConfig(read.call_args.args[0]).checkpoint_ref == reference
 
 
 @pytest.mark.parametrize("superseded_at_entry", [False, True])

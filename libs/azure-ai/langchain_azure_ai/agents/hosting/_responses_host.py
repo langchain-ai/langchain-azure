@@ -78,7 +78,6 @@ from ._checkpoint._checkpoint_reuse import (
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
-    detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
@@ -86,6 +85,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._converters._hitl import _detect_pending_interrupts_with_config
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -1116,20 +1116,20 @@ class ResponsesHostServer:
             response_linked = checkpoint_ref is None and bool(
                 request.get("previous_response_id")
             )
-            recovered_superseded = (
-                checkpoint_ref is not None
+            reference = HostingRunnableConfig(config).checkpoint_ref
+            reusing_superseded_checkpoint = (
+                reference is not None
                 and cancellation_signal.is_set()
                 and not context.client_cancelled
             )
             if self._graph_has_checkpointer and (
-                response_linked or recovered_superseded
+                response_linked or reusing_superseded_checkpoint
             ):
                 state = await self._graph.aget_state(config)
                 if response_linked and self._is_response_branch(request, context):
                     _validate_branch_state(state, config)
                 elif (
-                    HostingRunnableConfig(state.config).checkpoint_ref
-                    != HostingRunnableConfig(config).checkpoint_ref
+                    HostingRunnableConfig(state.config).checkpoint_ref != reference
                     or (state.config.get("configurable") or {}).get("checkpoint_ns", "")
                     != ""
                     or state.created_at is None
@@ -1137,7 +1137,6 @@ class ResponsesHostServer:
                     raise ValueError("The response's graph checkpoint is missing.")
 
             if cancellation_signal.is_set() and not context.client_cancelled:
-                reference = HostingRunnableConfig(config).checkpoint_ref
                 if reference is not None:
                     task_storage.store_checkpoint_ref(reference)
                     if checkpoint_ref is not None and conversation_chain_id is not None:
@@ -1164,7 +1163,9 @@ class ResponsesHostServer:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
                 # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(self._graph, config)
+                pending, snapshot_config = await _detect_pending_interrupts_with_config(
+                    self._graph, config
+                )
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1193,14 +1194,19 @@ class ResponsesHostServer:
                     # dangling ``AskHuman``-style tool_call — to the model.
                     async for event in emit_interrupts(pending, stream):
                         yield event
-                    ref = HostingRunnableConfig(config).checkpoint_ref
-                    if ref is not None:
-                        task_storage.store_checkpoint_ref(ref)
+                    if reference is None and snapshot_config is not None:
+                        configurable = snapshot_config.get("configurable") or {}
+                        if configurable.get("checkpoint_ns", "") == "":
+                            reference = HostingRunnableConfig(
+                                snapshot_config
+                            ).checkpoint_ref
+                    if reference is not None:
+                        task_storage.store_checkpoint_ref(reference)
                         if conversation_chain_id is not None:
                             await self._conversation_chain_store.set(
                                 conversation_chain_id,
                                 CONVERSATION_CHECKPOINT_KEY,
-                                ref.to_dict(),
+                                reference.to_dict(),
                             )
                     yield stream.emit_completed()
                     return
