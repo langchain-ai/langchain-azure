@@ -1132,6 +1132,12 @@ class ResponsesHostServer:
                 reference = HostingRunnableConfig(config).checkpoint_ref
                 if reference is not None:
                     task_storage.store_checkpoint_ref(reference)
+                    if checkpoint_ref is not None and conversation_chain_id is not None:
+                        await self._conversation_chain_store.set(
+                            conversation_chain_id,
+                            CONVERSATION_CHECKPOINT_KEY,
+                            reference.to_dict(),
+                        )
                 if reference is not None or not self._graph_has_checkpointer:
                     yield stream.emit_completed()
                     return

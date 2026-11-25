@@ -12,6 +12,7 @@ import logging
 import threading
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -2934,6 +2935,75 @@ async def test_recovery_ignores_checkpoint_newer_than_response_snapshot(
     ]
 
     assert recovered_nodes == ["research"]
+
+
+@pytest.mark.parametrize("superseded_at_entry", [False, True])
+async def test_superseded_recovery_preserves_conversation_progress(
+    foundry_state_stores: dict[str, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    superseded_at_entry: bool,
+) -> None:
+    from azure.ai.agentserver.responses import FileResponseStore
+
+    monkeypatch.setenv("AGENTSERVER_STATE_ROOT", str(tmp_path))
+    server = ResponsesHostServer(
+        make_checkpointed_two_node_graph(),
+        store=FileResponseStore(storage_dir=str(tmp_path)),
+        options=ResponsesServerOptions(
+            resilient_background=True, steerable_conversations=True
+        ),
+    )
+    request = _request(conversation="conv-test", background=True, stream=True)
+    first_events = [
+        event
+        async for event in server.handle_create(
+            request, _context(response_id="resp-first"), asyncio.Event()
+        )
+    ]
+    assert first_events[-1]["type"] == "response.completed"
+    store = foundry_state_stores[_state_store_name("conv-test")]
+    first_reference = CheckpointRef.from_dict(store[CONVERSATION_CHECKPOINT_KEY])
+    assert first_reference is not None
+
+    context = _context(response_id="resp-second", current_text="second turn")
+    config = await server.build_runnable_config(request, context)
+    graph_input = await server.build_input(request, context)
+    recovery_reference = None
+    async with aclosing(
+        cast(
+            AsyncGenerator[dict[str, Any], None],
+            server.graph.astream(
+                graph_input, config, stream_mode="checkpoints", durability="sync"
+            ),
+        )
+    ) as graph_stream:
+        async for checkpoint in graph_stream:
+            if tuple(checkpoint["next"]) == ("research",):
+                recovery_reference = HostingRunnableConfig(
+                    checkpoint["config"]
+                ).checkpoint_ref
+                break
+    assert recovery_reference is not None and recovery_reference != first_reference
+    context.is_recovery = True
+    context.persisted_response = _response_object(
+        context.response_id, checkpoint_ref=recovery_reference
+    )
+
+    cancellation = asyncio.Event()
+    if superseded_at_entry:
+        cancellation.set()
+    with patch.object(server.graph, "astream", wraps=server.graph.astream) as execute:
+        async for event in server.handle_create(request, context, cancellation):
+            if isinstance(event, dict) and event["type"] == "response.in_progress":
+                cancellation.set()
+        execute.assert_not_called()
+    assert event["type"] == "response.completed"
+
+    next_config = await server.build_runnable_config(
+        request, _context(response_id="resp-third")
+    )
+    assert HostingRunnableConfig(next_config).checkpoint_ref == recovery_reference
 
 
 async def test_response_store_supports_linear_response_chain(
