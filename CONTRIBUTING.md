@@ -71,8 +71,10 @@ Here's the structure visualized as a tree:
 Install development requirements (for running langchain, running examples, linting, formatting, tests, and coverage):
 
 ```bash
-uv sync --group lint --group typing --group test --group test_integration
+uv sync --all-groups
 ```
+
+Dependency group names vary slightly by package (for example, `libs/azure-ai` defines `dev`, `lint` including `mypy`, `test`, and `test-integration`, while other packages define `typing` or `type` and `test_integration`). Check each package's `pyproject.toml` if you want to sync individual groups.
 
 Then verify dependency installation:
 
@@ -236,10 +238,11 @@ checks run on Python 3.14 only; SDK CI still tests Python 3.11 and 3.14.
 The workflow runs registered offline smoke tests under
 [.github/tests/docs_samples](.github/tests/docs_samples), with external service
 interactions mocked and network access disabled. The environment installs the local
-`langchain-azure-ai` SDK so the notebook smoke test exercises real tool imports and
-constructors. It does not execute complete notebooks or perform generic syntax checks.
-Currently, the registered smoke test covers only the azure-ai models notebook;
-there are no sample-specific smoke tests yet. Do not put tests that read repository
+`langchain-azure-ai` SDK so tests exercise real tool imports and constructors.
+It does not execute complete notebooks or perform generic syntax checks.
+The registered suite covers the `azure-ai` models notebook, hosted-agent sample
+startup and model-history checks, and durable-graph documentation checks.
+Do not put tests that read repository
 docs or samples in an SDK's unit-test suite: release checks run against the built
 package outside the source tree.
 
@@ -271,7 +274,8 @@ If you add support for a new external API, please add a new integration test.
 To install dependencies for integration tests:
 
 ```bash
-uv sync --group test --group test_integration
+uv sync --group test --group test-integration   # libs/azure-ai
+uv sync --group test --group test_integration   # other packages under libs/
 ```
 
 To run integration tests:

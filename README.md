@@ -36,11 +36,10 @@ This package includes:
 * [Microsoft Foundry Content Safety](./libs/azure-ai/langchain_azure_ai/agents/middleware)
 * [Microsoft Foundry Tools](./libs/azure-ai/langchain_azure_ai/tools)
 * [Azure AI Search](./libs/azure-ai/langchain_azure_ai/vectorstores)
-* [Azure AI Services tools](./libs/azure-ai/langchain_azure_ai/tools)
 
 Here's a quick start example to show you how to get started with a chat model. For more details and tutorials see [Develop with LangChain and LangGraph and models from Azure AI Foundry](https://aka.ms/azureai/langchain).
 
-### Install langchain-azure
+### Install langchain-azure-ai
 
 ```bash
 pip install -U langchain-azure-ai
@@ -120,12 +119,14 @@ model.invoke("Hello!").pretty_print()
 Use `AgentServiceFactory` to create a managed Foundry agent and add it as a
 node in a LangGraph graph.
 
-For local development, install the required extra and sign in:
+For local development, install the package and sign in:
 
 ```bash
-pip install -U "langchain-azure-ai[opentelemetry]"
+pip install -U langchain-azure-ai
 az login
 ```
+
+Using `create_prompt_agent(..., trace=True)` also requires the `opentelemetry` extra.
 
 Set your project endpoint and model deployment name. This creates a version
 of `my-echo-agent` in your project:

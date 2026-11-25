@@ -61,7 +61,7 @@ have a restorable checkpoint reference.
 | Neither `previous_response_id` nor `conversation` | Start a root response in a new thread. |
 | `previous_response_id` only | Start a child from that response's exact checkpoint. |
 | `conversation` only | Continue the conversation through the ordinary continuation path. |
-| Both fields | Not supported for branching. Send only `previous_response_id`. |
+| Both fields | Send only `previous_response_id` for branching. If both are sent, the host currently ignores `conversation`; rejecting both fields with HTTP 400 is [follow-up work](#follow-up). |
 
 Omitted or `null` linkage fields leave that linkage unset. Parent lookup uses
 the caller's authorized storage scope. A missing or invalid parent causes an
