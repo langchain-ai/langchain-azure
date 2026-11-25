@@ -143,6 +143,15 @@ def _loads_generations(generations_str: str) -> Union[RETURN_VAL_TYPE, None]:
         return None
 
 
+def _llm_string_filter(llm_string: str) -> str:
+    """Return a WHERE clause that matches cache entries written for ``llm_string``.
+
+    The vector store inlines ``where`` into the query, so the value is written
+    as a JSON string, whose escapes are all valid in Cosmos DB string literals.
+    """
+    return f"c.metadata.llm_string = {json.dumps(llm_string, ensure_ascii=False)}"
+
+
 class AzureCosmosDBNoSqlSemanticCache(BaseCache):
     """Cache that uses Cosmos DB NoSQL backend."""
 
@@ -251,6 +260,7 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
         results = llm_cache.similarity_search_with_score(
             query=prompt,
             k=1,
+            where=_llm_string_filter(llm_string),
         )
         if results:
             for document, score in results:
@@ -324,7 +334,8 @@ class AzureCosmosDBNoSqlSemanticCache(BaseCache):
                 container = vs._container
                 items = list(
                     container.query_items(
-                        query=query,
+                        query=f"{query} WHERE c.metadata.llm_string = @llm_string",
+                        parameters=[{"name": "@llm_string", "value": llm_string}],
                         enable_cross_partition_query=True,
                     )
                 )

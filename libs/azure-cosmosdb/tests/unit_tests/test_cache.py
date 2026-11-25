@@ -1,10 +1,12 @@
 """Unit tests for cache helper functions in _cache.py."""
 
 import json
-from typing import Any
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.documents import Document
 from langchain_core.outputs import Generation
 
 from langchain_azure_cosmosdb._cache import (
@@ -375,3 +377,107 @@ def test_euclidean_high_distance_is_cache_miss() -> None:
     mock_vs.similarity_search_with_score.return_value = [(mock_doc, 0.9)]
     setattr(cache, "_get_llm_cache", MagicMock(return_value=mock_vs))
     assert cache.lookup("p", "l") is None
+
+
+# ---------------------------------------------------------------------------
+# Entries are scoped to their llm_string
+# ---------------------------------------------------------------------------
+
+_LLM_STRING_FILTER = "c.metadata.llm_string = "
+_LLM_A = "model_name=\"gpt-4o\", stop='\\n'"
+_LLM_B = "model_name=\"gpt-4o-mini\", stop='\\n'"
+
+
+class _SharedContainer:
+    """In-memory stand-in for the one container that every llm_string shares."""
+
+    def __init__(self) -> None:
+        self.items: List[Dict[str, Any]] = []
+
+    def matching(self, llm_string: Optional[str]) -> List[Dict[str, Any]]:
+        return [
+            item
+            for item in self.items
+            if llm_string is None or item["metadata"]["llm_string"] == llm_string
+        ]
+
+    def query_items(
+        self,
+        query: str,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        values = {p["name"]: p["value"] for p in parameters or []}
+        llm_string = values["@llm_string"] if "@llm_string" in query else None
+        return [{"id": item["id"]} for item in self.matching(llm_string)]
+
+    def delete_item(self, item: str, partition_key: Any) -> None:
+        self.items = [i for i in self.items if i["id"] != item]
+
+
+class _SharedContainerVectorStore:
+    """Vector store over a shared container; it filters only when asked to."""
+
+    def __init__(self, container: _SharedContainer) -> None:
+        self._container = container
+
+    def add_texts(self, texts: List[str], metadatas: List[Dict[str, Any]]) -> None:
+        for text, metadata in zip(texts, metadatas):
+            self._container.items.append(
+                {"id": uuid.uuid4().hex, "text": text, "metadata": metadata}
+            )
+
+    def similarity_search_with_score(
+        self, query: str, k: int = 4, where: Optional[str] = None, **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        llm_string = None
+        if where is not None:
+            assert where.startswith(_LLM_STRING_FILTER)
+            llm_string = json.loads(where[len(_LLM_STRING_FILTER) :])
+        return [
+            (Document(page_content=item["text"], metadata=item["metadata"]), 1.0)
+            for item in self._container.matching(llm_string)
+            if item["text"] == query
+        ][:k]
+
+
+def _make_shared_container_cache() -> Tuple[Any, _SharedContainer]:
+    from langchain_azure_cosmosdb._cache import AzureCosmosDBNoSqlSemanticCache
+
+    cache: Any = AzureCosmosDBNoSqlSemanticCache.__new__(
+        AzureCosmosDBNoSqlSemanticCache
+    )
+    cache.vector_embedding_policy = {
+        "vectorEmbeddings": [{"distanceFunction": "cosine"}]
+    }
+    cache.score_threshold = 0.5
+    cache._pk_parts = ["id"]
+    cache._pk_sql = "id"
+    container = _SharedContainer()
+    cache._cache_dict = {
+        cache._cache_name(llm_string): _SharedContainerVectorStore(container)
+        for llm_string in (_LLM_A, _LLM_B)
+    }
+    return cache, container
+
+
+def test_lookup_ignores_entries_for_other_llm_strings() -> None:
+    """A cached answer for one model must not be returned for another."""
+    cache, _ = _make_shared_container_cache()
+    cache.update("What is 2+2?", _LLM_A, [Generation(text="from A")])
+
+    assert cache.lookup("What is 2+2?", _LLM_B) is None
+    result = cache.lookup("What is 2+2?", _LLM_A)
+    assert result is not None
+    assert [g.text for g in result] == ["from A"]
+
+
+def test_clear_with_llm_string_keeps_other_llm_strings() -> None:
+    """``clear(llm_string=...)`` must only delete that llm_string's entries."""
+    cache, container = _make_shared_container_cache()
+    cache.update("prompt", _LLM_A, [Generation(text="from A")])
+    cache.update("prompt", _LLM_B, [Generation(text="from B")])
+
+    cache.clear(llm_string=_LLM_A)
+
+    assert [item["metadata"]["llm_string"] for item in container.items] == [_LLM_B]
