@@ -77,9 +77,12 @@ boundary, and a later turn would not know which checkpoint is authoritative.
 
 Each Responses handler owns a `StateStoreClientFactory` from config resolution
 through the final conversation-chain write. Clients are separate by consumer,
-store name and user; hosted clients share one connection pool. Every acquisition
-refreshes metadata. No checkpoint values or descriptors are cached; isolation and
-TTL remain creation options.
+store name and user; hosted clients share one connection pool. Store bindings
+are resolved on first use and invalidated on deletion or a not-found error;
+isolation and TTL remain creation options. For checkpointed graphs,
+`ResponsesHostServer` also wraps the checkpointer to reuse already-read
+checkpoints and pending writes within a single request while still querying
+storage for latest-checkpoint checks and writing checkpoints normally.
 
 The factory and request features are bound for each iterator advance or close,
 allowing iteration across Tasks. Reuse stays within one handler and event loop;
@@ -146,4 +149,4 @@ in this order:
 | 5 | E2 -> E3 (superstep 2+) | Same as above. | Checkpoints through the newly committed superstep 2+. | Same as above. | The Response store remains the recovery authority. Our handler resumes from its checkpoint reference and reproduces the newly committed superstep. |
 | 6 | E3 -> E4 | Input, final output, final checkpoint reference, and metadata. | Checkpoints through the final checkpoint. | Same as above. | Our handler resumes from the final checkpoint and writes its reference to Foundry State Store. |
 | 7 | E4 -> E5 | Same as above. | Same as above. | Final checkpoint reference. | Our handler resumes from the final checkpoint, idempotently writes its reference to Foundry State Store, and yields `stream.emit_completed()`. |
-| 8 | After E5 | Input, final output (including the `completed` chunk), final checkpoint reference, and metadata. | Save as above. | Same as above. | Agent Server treats the persisted terminal response as authoritative and returns it to clients through response retrieval or stream replay. |
+| 8 | After E5 | Input, final output (including the `completed` chunk), final checkpoint reference, and metadata. | Same as above. | Same as above. | Agent Server treats the persisted terminal response as authoritative and returns it to clients through response retrieval or stream replay. |

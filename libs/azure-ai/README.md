@@ -322,7 +322,7 @@ Conversation steering (`steerable_conversations=True`) and crash recovery
 `ExperimentalWarning` warnings when enabled.
 
 For current feature support and configuration combinations, see the
-[Responses hosting overview](docs/hosting/responses.md).
+[Responses hosting overview](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/responses.md).
 
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
@@ -366,7 +366,7 @@ deployments.
 Steering and durable background recovery are experimental and emit feature-level
 `ExperimentalWarning` warnings when enabled.
 
-See the [Invocations hosting overview](docs/hosting/invocations.md) for
+See the [Invocations hosting overview](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/invocations.md) for
 configuration, request formats, polling, cancellation, and interrupt handling, and the
 [Invocations run-entrypoint sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/invocations/03_run/README.md)
 for setup and deployment.
@@ -402,7 +402,7 @@ local restarts. These files stay on the local machine.
 
 Foundry-hosted agents use **Foundry State Store** with container protocol
 `2.0.0`, which supplies the hosted request context. See
-[storage choices](docs/hosting/responses.md#storage-choices) for the separate
+[storage choices](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/responses.md#storage-choices) for the separate
 roles of graph checkpoints, conversation references, and response storage.
 
 For an end-to-end example that selects an in-memory saver locally and
