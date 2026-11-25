@@ -343,8 +343,7 @@ Conversation steering (`steerable_conversations=True`) and crash recovery
 `ExperimentalWarning` warnings when enabled.
 
 For current feature support and configuration combinations, see the
-[Responses hosting overview](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/responses.md)
-and the [Responses resiliency design](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/response_resiliency.md).
+[Responses hosting overview](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/responses.md).
 
 The Responses host uses one conversation-state source per graph. The policy depends on whether the hosted graph has a LangGraph checkpointer:
 
