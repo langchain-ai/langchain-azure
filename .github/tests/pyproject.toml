@@ -6,6 +6,8 @@ requires-python = ">=3.11,<4.0"
 [dependency-groups]
 test = [
   "langchain-azure-ai",
+  "langchain-azure-compute[durabletask]",
+  "azure-functions>=1.20.0",
   "pytest>=9.0.3,<10",
   "pytest-socket>=0.6,<0.9",
 ]
@@ -16,6 +18,7 @@ default-groups = ["test"]
 
 [tool.uv.sources]
 langchain-azure-ai = { path = "../../libs/azure-ai", editable = true }
+langchain-azure-compute = { path = "../../libs/azure-compute", editable = true }
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "--disable-socket"]

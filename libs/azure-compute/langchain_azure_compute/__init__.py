@@ -1,7 +1,7 @@
-"""LangChain integrations for Azure Container Apps.
+"""LangChain and LangGraph integrations for Azure compute and durable execution.
 
-Azure Container Apps offers several compute types. This package covers the two
-that run agent-authored code, each in its own subpackage behind its own extra:
+This package covers three capabilities, each in its own subpackage behind its
+own optional extra:
 
 - ``dynamic_sessions`` -- managed, ephemeral code-interpreter sessions
   (``Microsoft.App/sessionPools``). Install with
@@ -9,10 +9,11 @@ that run agent-authored code, each in its own subpackage behind its own extra:
 - ``sandboxes`` -- programmable, stateful isolated compute with snapshots,
   volumes, and egress policies (``Microsoft.App/sandboxGroups``). Install with
   ``pip install "langchain-azure-compute[sandboxes]"``.
+- ``graph`` -- durable execution for compiled LangGraph graphs and LangChain
+  agents on Azure Durable Task Scheduler (``Microsoft.DurableTask/schedulers``).
+  Install with ``pip install "langchain-azure-compute[durabletask]"``.
 
-The two are distinct Azure products, not tiers of one: they use different ARM
-resource types and different data planes. See the README for guidance on
-choosing between them.
+See the README for guidance on each subpackage.
 """
 
 __all__: list[str] = []

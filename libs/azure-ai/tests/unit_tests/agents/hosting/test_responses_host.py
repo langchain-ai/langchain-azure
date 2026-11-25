@@ -24,6 +24,7 @@ pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
 from azure.ai.agentserver.core.streaming import streams
+from azure.ai.agentserver.responses import ResponsesAgentServerHost
 from azure.ai.agentserver.responses.models import (
     CreateResponse,
     ItemMessage,
@@ -2255,20 +2256,28 @@ def test_constructor_accepts_reexported_response_options() -> None:
     assert resp.json()["status"] == "completed"
 
 
-def test_constructor_rejects_resilient_background_without_checkpointer() -> None:
+@pytest.mark.parametrize("supplied_app", [False, True], ids=["owned", "supplied"])
+def test_constructor_rejects_resilient_background_without_checkpointer(
+    supplied_app: bool,
+) -> None:
     options = ResponsesServerOptions(resilient_background=True)
+    app = ResponsesAgentServerHost(options=options) if supplied_app else None
 
     with pytest.raises(
         ValueError,
         match="requires a LangGraph checkpointer when resilient_background=True",
     ):
-        ResponsesHostServer(make_echo_graph(), options=options)
+        ResponsesHostServer(make_echo_graph(), app=app, options=options)
 
 
-def test_constructor_accepts_resilient_background_with_checkpointer() -> None:
+@pytest.mark.parametrize("supplied_app", [False, True], ids=["owned", "supplied"])
+def test_constructor_accepts_resilient_background_with_checkpointer(
+    supplied_app: bool,
+) -> None:
     options = ResponsesServerOptions(resilient_background=True)
+    app = ResponsesAgentServerHost(options=options) if supplied_app else None
 
-    ResponsesHostServer(make_checkpointed_echo_graph(), options=options)
+    ResponsesHostServer(make_checkpointed_echo_graph(), app=app, options=options)
 
 
 def test_constructor_rejects_non_messages_state_schema() -> None:

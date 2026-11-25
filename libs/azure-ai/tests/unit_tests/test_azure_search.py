@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pytest_socket import SocketBlockedError
@@ -783,3 +783,193 @@ def test_retriever_rejects_filter_and_filters_together() -> None:
 
         with pytest.raises(ValueError, match="`filter` or `filters`"):
             retriever.invoke("hello world")
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_from_texts_without_key_uses_azure_credential(use_async: bool) -> None:
+    """`from_texts` defaults `azure_search_key` to "", which is not an API key."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    credential = Mock(spec=["get_token"])
+    async_credential = Mock(spec=["get_token"])
+    kwargs: Dict[str, Any] = {
+        "azure_search_endpoint": DEFAULT_ENDPOINT,
+        "index_name": DEFAULT_INDEX_NAME,
+        "azure_credential": credential,
+        "azure_async_credential": async_credential,
+    }
+
+    with (
+        patch.object(
+            SearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=SearchClient.__init__,
+        ) as sync_init,
+        patch.object(
+            AsyncSearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=AsyncSearchClient.__init__,
+        ) as async_init,
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        if use_async:
+            await AzureSearch.afrom_texts(
+                ["hello world"], DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+        else:
+            AzureSearch.from_texts(["hello world"], DEFAULT_EMBEDDING_MODEL, **kwargs)
+
+    assert sync_init.call_args.kwargs["credential"] is credential
+    assert async_init.call_args.kwargs["credential"] is async_credential
+
+
+@pytest.mark.requires("azure.search.documents")
+def test_azure_search_key_takes_precedence_over_azure_credential() -> None:
+    """A non-empty key keeps winning over a credential passed alongside it."""
+    from azure.core.credentials import AzureKeyCredential
+    from azure.search.documents import SearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    with (
+        patch.object(
+            SearchClient,
+            "__init__",
+            autospec=True,
+            side_effect=SearchClient.__init__,
+        ) as sync_init,
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        AzureSearch(
+            azure_search_endpoint=DEFAULT_ENDPOINT,
+            azure_search_key=DEFAULT_KEY,
+            index_name=DEFAULT_INDEX_NAME,
+            embedding_function=DEFAULT_EMBEDDING_MODEL,
+            azure_credential=Mock(spec=["get_token"]),
+        )
+
+    credential = sync_init.call_args.kwargs["credential"]
+    assert isinstance(credential, AzureKeyCredential)
+    assert credential.key == DEFAULT_KEY
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_from_embeddings_accepts_constructor_kwargs(use_async: bool) -> None:
+    """Constructor options must not be forwarded to `add_embeddings`."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[object]
+    ) -> List[Response]:
+        return [Response() for _ in documents]
+
+    add_method = "aadd_embeddings" if use_async else "add_embeddings"
+    text_embeddings = [("hello world", DEFAULT_EMBEDDING_MODEL.embed_query("hello"))]
+    kwargs: Dict[str, Any] = {
+        "azure_search_endpoint": DEFAULT_ENDPOINT,
+        "azure_search_key": DEFAULT_KEY,
+        "index_name": DEFAULT_INDEX_NAME,
+        "search_type": "similarity",
+        "keys": ["doc-1"],
+    }
+
+    with (
+        patch.object(
+            AzureSearch,
+            add_method,
+            autospec=True,
+            side_effect=getattr(AzureSearch, add_method),
+        ) as add_embeddings,
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        if use_async:
+            vector_store = await AzureSearch.afrom_embeddings(
+                text_embeddings, DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+        else:
+            vector_store = AzureSearch.from_embeddings(
+                text_embeddings, DEFAULT_EMBEDDING_MODEL, **kwargs
+            )
+
+    assert vector_store.search_type == "similarity"
+    assert add_embeddings.call_args.kwargs == {"keys": ["doc-1"]}
+
+
+@pytest.mark.requires("azure.search.documents")
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_add_texts_accepts_one_shot_iterable(use_async: bool) -> None:
+    """Texts from a generator must not be lost after they are embedded."""
+    from azure.search.documents import SearchClient
+    from azure.search.documents.aio import SearchClient as AsyncSearchClient
+    from azure.search.documents.indexes import SearchIndexClient
+
+    class Response:
+        succeeded = True
+
+    uploaded: List[Dict[str, Any]] = []
+
+    def mock_upload_documents(
+        self: SearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    async def mock_async_upload_documents(
+        self: AsyncSearchClient, documents: List[Dict[str, Any]]
+    ) -> List[Response]:
+        uploaded.extend(documents)
+        return [Response() for _ in documents]
+
+    texts = ["page zero", "page one"]
+
+    with (
+        patch.object(SearchClient, "upload_documents", mock_upload_documents),
+        patch.object(
+            AsyncSearchClient, "upload_documents", mock_async_upload_documents
+        ),
+        patch.object(SearchIndexClient, "get_index", mock_default_index),
+    ):
+        vector_store = create_vector_store()
+        if use_async:
+            ids = await vector_store.aadd_texts(text for text in texts)
+        else:
+            ids = vector_store.add_texts(text for text in texts)
+
+    assert [doc["content"] for doc in uploaded] == texts
+    assert len(ids) == len(texts)

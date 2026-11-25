@@ -35,6 +35,8 @@ async def main() -> None:
             project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
             credential=credential,
             model=os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini"),
+            # LangGraph manages message history instead of the model service.
+            store=False,
             output_version="responses/v1",
         )
         with model.root_client:

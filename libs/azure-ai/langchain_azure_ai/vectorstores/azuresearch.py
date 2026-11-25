@@ -173,7 +173,7 @@ def _get_search_client(
     async_credential: Union[AzureKeyCredential, AsyncTokenCredential]
 
     # Determine the appropriate credential to use
-    if key is not None:
+    if key:
         # if key.upper() == "INTERACTIVE":
         #     interactive_credential = InteractiveBrowserCredential()
         #     interactive_credential.get_token("https://search.azure.com/.default")
@@ -545,10 +545,11 @@ class AzureSearch(VectorStore):
         **kwargs: Any,
     ) -> List[str]:
         """Add texts data to an existing index."""
+        texts = list(texts)
         # batching support if embedding function is an Embeddings object
         if isinstance(self.embedding_function, Embeddings):
             try:
-                embeddings = self.embedding_function.embed_documents(list(texts))
+                embeddings = self.embedding_function.embed_documents(texts)
             except NotImplementedError:
                 embeddings = [self.embedding_function.embed_query(x) for x in texts]
         else:
@@ -585,9 +586,10 @@ class AzureSearch(VectorStore):
         Returns:
             List of IDs for the added texts.
         """
+        texts = list(texts)
         if isinstance(self.embedding_function, Embeddings):
             try:
-                embeddings = await self.embedding_function.aembed_documents(list(texts))
+                embeddings = await self.embedding_function.aembed_documents(texts)
             except NotImplementedError:
                 # Use asyncio.gather to await all coroutines concurrently
                 embeddings = await asyncio.gather(
@@ -1809,7 +1811,9 @@ class AzureSearch(VectorStore):
             vector_search_dimensions=vector_search_dimensions,
             **kwargs,
         )
-        await azure_search.aadd_embeddings(text_embeddings, metadatas, **kwargs)
+        await azure_search.aadd_embeddings(
+            text_embeddings, metadatas, keys=kwargs.get("keys")
+        )
         return azure_search
 
     @classmethod
@@ -1855,7 +1859,7 @@ class AzureSearch(VectorStore):
             vector_search_dimensions=vector_search_dimensions,
             **kwargs,
         )
-        azure_search.add_embeddings(text_embeddings, metadatas, **kwargs)
+        azure_search.add_embeddings(text_embeddings, metadatas, keys=kwargs.get("keys"))
         return azure_search
 
     def as_retriever(self, **kwargs: Any) -> AzureSearchVectorStoreRetriever:  # type: ignore
