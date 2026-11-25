@@ -169,6 +169,22 @@ _checkpoint_reads: ContextVar[_CheckpointReadContext | None] = ContextVar(
     "langchain_azure_checkpoint_reads", default=None
 )
 
+_observed_checkpoint_reads: ContextVar[tuple[list[CheckpointTuple], bool] | None] = (
+    ContextVar("langchain_azure_observed_checkpoint_reads", default=None)
+)
+
+
+@contextmanager
+def _observe_checkpoint_reads(
+    *, latest: bool = False
+) -> Iterator[list[CheckpointTuple]]:
+    reads: list[CheckpointTuple] = []
+    token = _observed_checkpoint_reads.set((reads, latest))
+    try:
+        yield reads
+    finally:
+        _observed_checkpoint_reads.reset(token)
+
 
 class _RequestCheckpointSaver(ObjectProxy):
     """Decorate a saver with request-local reads; forward its other capabilities.
@@ -236,6 +252,17 @@ class _RequestCheckpointSaver(ObjectProxy):
         return None
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        observed = _observed_checkpoint_reads.get()
+        checkpoint = await self._aget_tuple(
+            config, bypass=observed is not None and observed[1]
+        )
+        if observed is not None and checkpoint is not None:
+            observed[0].append(checkpoint)
+        return checkpoint
+
+    async def _aget_tuple(
+        self, config: RunnableConfig, *, bypass: bool
+    ) -> CheckpointTuple | None:
         configurable = config.get("configurable") or {}
         if not isinstance(configurable.get("thread_id"), str) or not isinstance(
             configurable.get("checkpoint_ns", ""), str
@@ -251,6 +278,7 @@ class _RequestCheckpointSaver(ObjectProxy):
         cacheable = (
             bool(checkpoint_id)
             and reads.cache_enabled
+            and not bypass
             and checkpoint_id == reads.input_checkpoint_id
         )
         try:

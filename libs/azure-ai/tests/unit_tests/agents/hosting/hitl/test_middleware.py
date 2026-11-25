@@ -33,6 +33,7 @@ from .conftest import (  # noqa: E402
     ScriptRegistrar,
     approval_requests,
     assistant_text,
+    sse_payloads,
 )
 from .graphs import ScriptedModel  # noqa: E402
 
@@ -84,8 +85,10 @@ def _middleware_graph(
     )
 
 
-def _register_script(script: ScriptRegistrar, key: str, expected_text: str) -> None:
-    script(
+def _register_script(
+    script: ScriptRegistrar, key: str, expected_text: str
+) -> list[AIMessage]:
+    return script(
         key,
         [
             AIMessage(
@@ -158,6 +161,44 @@ def test_responses_host_resumes_hitl_middleware(
     assert payload["status"] == "completed", payload
     assert expected_text in assistant_text(payload)
     _assert_result(key, tool_calls, approve)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@REAL_INTERRUPT_ASYNC_XFAIL
+def test_response_linked_approval_cannot_execute_twice(
+    script: ScriptRegistrar, stream: bool
+) -> None:
+    key = f"response-linked-middleware-{stream}"
+    script_queue = _register_script(script, key, "approved")
+    script_queue.append(AIMessage(content="Unexpected second execution."))
+    tool_calls: list[str] = []
+    host = ResponsesHostServer(_middleware_graph(key, tool_calls, ["approve"]))
+
+    with TestClient(host.app) as client:
+        paused = client.post("/responses", json={"input": "do it"}).json()
+        approval_id = approval_requests(paused)[0]["id"]
+        body = {"previous_response_id": paused["id"], "stream": stream}
+        rejected = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, False)]}
+        )
+        accepted = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, True)]}
+        )
+        duplicate = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, True)]}
+        )
+
+    assert tool_calls == ["approved"]
+    assert len(script_queue) == 1
+    for result, status in (
+        (rejected, "failed"),
+        (accepted, "completed"),
+        (duplicate, "failed"),
+    ):
+        assert result.status_code == 200, result.text
+        payload = sse_payloads(result.text)[-1]["response"] if stream else result.json()
+        assert payload["status"] == status, payload
+    assert payload["error"]["code"] == "interrupt_not_pending"
 
 
 @pytest.mark.parametrize(

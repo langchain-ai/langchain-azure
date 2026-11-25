@@ -33,6 +33,7 @@ from .._checkpoint._checkpoint_reuse import _CheckpointReadContext
 from .._storage import state_store_client_scope
 from .checkpoint_ref import CheckpointRef
 from .hosting_runnable_config import HostingRunnableConfig
+from .pause_state import _approval_refresh_requested, _is_approval_refresh
 from .task_storage_manager import METADATA_LANGGRAPH_THREAD_ID, TaskStorageManager
 
 if TYPE_CHECKING:
@@ -299,13 +300,39 @@ def install_request_validation(server: ResponsesHostServer) -> None:
         create_response = route.endpoint
 
         @wraps(create_response)
-        async def validate_store(request: Request) -> Response:
+        async def validate_create(request: Request) -> Response:
             token = _request_id.set(read_request_id(request.scope))
             try:
                 try:
                     payload = await request.json()
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     return await create_response(request)
+                if (
+                    isinstance(payload, dict)
+                    and _approval_refresh_requested(payload)
+                    and (
+                        not _is_approval_refresh(payload)
+                        or payload.keys()
+                        - {
+                            "previous_response_id",
+                            "metadata",
+                            "input",
+                            "store",
+                            "stream",
+                        }
+                        or "x-agent-response-id" in request.headers
+                        or not server._approval_refresh_enabled()
+                    )
+                ):
+                    return _error_response(
+                        _RequestValidationError(
+                            "Approval refresh requires an ordinary stored "
+                            "previous_response_id request with empty input.",
+                            "metadata",
+                            status_code=400,
+                            code="invalid_request_error",
+                        )
+                    )
                 if (
                     isinstance(payload, dict)
                     and payload.get("store") is False
@@ -324,6 +351,6 @@ def install_request_validation(server: ResponsesHostServer) -> None:
             finally:
                 _request_id.reset(token)
 
-        route.endpoint = validate_store
-        route.app = request_response(validate_store)
+        route.endpoint = validate_create
+        route.app = request_response(validate_create)
         return

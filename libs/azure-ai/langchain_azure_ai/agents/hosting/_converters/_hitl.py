@@ -658,6 +658,20 @@ def _interrupt_id_from_approval_id(
     return approval_id
 
 
+def _has_reply_for_interrupts(items: Sequence[Any], interrupt_ids: set[str]) -> bool:
+    return bool(interrupt_ids) and any(
+        (_is_function_call_output(item) and item["call_id"] in interrupt_ids)
+        or (
+            _is_mcp_approval_response(item)
+            and _interrupt_id_from_approval_id(
+                item["approval_request_id"], interrupt_ids
+            )
+            in interrupt_ids
+        )
+        for item in items
+    )
+
+
 def _warn_if_competing_approval(items: Sequence[Any], call_id: str) -> None:
     """Log a warning when both shapes target the same interrupt id.
 

@@ -34,6 +34,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -73,19 +74,24 @@ from langchain_azure_ai.agents.hosting import (
 
 from ._checkpoint._checkpoint_reuse import (
     _checkpoint_reads,
+    _observe_checkpoint_reads,
     _RequestCheckpointSaver,
 )
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
     emit_interrupts,
+    hitl_call_ids,
     is_messages_state_schema,
     parse_resume_command,
     stream_graph_to_events,
     track_pending_interrupts,
     validate_approval_responses,
 )
-from ._converters._hitl import _detect_pending_interrupts_with_config
+from ._converters._hitl import (
+    _detect_pending_interrupts_with_config,
+    _has_reply_for_interrupts,
+)
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -94,6 +100,15 @@ from ._responses import (
     FoundryConversationChainStore,
     HostingRunnableConfig,
     TaskStorageManager,
+)
+from ._responses.pause_state import (
+    _PARENT_PAUSE,
+    _PAUSE_GENERATIONS,
+    _approval_refresh_requested,
+    _is_approval_refresh,
+    _is_current_checkpoint,
+    _pause_generations,
+    _read_pause_state,
 )
 from ._responses.request_preparation import (
     _load_parent_response,
@@ -872,7 +887,76 @@ class ResponsesHostServer:
         root_response_id = _response_root_id(parent)
         if root_response_id is not None:
             config = config.with_root_response_id(root_response_id)
-        return config.runnable_config
+        runnable = config.runnable_config
+        if (
+            not self._enable_response_branching
+            and parent.get("status") == "completed"
+            and (pause_ids := hitl_call_ids(parent.get("output") or ()))
+        ):
+            generations = _response_internal_metadata(parent).get(_PAUSE_GENERATIONS)
+            runnable["configurable"][_PARENT_PAUSE] = {
+                pause_id: generations.get(pause_id)
+                if isinstance(generations, dict)
+                else None
+                for pause_id in pause_ids
+            }
+        return runnable
+
+    async def _refresh_approval(
+        self,
+        request: CreateResponse,
+        context: ResponseContext,
+        stream: ResponseEventStream,
+        task_storage: TaskStorageManager,
+    ) -> AsyncIterator[Any]:
+        """Re-emit current approvals only from a verified stored pause."""
+        if not _is_approval_refresh(request) or not self._approval_refresh_enabled():
+            yield stream.emit_failed(
+                code="invalid_request_error",
+                message="Approval refresh requires an ordinary stored response link.",
+            )
+            return
+        config = await self._response_checkpoint_config(request, context)
+        hosting_config = HostingRunnableConfig(config)
+        reference = hosting_config.checkpoint_ref
+        parent_pause = config["configurable"].pop(_PARENT_PAUSE, {})
+        pending: tuple[Interrupt, ...] = ()
+        if reference is not None and parent_pause:
+            state, generations = await _read_pause_state(
+                self._graph, config, latest=True
+            )
+            if _is_current_checkpoint(state, reference):
+                pending = tuple(
+                    interrupt
+                    for interrupt in state.interrupts
+                    if interrupt.id in parent_pause and interrupt.id in generations
+                )
+        if not pending or reference is None:
+            yield stream.emit_failed(
+                code="interrupt_not_pending",
+                message="No current pause can be verified for the previous response.",
+            )
+            return
+        if hosting_config.root_response_id is not None:
+            stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
+                hosting_config.root_response_id
+            )
+        task_storage.store_checkpoint_ref(reference)
+        stream.internal_metadata[_PAUSE_GENERATIONS] = {
+            interrupt.id: generations[interrupt.id] for interrupt in pending
+        }
+        _add_request_hosting_features(HostingFeature.HITL)
+        async for event in emit_interrupts(pending, stream):
+            yield event
+        yield stream.emit_completed()
+
+    def _approval_refresh_enabled(self) -> bool:
+        options = getattr(self._app._endpoint, "_runtime_options", None)
+        return (
+            self._graph_has_checkpointer
+            and not self._enable_response_branching
+            and not getattr(options, "steerable_conversations", True)
+        )
 
     async def _resolve_thread_config(
         self,
@@ -1076,6 +1160,12 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
+            if _approval_refresh_requested(request):
+                async for event in self._refresh_approval(
+                    request, context, stream, task_storage
+                ):
+                    yield event
+                return
             checkpoint_ref = (
                 task_storage.recovery_checkpoint_ref if recovering else None
             )
@@ -1116,6 +1206,9 @@ class ResponsesHostServer:
             response_linked = checkpoint_ref is None and bool(
                 request.get("previous_response_id")
             )
+            ordinary_link = response_linked and not self._enable_response_branching
+            parent_pause = (config.get("configurable") or {}).pop(_PARENT_PAUSE, {})
+            stored_pause = bool(parent_pause)
             reference = HostingRunnableConfig(config).checkpoint_ref
             reusing_superseded_checkpoint = (
                 reference is not None
@@ -1135,6 +1228,14 @@ class ResponsesHostServer:
                     or state.created_at is None
                 ):
                     raise ValueError("The response's graph checkpoint is missing.")
+                if ordinary_link and not parent_pause:
+                    parent_pause = dict.fromkeys(
+                        (
+                            interrupt.id
+                            for interrupt in getattr(state, "interrupts", ())
+                        ),
+                        0,
+                    )
 
             if cancellation_signal.is_set() and not context.client_cancelled:
                 if reference is not None:
@@ -1162,10 +1263,68 @@ class ResponsesHostServer:
             else:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
-                # Detect a pause from a previous turn and try to resume it.
-                pending, snapshot_config = await _detect_pending_interrupts_with_config(
-                    self._graph, config
-                )
+                snapshot_config: RunnableConfig | None
+                if ordinary_link and parent_pause:
+                    live_state, live_generations = await _read_pause_state(
+                        self._graph, config, latest=True
+                    )
+                    live_pending = live_state.interrupts
+                    pending = tuple(
+                        interrupt
+                        for interrupt in live_pending
+                        if interrupt.id in parent_pause
+                        and interrupt.id in live_generations
+                        and live_generations[interrupt.id]
+                        == (parent_pause[interrupt.id] or 0)
+                    )
+                    stale = parent_pause.keys() - {
+                        interrupt.id for interrupt in pending
+                    }
+                    same_checkpoint = _is_current_checkpoint(live_state, reference)
+                    items = await context.get_input_items() if stale else ()
+                    if (
+                        not same_checkpoint
+                        or not pending
+                        or _has_reply_for_interrupts(items, stale)
+                    ):
+                        ambiguous = {
+                            pause_id
+                            for pause_id in stale
+                            if parent_pause[pause_id] is None
+                            and live_generations.get(pause_id, 0) > 0
+                        }
+                        if (
+                            stored_pause
+                            and same_checkpoint
+                            and ambiguous
+                            and self._approval_refresh_enabled()
+                            and (
+                                not pending
+                                or _has_reply_for_interrupts(items, ambiguous)
+                            )
+                        ):
+                            yield stream.emit_failed(
+                                code="approval_refresh_required",
+                                message="Refresh approvals before sending a decision.",
+                            )
+                            return
+                        yield stream.emit_failed(
+                            code="interrupt_not_pending",
+                            message="The referenced pause is no longer pending.",
+                        )
+                        return
+                    snapshot_config = live_state.config
+                    pending_generations = live_generations
+                else:
+                    with _observe_checkpoint_reads() as reads:
+                        (
+                            pending,
+                            snapshot_config,
+                        ) = await _detect_pending_interrupts_with_config(
+                            self._graph, config
+                        )
+                    live_pending = pending
+                    pending_generations = _pause_generations(reads, pending)
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1184,6 +1343,20 @@ class ResponsesHostServer:
                     resume_command, consumed_call_ids = await self.build_resume_command(
                         request, context, pending
                     )
+                    if resume_command is not None and len(pending) < len(live_pending):
+                        eligible_ids = {interrupt.id for interrupt in pending}
+                        if isinstance(resume_command.resume, dict):
+                            resume = {
+                                key: value
+                                for key, value in resume_command.resume.items()
+                                if key in eligible_ids
+                            }
+                            resume_command = replace(resume_command, resume=resume)
+                        elif resume_command.resume is not None and len(pending) == 1:
+                            resume_command = replace(
+                                resume_command,
+                                resume={pending[0].id: resume_command.resume},
+                            )
 
                 if pending and resume_command is None:
                     # Graph is paused but the client did not supply a matching
@@ -1192,6 +1365,15 @@ class ResponsesHostServer:
                     # input) keeps the conversation in a recoverable state and
                     # avoids sending an unbalanced message list — with a
                     # dangling ``AskHuman``-style tool_call — to the model.
+                    if not self._enable_response_branching:
+                        get_subgraphs = getattr(self._graph, "get_subgraphs", None)
+                        if not ordinary_link and get_subgraphs and any(get_subgraphs()):
+                            _, pending_generations = await _read_pause_state(
+                                self._graph, config
+                            )
+                        stream.internal_metadata[_PAUSE_GENERATIONS] = (
+                            pending_generations
+                        )
                     async for event in emit_interrupts(pending, stream):
                         yield event
                     if reference is None and snapshot_config is not None:
@@ -1266,6 +1448,20 @@ class ResponsesHostServer:
             )
             if new_pending:
                 _add_request_hosting_features(HostingFeature.HITL)
+                if not self._enable_response_branching and checkpoint_ref is not None:
+                    generations = dict.fromkeys(
+                        (interrupt.id for interrupt in new_pending), 0
+                    )
+                    if not isinstance(graph_input, dict):
+                        pause_config = (
+                            HostingRunnableConfig(config)
+                            .with_checkpoint_ref(checkpoint_ref)
+                            .runnable_config
+                        )
+                        _, generations = await _read_pause_state(
+                            self._graph, pause_config
+                        )
+                    stream.internal_metadata[_PAUSE_GENERATIONS] = generations
                 async for event in emit_interrupts(new_pending, stream):
                     yield event
 

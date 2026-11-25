@@ -71,6 +71,13 @@ from langchain_azure_ai.agents.hosting._responses.task_storage_manager import (
     METADATA_LANGGRAPH_THREAD_ID,
 )
 
+from .hitl.conftest import interrupt_value, resume_item, sentinels
+from .hitl.graphs import (
+    build_parallel_interrupt_graph,
+    build_sequential_interrupt_graph,
+    build_simple_interrupt_graph,
+)
+
 
 @pytest.fixture(autouse=True)
 def isolated_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -458,24 +465,28 @@ def test_continuation_reuses_parent_and_selected_checkpoint(
     provider = server.app._endpoint._provider
     with TestClient(server.app) as client:
         parent = _create(client, input="A")
+        _create(client, input="other", previous_response_id=parent["id"])
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
         selected = _config(stored_parent)["configurable"]
         parent_reads = AsyncMock(wraps=provider.get_response)
         checkpoint_reads = 0
+        latest_reads = 0
         get_tuple = InMemorySaver.aget_tuple
 
         async def read_checkpoint(
             saver: InMemorySaver, config: RunnableConfig
         ) -> CheckpointTuple | None:
-            nonlocal checkpoint_reads
+            nonlocal checkpoint_reads, latest_reads
             configurable = config.get("configurable") or {}
             if (
                 configurable.get("thread_id") == selected["thread_id"]
                 and configurable.get("checkpoint_ns", "") == ""
-                and configurable.get("checkpoint_id") == selected["checkpoint_id"]
             ):
-                checkpoint_reads += 1
+                if configurable.get("checkpoint_id") == selected["checkpoint_id"]:
+                    checkpoint_reads += 1
+                elif not configurable.get("checkpoint_id"):
+                    latest_reads += 1
             return await get_tuple(saver, config)
 
         monkeypatch.setattr(provider, "get_response", parent_reads)
@@ -489,6 +500,7 @@ def test_continuation_reuses_parent_and_selected_checkpoint(
     parent_reads.assert_awaited_once()
     assert parent_reads.await_args is not None
     assert parent_reads.await_args.args == (parent["id"],)
+    assert latest_reads == 1  # LangGraph's own addressed-checkpoint check.
     if branching:
         assert checkpoint_reads == 1
 
@@ -561,6 +573,12 @@ def test_response_linkage_reemits_and_resumes_interrupts_without_chain_access(
                 }
             ],
         )
+        stale = _create(
+            client,
+            previous_response_id=parent["id"],
+            stream=stream,
+            input=[resume_item(sentinels(parent)[0]["call_id"], "stale")],
+        )
         assert client.portal is not None
         stored_parent = client.portal.call(provider.get_response, parent["id"])
         stored_repeated = client.portal.call(provider.get_response, repeated["id"])
@@ -570,8 +588,259 @@ def test_response_linkage_reemits_and_resumes_interrupts_without_chain_access(
         == _config(stored_repeated)["configurable"]
     )
     assert _text(child) == "Approved: Approval needed"
+    assert stale["status"] == "failed", stale
     chain_get.assert_not_awaited()
     chain_set.assert_not_awaited()
+
+
+@pytest.mark.parametrize("second_question", ["Second?", "First?"])
+@pytest.mark.parametrize("subgraph", [False, True])
+def test_old_response_cannot_answer_a_later_pause_in_the_same_node(
+    second_question: str,
+    subgraph: bool,
+) -> None:
+    answers: list[str] = []
+
+    def ask(state: MessagesState) -> dict[str, Any]:
+        first = interrupt("First?")
+        second = interrupt(second_question)
+        answers.append(f"{first}@{second}")
+        return {"messages": [AIMessage(content=answers[-1])]}
+
+    builder = (
+        StateGraph(MessagesState)
+        .add_node("ask", ask)
+        .add_edge(START, "ask")
+        .add_edge("ask", END)
+    )
+    if subgraph:
+        builder = (
+            StateGraph(MessagesState)
+            .add_node("nested", builder.compile())
+            .add_edge(START, "nested")
+            .add_edge("nested", END)
+        )
+    graph = builder.compile(checkpointer=InMemorySaver())
+    server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
+    with TestClient(server.app) as client:
+        first = _create(client, input="begin")
+        first_reply = resume_item(sentinels(first)[0]["call_id"], "one")
+        second = _create(client, previous_response_id=first["id"], input=[first_reply])
+        stale = _create(client, previous_response_id=first["id"], input=[first_reply])
+        assert answers == []
+        assert stale["status"] == "failed", stale
+        completed = _create(
+            client,
+            previous_response_id=second["id"],
+            input=[resume_item(sentinels(second)[0]["call_id"], "two")],
+        )
+    assert _text(completed) == "one@two"
+    assert answers == ["one@two"]
+
+
+@pytest.mark.parametrize("sibling_parent", [None, "original", "partial"])
+def test_response_linked_parallel_replies_cannot_be_replayed(
+    sibling_parent: str | None,
+) -> None:
+    server = ResponsesHostServer(
+        build_parallel_interrupt_graph(), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        paused = _create(client, input="begin")
+        call_ids = {
+            interrupt_value(item): item["call_id"] for item in sentinels(paused)
+        }
+        first_reply = resume_item(call_ids["question_a"], "one")
+        second_reply = resume_item(call_ids["question_b"], "two")
+        initial = [first_reply] if sibling_parent else [first_reply, second_reply]
+        answered = _create(client, previous_response_id=paused["id"], input=initial)
+        assert answered["status"] == "completed", answered
+        assert "a=one" in _text(answered)
+        with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
+            stale = _create(client, previous_response_id=paused["id"], input=initial)
+            run.assert_not_called()
+        assert stale["status"] == "failed", stale
+        if sibling_parent:
+            assert [interrupt_value(item) for item in sentinels(answered)] == [
+                "question_b"
+            ]
+            parent_id = paused["id"] if sibling_parent == "original" else answered["id"]
+            done = _create(
+                client,
+                previous_response_id=parent_id,
+                input=[second_reply],
+            )
+            assert _text(done) == "b=two"
+        else:
+            assert "b=two" in _text(answered)
+
+
+def test_original_sibling_reply_does_not_answer_a_new_sequential_pause() -> None:
+    def ask_again(state: MessagesState) -> dict[str, Any]:
+        first = interrupt("A?")
+        second = interrupt("A?")
+        return {"messages": [AIMessage(content=f"A={first},{second}")]}
+
+    def ask_once(state: MessagesState) -> dict[str, Any]:
+        return {"messages": [AIMessage(content=f"B={interrupt('B?')}")]}
+
+    graph = (
+        StateGraph(MessagesState)
+        .add_node("a", ask_again)
+        .add_node("b", ask_once)
+        .add_edge(START, "a")
+        .add_edge(START, "b")
+        .add_edge("a", END)
+        .add_edge("b", END)
+        .compile(checkpointer=InMemorySaver())
+    )
+    server = ResponsesHostServer(graph, store=InMemoryResponseProvider())
+    with TestClient(server.app) as client:
+        paused = _create(client, input="begin")
+        ids = {interrupt_value(item): item["call_id"] for item in sentinels(paused)}
+        first = resume_item(ids["A?"], "first")
+        sibling = resume_item(ids["B?"], "sibling")
+        _create(client, previous_response_id=paused["id"], input=[first])
+        stale = _create(
+            client, previous_response_id=paused["id"], input=[first, sibling]
+        )
+        assert stale["status"] == "failed", stale
+        partial = _create(client, previous_response_id=paused["id"], input=[sibling])
+        assert _text(partial) == "B=sibling"
+        assert [interrupt_value(item) for item in sentinels(partial)] == ["A?"]
+        done = _create(
+            client,
+            previous_response_id=partial["id"],
+            input=[resume_item(ids["A?"], "second")],
+        )
+        assert _text(done) == "A=first,second"
+
+
+def _refresh_request(response_id: str) -> dict[str, Any]:
+    return {
+        "previous_response_id": response_id,
+        "metadata": {"langgraph_approval_refresh": "true"},
+        "store": True,
+        "input": [],
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_refresh_legacy_same_id_pause_without_execution(stream: bool) -> None:
+    graph = build_sequential_interrupt_graph()
+    provider = InMemoryResponseProvider()
+    server = ResponsesHostServer(graph, store=provider)
+    with TestClient(server.app) as client:
+        first = _create(client, input="begin")
+        first_reply = resume_item(sentinels(first)[0]["call_id"], "Alice")
+        second = _create(client, previous_response_id=first["id"], input=[first_reply])
+        assert [interrupt_value(item) for item in sentinels(second)] == ["city?"]
+        assert client.portal is not None
+        stored = client.portal.call(provider.get_response, first["id"])
+        first_stream = ResponseEventStream(response_id=first["id"], response=stored)
+        del first_stream.internal_metadata["langgraph_pause_generations"]
+        client.portal.call(
+            provider.update_response, cast(ResponseObject, first_stream.response)
+        )
+
+        with (
+            patch.object(server.graph, "astream", wraps=server.graph.astream) as run,
+            patch.object(graph.checkpointer, "aput") as write,
+            patch.object(graph.checkpointer, "aput_writes") as write_pending,
+            patch.object(server._conversation_chain_store, "set") as chain_write,
+        ):
+            failed = _create(
+                client,
+                previous_response_id=first["id"],
+                input=[first_reply],
+                stream=stream,
+            )
+            assert failed["status"] == "failed"
+            assert failed["error"]["code"] == "approval_refresh_required"
+            assert failed["output"] == []
+            for overrides in (
+                {"input": [first_reply]},
+                {"input": "fresh text"},
+                {"instructions": "Run this"},
+                {"store": False},
+                {"background": True},
+                {"conversation": {"id": "another"}},
+            ):
+                refused = client.post(
+                    "/responses", json={**_refresh_request(first["id"]), **overrides}
+                )
+                assert refused.status_code == 400, refused.text
+            plain = _create(client, previous_response_id=first["id"], input="hello")
+            assert plain["error"]["code"] == "approval_refresh_required"
+            assert plain["output"] == []
+            refreshed = _create(client, **_refresh_request(first["id"]), stream=stream)
+            assert refreshed["status"] == "completed", refreshed
+            assert refreshed["id"] not in {first["id"], second["id"], failed["id"]}
+            assert [interrupt_value(item) for item in sentinels(refreshed)] == ["city?"]
+            stored_refresh = client.portal.call(provider.get_response, refreshed["id"])
+            stored_second = client.portal.call(provider.get_response, second["id"])
+            assert _config(stored_refresh) == _config(stored_second)
+            metadata = ResponseEventStream(
+                response_id=refreshed["id"], response=stored_refresh
+            ).internal_metadata
+            assert metadata["langgraph_pause_generations"] == {
+                sentinels(refreshed)[0]["call_id"]: 1
+            }
+            assert "_internal_metadata" not in refreshed.get("metadata", {})
+            run.assert_not_called()
+            write.assert_not_called()
+            write_pending.assert_not_called()
+            chain_write.assert_not_called()
+
+        reply = resume_item(sentinels(refreshed)[0]["call_id"], "Berlin")
+        done = _create(client, previous_response_id=refreshed["id"], input=[reply])
+        assert _text(done) == "Alice@Berlin"
+        with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
+            stale = _create(client, previous_response_id=refreshed["id"], input=[reply])
+            assert stale["error"]["code"] == "interrupt_not_pending"
+            unavailable = _create(client, **_refresh_request(first["id"]))
+            assert unavailable["error"]["code"] == "interrupt_not_pending"
+            assert unavailable["output"] == []
+            run.assert_not_called()
+
+
+def test_refresh_does_not_follow_the_thread_to_a_different_checkpoint() -> None:
+    server = ResponsesHostServer(
+        build_simple_interrupt_graph(), store=InMemoryResponseProvider()
+    )
+    with TestClient(server.app) as client:
+        first = _create(client, input="begin")
+        reply = resume_item(sentinels(first)[0]["call_id"], "Alice")
+        finished = _create(client, previous_response_id=first["id"], input=[reply])
+        later = _create(
+            client, previous_response_id=finished["id"], input="begin again"
+        )
+        assert sentinels(later)
+        with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
+            for parent in (first, finished):
+                unavailable = _create(client, **_refresh_request(parent["id"]))
+                assert unavailable["error"]["code"] == "interrupt_not_pending"
+                assert unavailable["output"] == []
+            stale = _create(client, previous_response_id=first["id"], input=[reply])
+            assert stale["error"]["code"] == "interrupt_not_pending"
+            run.assert_not_called()
+
+
+def test_steerable_external_host_rejects_refresh_before_admission() -> None:
+    app = ResponsesAgentServerHost(
+        options=ResponsesServerOptions(steerable_conversations=True),
+        store=InMemoryResponseProvider(),
+    )
+    server = ResponsesHostServer(build_simple_interrupt_graph(), app=app)
+    with (
+        TestClient(server.app) as client,
+        patch.object(server.graph, "astream", wraps=server.graph.astream) as run,
+    ):
+        response = client.post(
+            "/responses", json=_refresh_request(IdGenerator.new_response_id())
+        )
+        assert response.status_code == 400, response.text
+        run.assert_not_called()
 
 
 def test_interrupt_replay_without_conversation_head_can_be_resumed() -> None:
@@ -1616,11 +1885,12 @@ def test_external_host_remains_supported_without_branching(
 
 
 @pytest.mark.parametrize("caller", ["user-b", None])
+@pytest.mark.parametrize("refresh", [False, True])
 def test_ordinary_parent_checkpoint_remains_user_scoped(
-    graph: CompiledStateGraph, caller: str | None
+    caller: str | None, refresh: bool
 ) -> None:
     server = ResponsesHostServer(
-        graph,
+        build_simple_interrupt_graph(),
         store=InMemoryResponseProvider(),
         enable_response_branching=False,
     )
@@ -1630,7 +1900,11 @@ def test_ordinary_parent_checkpoint_remains_user_scoped(
         ).json()
         response = client.post(
             "/responses",
-            json={"input": "B", "previous_response_id": parent["id"]},
+            json=(
+                _refresh_request(parent["id"])
+                if refresh
+                else {"input": "B", "previous_response_id": parent["id"]}
+            ),
             headers={USER_ID: caller} if caller is not None else {},
         )
     assert parent["status"] == "completed"
