@@ -11,8 +11,7 @@ run as [hosted agents in Microsoft Foundry](https://learn.microsoft.com/en-us/az
 It converts request items into graph input and resume commands, converts graph
 output into response items and events, and connects graph state to conversation
 and recovery context. The SDK provides protocol routing and the server lifecycle.
-See also [Invocations hosting](invocations.md) and the
-[LangGraph-to-Foundry migration guide](host-langgraph-on-foundry.md).
+See also [Invocations hosting](invocations.md).
 
 ## 1. Interface
 
