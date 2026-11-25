@@ -1180,7 +1180,10 @@ class AzureBlobBackend(BackendProtocol):
 
         failed: list[str] = []
         container = await self._get_async_container()
-        blobs = await self._list_grep_blobs_async(container, search_path)
+        try:
+            blobs = await self._list_grep_blobs_async(container, search_path)
+        except AzureError:
+            return _grep_failure_result([search_path])
         candidates = _grep_candidates(blobs, self._prefix, search_path, glob_matcher)
 
         # Concurrency bound must not come from the chunking below: an uncapped
