@@ -5,7 +5,7 @@
 | Models | Adapter | API path |
 | --- | --- | --- |
 | Compatible Microsoft Decision models, verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisionsClassifier` | `/providers/microsoft/v1/systemone` |
-| `gpt-6-luna` | `AzureAIOpenAIApiDecisionsClassifier` | `/openai/v1/decisions` |
+| Azure OpenAI models that support the Decisions API (currently `gpt-6-luna`) | `AzureAIOpenAIApiDecisionsClassifier` | `/openai/v1/decisions` |
 
 ## Shared interface
 
@@ -28,9 +28,10 @@ name. Both adapters derive the resource URL from the project URL and default to
 `DefaultAzureCredential` in this configuration.
 
 To switch between compatible Microsoft Decision deployments, change only
-`DECISION_DEPLOYMENT_NAME`. For a `gpt-6-luna` deployment, also replace
-`AzureAIMicrosoftDecisionsClassifier` with `AzureAIOpenAIApiDecisionsClassifier`
-in the import and constructor. The request and response code stays the same.
+`DECISION_DEPLOYMENT_NAME`. To switch to an Azure OpenAI deployment that supports
+the Decisions API, also replace `AzureAIMicrosoftDecisionsClassifier` with
+`AzureAIOpenAIApiDecisionsClassifier` in the import and constructor. The request
+and response code stays the same.
 
 ```python
 import os
