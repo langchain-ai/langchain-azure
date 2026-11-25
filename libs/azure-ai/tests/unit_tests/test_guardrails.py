@@ -1,6 +1,7 @@
 """Unit tests for the guardrails module."""
 
 import asyncio
+import base64
 from typing import Annotated, Any, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -904,6 +905,10 @@ class TestAzureContentModerationForImagesMiddlewareInit:
 # ---------------------------------------------------------------------------
 
 
+_IMAGE_B64 = base64.b64encode(b"fake-image-bytes").decode()
+_OTHER_IMAGE_B64 = base64.b64encode(b"other-image-bytes").decode()
+
+
 class TestImageExtraction:
     """Tests for _images_from_message and extract_images helpers."""
 
@@ -983,6 +988,158 @@ class TestImageExtraction:
         images = cls._images_from_message(msg)
         assert len(images) == 1
         assert images[0] == {"url": url}
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "image", "base64": _IMAGE_B64, "mime_type": "image/png"},
+            {"type": "image", "url": f"data:image/png;base64,{_IMAGE_B64}"},
+            {
+                "type": "image",
+                "source_type": "base64",
+                "data": _IMAGE_B64,
+                "mime_type": "image/png",
+            },
+            {"type": "input_image", "image_url": f"data:image/png;base64,{_IMAGE_B64}"},
+        ],
+        ids=["base64", "data_url", "v0_base64", "input_image"],
+    )
+    def test_image_blocks_with_data_decoded_to_bytes(
+        self, block: Dict[str, Any]
+    ) -> None:
+        """Standard and Responses image blocks with base64 data are extracted."""
+        msg = HumanMessage(content=[{"type": "text", "text": "describe"}, block])
+        assert self._cls()._images_from_message(msg) == [
+            {"content": b"fake-image-bytes"}
+        ]
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "image", "url": "https://example.com/photo.jpg"},
+            {
+                "type": "image",
+                "source_type": "url",
+                "url": "https://example.com/photo.jpg",
+            },
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/photo.jpg",
+                "detail": "auto",
+            },
+        ],
+        ids=["url", "v0_url", "input_image"],
+    )
+    def test_image_blocks_with_url_returned_as_url(self, block: Dict[str, Any]) -> None:
+        """Standard and Responses image blocks with a URL are extracted."""
+        msg = HumanMessage(content=[block])
+        assert self._cls()._images_from_message(msg) == [
+            {"url": "https://example.com/photo.jpg"}
+        ]
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "image", "file_id": "file-abc"},
+            {"type": "image", "source_type": "id", "id": "file-abc"},
+            {"type": "input_image", "file_id": "file-abc", "detail": "auto"},
+            {
+                "type": "input_image",
+                "file_id": "file-abc",
+                "image_url": None,
+                "detail": "auto",
+            },
+        ],
+        ids=["file_id", "v0_id", "input_image_file_id", "input_image_null_url"],
+    )
+    def test_image_blocks_with_file_id_skipped_with_warning(
+        self, block: Dict[str, Any], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Image blocks that only reference a file aren't sent, and are logged."""
+        msg = HumanMessage(content=[block])
+        with caplog.at_level("WARNING"):
+            assert self._cls()._images_from_message(msg) == []
+        assert "Skipping image block" in caplog.text
+
+    @pytest.mark.parametrize(
+        "block,expected",
+        [
+            (
+                {
+                    "type": "image",
+                    "source_type": "base64",
+                    "data": _IMAGE_B64,
+                    "base64": _OTHER_IMAGE_B64,
+                    "mime_type": "image/png",
+                },
+                [{"content": b"other-image-bytes"}, {"content": b"fake-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "source_type": "url",
+                    "url": "https://example.com/photo.jpg",
+                    "base64": _OTHER_IMAGE_B64,
+                },
+                [
+                    {"content": b"other-image-bytes"},
+                    {"url": "https://example.com/photo.jpg"},
+                ],
+            ),
+            (
+                {
+                    "type": "image",
+                    "source_type": "id",
+                    "id": "file-abc",
+                    "base64": _OTHER_IMAGE_B64,
+                },
+                [{"content": b"other-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "base64": _IMAGE_B64,
+                    "url": "https://example.com/photo.jpg",
+                },
+                [
+                    {"content": b"fake-image-bytes"},
+                    {"url": "https://example.com/photo.jpg"},
+                ],
+            ),
+            (
+                {"type": "image", "base64": _IMAGE_B64, "data": _OTHER_IMAGE_B64},
+                [{"content": b"fake-image-bytes"}, {"content": b"other-image-bytes"}],
+            ),
+            (
+                {
+                    "type": "image",
+                    "base64": _IMAGE_B64,
+                    "url": f"data:image/png;base64,{_IMAGE_B64}",
+                },
+                [{"content": b"fake-image-bytes"}],
+            ),
+        ],
+        ids=[
+            "v0_base64_and_base64",
+            "v0_url_and_base64",
+            "v0_id_and_base64",
+            "base64_and_url",
+            "base64_and_data",
+            "same_image_twice",
+        ],
+    )
+    def test_each_image_in_a_block_is_extracted(
+        self, block: Dict[str, Any], expected: List[Dict[str, Any]]
+    ) -> None:
+        """Every image field of a block is extracted, as models read different ones."""
+        msg = HumanMessage(content=[block])
+        assert self._cls()._images_from_message(msg) == expected
+
+    @pytest.mark.parametrize("image_url", [None, {"url": None}], ids=["null", "dict"])
+    def test_image_url_block_with_null_url_skipped(self, image_url: Any) -> None:
+        """An ``image_url`` block with a null URL has nothing to send."""
+        msg = HumanMessage(content=[{"type": "image_url", "image_url": image_url}])
+        assert self._cls()._images_from_message(msg) == []
 
     def test_non_image_blocks_skipped(self) -> None:
         """Text blocks should not appear in the image list."""
@@ -1127,6 +1284,93 @@ class TestImageMiddlewareSync:
                 )
                 with pytest.raises(ContentSafetyViolationError):
                     m.before_agent({"messages": [msg]}, runtime=None)
+
+    def test_before_agent_blocks_standard_image_block(self) -> None:
+        """before_agent screens a standard ``image`` block."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        with self._mock_sdk():
+            m = self._make_middleware(exit_behavior="error")
+            mock_client = MagicMock()
+            mock_client.analyze_image.return_value = self._mock_response(severity=6)
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                msg = HumanMessage(
+                    content=[
+                        {"type": "text", "text": "describe this"},
+                        {
+                            "type": "image",
+                            "base64": _IMAGE_B64,
+                            "mime_type": "image/png",
+                        },
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    m.before_agent({"messages": [msg]}, runtime=None)
+        assert mock_client.analyze_image.call_count == 1
+
+    def test_before_agent_blocks_flagged_image_with_safe_extra_field(self) -> None:
+        """A flagged image is blocked when the block also has a safe one."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        with self._mock_sdk():
+            m = self._make_middleware(exit_behavior="error")
+            mock_client = MagicMock()
+            mock_client.analyze_image.side_effect = [
+                self._mock_response(severity=0),
+                self._mock_response(severity=6),
+            ]
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                msg = HumanMessage(
+                    content=[
+                        {
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": _IMAGE_B64,
+                            "base64": _OTHER_IMAGE_B64,
+                            "mime_type": "image/png",
+                        }
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    m.before_agent({"messages": [msg]}, runtime=None)
+        assert mock_client.analyze_image.call_count == 2
+
+    def test_after_agent_annotates_standard_image_block_output(self) -> None:
+        """after_agent screens a standard ``image`` block in the model output."""
+        with self._mock_sdk():
+            from langchain_azure_ai.agents.middleware.content_safety import (
+                AzureContentModerationForImagesMiddleware,
+            )
+
+            m: Any = AzureContentModerationForImagesMiddleware(
+                endpoint="https://test.cognitiveservices.azure.com/",
+                credential="fake-key",
+                exit_behavior="continue",
+                apply_to_output=True,
+            )
+            mock_client = MagicMock()
+            mock_client.analyze_image.return_value = self._mock_response(severity=6)
+            with patch.object(m, "_get_sync_client", return_value=mock_client):
+                ai_msg = AIMessage(
+                    content=[
+                        {
+                            "type": "image",
+                            "base64": _IMAGE_B64,
+                            "mime_type": "image/png",
+                        }
+                    ]
+                )
+                m.after_agent(
+                    {"messages": [HumanMessage(content="draw"), ai_msg]}, runtime=None
+                )
+        assert mock_client.analyze_image.call_count == 1
+        assert isinstance(ai_msg.content, list)
+        assert isinstance(ai_msg.content[-1], dict)
+        assert ai_msg.content[-1]["type"] == "non_standard_annotation"
 
     def test_before_agent_no_images_returns_none(self) -> None:
         """before_agent is a no-op when the message contains no images."""
@@ -1280,6 +1524,33 @@ class TestImageMiddlewareAsync:
                 )
                 with pytest.raises(ContentSafetyViolationError):
                     await m.abefore_agent({"messages": [msg]}, runtime=None)
+
+    async def test_abefore_agent_blocks_input_image_block(self) -> None:
+        """abefore_agent screens a Responses ``input_image`` block."""
+        from langchain_azure_ai.agents.middleware.content_safety import (
+            ContentSafetyViolationError,
+        )
+
+        with self._mock_sdk():
+            m = self._make_middleware(exit_behavior="error")
+            mock_async_client = AsyncMock()
+            mock_async_client.analyze_image = AsyncMock(
+                return_value=self._mock_async_response(severity=6)
+            )
+            with patch.object(m, "_get_async_client", return_value=mock_async_client):
+                msg = HumanMessage(
+                    content=[
+                        {"type": "input_text", "text": "describe this"},
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/png;base64,{_IMAGE_B64}",
+                            "detail": "auto",
+                        },
+                    ]
+                )
+                with pytest.raises(ContentSafetyViolationError):
+                    await m.abefore_agent({"messages": [msg]}, runtime=None)
+        assert mock_async_client.analyze_image.await_count == 1
 
     async def test_abefore_agent_safe_returns_none(self) -> None:
         """abefore_agent returns None when image is safe."""
