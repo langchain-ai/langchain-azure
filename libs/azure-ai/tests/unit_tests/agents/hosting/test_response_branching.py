@@ -53,7 +53,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import StateSnapshot, interrupt
+from langgraph.types import Command, StateSnapshot, interrupt
 from starlette.testclient import TestClient
 
 from langchain_azure_ai._api.base import ExperimentalWarning
@@ -843,6 +843,119 @@ def test_steerable_external_host_rejects_refresh_before_admission() -> None:
         run.assert_not_called()
 
 
+@pytest.mark.parametrize("stale_parent", [False, True])
+def test_steering_carries_only_the_current_sequential_pause(stale_parent: bool) -> None:
+    started = asyncio.Event()
+
+    class SteeringServer(ResponsesHostServer):
+        async def handle_create(
+            self,
+            request: CreateResponse,
+            context: ResponseContext,
+            cancellation_signal: asyncio.Event,
+        ) -> AsyncIterator[Any]:
+            async for event in super().handle_create(
+                request, context, cancellation_signal
+            ):
+                yield event
+                if (
+                    request.get("input") == "supersede me"
+                    and isinstance(event, dict)
+                    and event.get("type") == "response.in_progress"
+                ):
+                    started.set()
+                    await asyncio.wait_for(cancellation_signal.wait(), 5)
+
+    provider = InMemoryResponseProvider()
+    server = SteeringServer(
+        build_sequential_interrupt_graph(),
+        store=provider,
+        options=ResponsesServerOptions(steerable_conversations=True),
+    )
+
+    async def create(**body: Any) -> dict[str, Any]:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://testserver",
+        ) as client:
+            response = await asyncio.wait_for(
+                client.post(
+                    "/responses",
+                    json={**body, "stream": True, "agent_session_id": "steer-pause"},
+                ),
+                5,
+            )
+        assert response.status_code == 200, response.text
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        ]
+        return cast(dict[str, Any], events[-1]["response"])
+
+    async def scenario() -> None:
+        first = await create(input="begin")
+        call_id = sentinels(first)[0]["call_id"]
+        if stale_parent:
+            parent_id = first["id"]
+            stored_first = await provider.get_response(parent_id)
+            await server.graph.ainvoke(
+                Command(resume={call_id: "Alice"}), _config(stored_first)
+            )
+        else:
+            second = await create(
+                previous_response_id=first["id"], input=[resume_item(call_id, "Alice")]
+            )
+            assert [interrupt_value(item) for item in sentinels(second)] == ["city?"]
+            assert sentinels(second)[0]["call_id"] == call_id
+            parent_id = second["id"]
+        superseded_id = IdGenerator.new_response_id(parent_id)
+        with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
+            async with asyncio.TaskGroup() as tasks:
+                superseding = tasks.create_task(
+                    create(
+                        previous_response_id=parent_id,
+                        response_id=superseded_id,
+                        input="supersede me",
+                    )
+                )
+                await asyncio.wait_for(started.wait(), 5)
+                done = await create(
+                    previous_response_id=superseded_id,
+                    input=[resume_item(call_id, "Berlin")],
+                )
+            superseded = superseding.result()
+            assert superseded["status"] == "completed", superseded
+            stored = await provider.get_response(superseded_id)
+            stored_parent = await provider.get_response(parent_id)
+            assert _config(stored) == _config(stored_parent)
+            metadata = ResponseEventStream(response_id=superseded_id, response=stored)
+            if stale_parent:
+                assert superseded["output"] == []
+                assert "langgraph_pause_generations" not in metadata.internal_metadata
+                assert done["error"]["code"] == "interrupt_not_pending"
+                run.assert_not_called()
+            else:
+                assert done["status"] == "completed", done.get("error")
+                assert _text(done) == "Alice@Berlin"
+                assert [interrupt_value(item) for item in sentinels(superseded)] == [
+                    "city?"
+                ]
+                assert metadata.internal_metadata["langgraph_pause_generations"] == {
+                    call_id: 1
+                }
+                run.assert_called_once()
+
+    was_enabled = resilient_tasks_enabled()
+    set_resilient_tasks_enabled(True)
+    try:
+        with TestClient(server.app) as client:
+            assert client.portal is not None
+            client.portal.call(scenario)
+    finally:
+        set_resilient_tasks_enabled(was_enabled)
+
+
 def test_interrupt_replay_without_conversation_head_can_be_resumed() -> None:
     def pause(state: MessagesState) -> dict[str, Any]:
         decision = interrupt("Approval needed")
@@ -1573,30 +1686,32 @@ def test_superseded_turn_does_not_publish_an_unavailable_checkpoint(
     assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
 
 
+class _PartitionSaver(InMemorySaver):
+    @property
+    def config_specs(self) -> list[ConfigurableFieldSpec]:
+        return [ConfigurableFieldSpec(id="partition", annotation=str)]
+
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        if config["configurable"].get("partition") != "tenant-a":
+            raise ValueError("The checkpoint partition is required.")
+        return await super().aget_tuple(config)
+
+
+class _PartitionServer(ResponsesHostServer):
+    async def build_runnable_config(
+        self, request: CreateResponse, context: ResponseContext
+    ) -> RunnableConfig:
+        config = await super().build_runnable_config(request, context)
+        config["configurable"]["partition"] = "tenant-a"
+        return config
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_custom_saver_config_is_available_before_checkpoint_reads(
     graph: CompiledStateGraph, enabled: bool
 ) -> None:
-    class PartitionSaver(InMemorySaver):
-        @property
-        def config_specs(self) -> list[ConfigurableFieldSpec]:
-            return [ConfigurableFieldSpec(id="partition", annotation=str)]
-
-        async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-            if config["configurable"].get("partition") != "tenant-a":
-                raise ValueError("The checkpoint partition is required.")
-            return await super().aget_tuple(config)
-
-    class PartitionServer(ResponsesHostServer):
-        async def build_runnable_config(
-            self, request: CreateResponse, context: ResponseContext
-        ) -> RunnableConfig:
-            config = await super().build_runnable_config(request, context)
-            config["configurable"]["partition"] = "tenant-a"
-            return config
-
-    server = PartitionServer(
-        graph.copy({"checkpointer": PartitionSaver()}),
+    server = _PartitionServer(
+        graph.copy({"checkpointer": _PartitionSaver()}),
         store=InMemoryResponseProvider(),
         enable_response_branching=enabled,
     )
@@ -1606,6 +1721,75 @@ def test_custom_saver_config_is_available_before_checkpoint_reads(
     assert parent["status"] == "completed"
     assert response["status"] == "completed"
     assert _text(response) == "A|B"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_refresh_uses_custom_saver_config_without_changing_provenance(
+    stream: bool,
+) -> None:
+    saver = _PartitionSaver()
+    graph = build_sequential_interrupt_graph().copy({"checkpointer": saver})
+    provider = InMemoryResponseProvider()
+    server = _PartitionServer(graph, store=provider)
+    with TestClient(server.app) as client:
+        first = _create(client, input="begin")
+        call_id = sentinels(first)[0]["call_id"]
+        second = _create(
+            client,
+            previous_response_id=first["id"],
+            input=[resume_item(call_id, "Alice")],
+        )
+        assert client.portal is not None
+        stored_second = client.portal.call(provider.get_response, second["id"])
+        with (
+            patch.object(server.graph, "astream", wraps=server.graph.astream) as run,
+            patch.object(server, "build_input", wraps=server.build_input) as build,
+            patch.object(saver, "aput") as write,
+            patch.object(saver, "aput_writes") as write_pending,
+        ):
+            refreshed = _create(client, **_refresh_request(first["id"]), stream=stream)
+            assert refreshed["status"] == "completed", refreshed.get("error")
+            assert [interrupt_value(item) for item in sentinels(refreshed)] == ["city?"]
+            stored_refresh = client.portal.call(provider.get_response, refreshed["id"])
+            assert _config(stored_refresh) == _config(stored_second)
+
+            build_config = server.build_runnable_config
+
+            async def redirected_config(
+                request: CreateResponse,
+                context: ResponseContext,
+                *,
+                changes: dict[str, Any],
+            ) -> RunnableConfig:
+                config = await build_config(request, context)
+                config["configurable"].update(changes)
+                return config
+
+            for config_changes in (
+                {"thread_id": "different-thread"},
+                {"checkpoint_id": "different-checkpoint"},
+                {"checkpoint_id": None},
+                {"checkpoint_ns": "nested"},
+            ):
+                with (
+                    patch.object(
+                        server,
+                        "build_runnable_config",
+                        partial(redirected_config, changes=config_changes),
+                    ),
+                    patch.object(saver, "aget_tuple", wraps=saver.aget_tuple) as read,
+                ):
+                    refused = _create(
+                        client, **_refresh_request(first["id"]), stream=stream
+                    )
+                    read.assert_not_awaited()
+                assert refused["error"]["code"] == "interrupt_not_pending"
+                assert refused["output"] == []
+
+            run.assert_not_called()
+            build.assert_not_awaited()
+            write.assert_not_called()
+            write_pending.assert_not_called()
 
 
 @pytest.mark.parametrize("recovering", [False, True])
