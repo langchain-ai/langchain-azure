@@ -8,14 +8,14 @@ This package integrates Microsoft Foundry with LangChain, LangGraph, and Deep Ag
 | --- | --- |
 | Call Microsoft Foundry models from LangChain, LangGraph, or Deep Agents | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
 | Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#decisions-api-experimental) |
-| Host an existing compiled graph on Azure | [Hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
+| Host an existing compiled graph on Azure | [LangGraph-to-Foundry migration guide](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/host-langgraph-on-foundry.md), [hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents), and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
 | Access agents on Microsoft Foundry Agent Service | [Agent Service quick start](#accessing-agents-on-microsoft-foundry-agent-service) |
 | Apply guardrails or use Foundry tools | [Content Safety](#applying-content-safety-guardrails-via-middleware) and [Microsoft Foundry Tools](#using-microsoft-foundry-tools) |
 | Trace graph, model, and tool calls | [Application Insights tracing](#tracing-with-azure-application-insights) |
 | Persist graph state | [FoundryCheckpointSaver backed by Foundry State Store](#persisting-graph-state) or [Azure Cosmos DB checkpointer](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-checkpointer) |
-| Store long-term memory across threads | [Azure Cosmos DB store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory) |
+| Store long-term memory across threads | [Foundry Memory (experimental)](#storing-long-term-memory-with-foundry-memory) or [Azure Cosmos DB store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory) |
 
 ## Installation
 
@@ -54,11 +54,12 @@ The `langchain-azure-ai` package connects LangChain, LangGraph, and Deep Agents 
 
 This package includes:
 
-* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), or [Decisions API (experimental)](#decisions-api-experimental).
+* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), [Anthropic Messages API](#anthropic-messages-api), or [Decisions API (experimental)](#decisions-api-experimental).
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
-* **Using Microsoft Foundry Tools:** call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
+* **Storing long-term memory:** capture and retrieve cross-session memories with [Foundry Memory (experimental)](#storing-long-term-memory-with-foundry-memory).
+* **Using Microsoft Foundry Tools:** load managed project tools with `AzureAIProjectToolbox` or call Azure services such as Content Understanding and Document Intelligence with [Microsoft Foundry Tools](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/tools).
 * **Searching documents (vector store):** index and search documents with [Azure AI Search](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/vectorstores).
 
 For more details and tutorials, see the [Microsoft Foundry development guide](https://aka.ms/azureai/langchain).
@@ -139,6 +140,28 @@ model = AzureAIOpenAIApiChatModel(
 
 model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 ```
+
+#### Anthropic Messages API
+
+Use `AzureAIAnthropicChatModel` to call Claude models deployed in Microsoft
+Foundry through the `/anthropic` endpoint with Microsoft Entra ID or API key
+authentication:
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_azure_ai.chat_models import AzureAIAnthropicChatModel
+
+model = AzureAIAnthropicChatModel(
+    endpoint="https://{your-resource-name}.services.ai.azure.com",
+    credential=DefaultAzureCredential(),
+    model="claude-sonnet-4-20250514",  # your Claude deployment name
+)
+
+model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
+```
+
+You can also pass `project_endpoint` instead of `endpoint` to resolve the
+resource URL automatically.
 
 #### Decisions API (experimental)
 
@@ -295,11 +318,9 @@ pip install -U "langchain-azure-ai[hosting]"
 python -m langchain_azure_ai.agents.hosting.run --protocol responses
 ```
 
-For prerequisites, local requests, and Azure deployment, follow the
-[LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents)
-or the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here).
-
-For platform configuration and deployment examples, see the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph).
+- **Why host on Microsoft Foundry:** See the [Hosting your LangGraph application on Microsoft Foundry Agents blog post](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/hosting-your-langgraph-application-on-microsoft-foundry-agents/4573342) for an overview of the benefits and architecture.
+- **Migrating an existing graph:** Follow the step-by-step [LangGraph-to-Foundry migration guide](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/host-langgraph-on-foundry.md).
+- **New or migrated agents:** Follow the [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents), the [hosted-agent samples](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here), and the [Foundry LangGraph samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) for prerequisites, local requests, and Azure deployment.
 
 You can also host the graph directly from Python, as shown below:
 
@@ -412,9 +433,59 @@ If you want database-backed checkpoints, use the async `CosmosDBSaver` in the
 [Cosmos DB hosting guidance](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#host-a-persistent-langgraph-agent-on-azure).
 Both hosts invoke graphs asynchronously, so `CosmosDBSaverSync` is not
 compatible. Cross-thread long-term memory is a separate concern; use a
+[Foundry Memory store](#storing-long-term-memory-with-foundry-memory) or a
 [LangGraph store](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-cosmosdb/README.md#langgraph-store-long-term-memory)
 rather than a checkpointer for that purpose.
 
+
+### Storing long-term memory with Foundry Memory
+
+Use `AzureAIMemoryMiddleware` (experimental) to extract memories from agent
+turns into an existing Microsoft Foundry Memory store and expose a matching
+retrieval tool to the agent:
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_azure_ai.agents.middleware import AzureAIMemoryMiddleware
+
+memory_middleware = AzureAIMemoryMiddleware(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    credential=DefaultAzureCredential(),
+    store_name="my-memory-store",
+    scope="user:123",
+    roles=["user", "assistant"],
+)
+
+agent = create_agent(
+    model=init_chat_model("azure_ai:gpt-5"),
+    tools=[memory_middleware.get_retriever_tool()],
+    middleware=[memory_middleware],
+)
+```
+
+To query a Foundry Memory store directly as a LangChain retriever, use
+`AzureAIMemoryRetriever` (experimental) standalone or obtain a history-bound
+retriever from `AzureAIMemoryChatMessageHistory`:
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_azure_ai.retrievers import AzureAIMemoryRetriever
+
+retriever = AzureAIMemoryRetriever(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    credential=DefaultAzureCredential(),
+    store_name="my-memory-store",
+    scope="user:123",
+    k=5,
+)
+docs = retriever.invoke("What are my preferences?")
+```
+
+Create the memory store in your Foundry project before use. See the
+[Foundry Memory sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/foundry-memory/README.md)
+for an end-to-end multi-session example.
 
 <a id="auto-tracing-to-azure-application-insights"></a>
 
@@ -445,6 +516,29 @@ For a complete end-to-end example, see [`samples/enable_auto_tracing_appinsights
 <a id="microsoft-foundry-tools"></a>
 
 ### Using Microsoft Foundry Tools
+
+Use `AzureAIProjectToolbox` (experimental) to load tools and skills from a
+managed Microsoft Foundry Toolbox over MCP. Install `langchain-mcp-adapters`
+before use:
+
+```bash
+pip install -U langchain-mcp-adapters
+```
+
+```python
+from langchain_azure_ai.tools import AzureAIProjectToolbox
+
+toolbox = AzureAIProjectToolbox(
+    project_endpoint="https://{your-resource-name}.services.ai.azure.com/api/projects/{your-project}",
+    toolbox_name="my-toolbox",
+)
+tools = await toolbox.get_tools()
+```
+
+You can also pin a specific `toolbox_version`, inspect approval requirements
+with `get_tools_requiring_approval()`, and load toolbox skills or resources
+with `get_skills()` / `aget_skills()` and `get_resources()` / `aget_resources()`.
+See the [Foundry Toolbox sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox/README.md).
 
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
 
