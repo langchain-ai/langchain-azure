@@ -3292,6 +3292,204 @@ class TestMiddlewareSupport:
 
 
 # ---------------------------------------------------------------------------
+# Tests for create_prompt_agent with a custom state_schema
+# ---------------------------------------------------------------------------
+
+
+def _state_schema(kind: str) -> Any:
+    """Return a state schema without the ``AgentServiceAgentState`` fields."""
+    from langchain.agents import AgentState
+    from langgraph.graph import MessagesState
+    from typing_extensions import NotRequired
+
+    class CustomState(AgentState):
+        user_name: NotRequired[str]
+
+    return {
+        "agent_state": AgentState,
+        "messages_state": MessagesState,
+        "custom_state": CustomState,
+    }[kind]
+
+
+class TestCustomStateSchema:
+    """Tests for ``create_prompt_agent`` with a custom ``state_schema``."""
+
+    @staticmethod
+    def _make_factory_and_openai() -> tuple:
+        """Return a factory, its mocked project client and OpenAI client."""
+        from langchain_azure_ai.agents._v2.prebuilt.factory import AgentServiceFactory
+
+        factory = AgentServiceFactory(project_endpoint="https://test.endpoint.com")
+
+        mock_agent_version = MagicMock()
+        mock_agent_version.name = "test-agent"
+        mock_agent_version.version = "1"
+        mock_agent_version.definition = {"model": "gpt-4.1"}
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.conversations.create.return_value = MagicMock(id="conv_123")
+
+        mock_client = MagicMock()
+        mock_client.agents.create_version.return_value = mock_agent_version
+        mock_client.agents.get_version.return_value = mock_agent_version
+        mock_client.get_openai_client.return_value = mock_openai
+
+        return factory, mock_client, mock_openai
+
+    @staticmethod
+    def _response(response_id: str, output: list, output_text: Any = None) -> Any:
+        """Return a mocked completed ``Response``."""
+        mock_response = MagicMock()
+        mock_response.id = response_id
+        mock_response.status = "completed"
+        mock_response.output = output
+        mock_response.output_text = output_text
+        mock_response.usage = None
+        return mock_response
+
+    @pytest.mark.parametrize("kind", ["agent_state", "messages_state", "custom_state"])
+    def test_submits_tool_output(self, kind: str) -> None:
+        """The tool output is submitted to the conversation that asked for it."""
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def add(a: int, b: int) -> int:
+            """Add two numbers."""
+            return a + b
+
+        function_call = MagicMock()
+        function_call.type = "function_call"
+        function_call.call_id = "call_abc"
+        function_call.name = "add"
+        function_call.arguments = '{"a": 5, "b": 8}'
+
+        factory, mock_client, mock_openai = self._make_factory_and_openai()
+        mock_openai.responses.create.side_effect = [
+            self._response("resp_1", [function_call]),
+            self._response("resp_2", [], "The sum is 13"),
+        ]
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                tools=[add],
+                state_schema=_state_schema(kind),
+            )
+            result = graph.invoke({"messages": [HumanMessage(content="5 + 8?")]})
+
+        assert result["messages"][-1].content == "The sum is 13"
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_123"
+        assert call_kwargs["input"] == [
+            {"call_id": "call_abc", "output": "13", "type": "function_call_output"}
+        ]
+
+    @pytest.mark.parametrize("kind", ["agent_state", "messages_state", "custom_state"])
+    def test_submits_mcp_approval(self, kind: str) -> None:
+        """The approval is submitted to the conversation that asked for it."""
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        from langchain_azure_ai.agents._v2.prebuilt.tools import MCPTool
+
+        approval_request = MagicMock()
+        approval_request.type = "mcp_approval_request"
+        approval_request.id = "approval_req_444"
+        approval_request.server_label = "github"
+        approval_request.name = "delete_repo"
+        approval_request.arguments = "{}"
+
+        factory, mock_client, mock_openai = self._make_factory_and_openai()
+        mock_openai.responses.create.side_effect = [
+            self._response("resp_1", [approval_request]),
+            self._response("resp_2", [], "Deleted"),
+        ]
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                tools=[
+                    MCPTool(
+                        server_label="github",
+                        server_url="https://example.com/mcp",
+                        require_approval="always",
+                    )
+                ],
+                state_schema=_state_schema(kind),
+                checkpointer=InMemorySaver(),
+            )
+            config: Any = {"configurable": {"thread_id": "thread"}}
+            graph.invoke({"messages": [HumanMessage(content="Delete it")]}, config)
+            result = graph.invoke(Command(resume=True), config)
+
+        assert result["messages"][-1].content == "Deleted"
+        call_kwargs = mock_openai.responses.create.call_args.kwargs
+        assert call_kwargs["conversation"] == "conv_123"
+        assert call_kwargs["input"] == [
+            {
+                "approval_request_id": "approval_req_444",
+                "approve": True,
+                "type": "mcp_approval_response",
+            }
+        ]
+
+    @pytest.mark.parametrize("kind", ["agent_state", "messages_state", "custom_state"])
+    def test_reuses_conversation_across_turns(self, kind: str) -> None:
+        """A second turn on the same thread continues the same conversation."""
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        factory, mock_client, mock_openai = self._make_factory_and_openai()
+        mock_openai.responses.create.side_effect = [
+            self._response("resp_1", [], "Hi Bob"),
+            self._response("resp_2", [], "Your name is Bob"),
+        ]
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                state_schema=_state_schema(kind),
+                checkpointer=InMemorySaver(),
+            )
+            config: Any = {"configurable": {"thread_id": "thread"}}
+            graph.invoke({"messages": [HumanMessage(content="I'm Bob")]}, config)
+            graph.invoke({"messages": [HumanMessage(content="My name?")]}, config)
+
+        mock_openai.conversations.create.assert_called_once_with()
+        conversations = [
+            call.kwargs["conversation"]
+            for call in mock_openai.responses.create.call_args_list
+        ]
+        assert conversations == ["conv_123", "conv_123"]
+
+    def test_keeps_custom_state_fields(self) -> None:
+        """The fields of the custom schema are still part of the graph state."""
+        factory, mock_client, mock_openai = self._make_factory_and_openai()
+        mock_openai.responses.create.return_value = self._response(
+            "resp_1", [], "Hi Bob"
+        )
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                state_schema=_state_schema("custom_state"),
+            )
+            result = graph.invoke(
+                {"messages": [HumanMessage(content="Hi")], "user_name": "Bob"}
+            )
+
+        assert result["user_name"] == "Bob"
+        assert result["azure_ai_agents_conversation_id"] == "conv_123"
+
+
+# ---------------------------------------------------------------------------
 # Tests for _get_input_from_state
 # ---------------------------------------------------------------------------
 

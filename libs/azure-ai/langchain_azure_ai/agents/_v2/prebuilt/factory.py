@@ -53,6 +53,7 @@ from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
     ResponsesAgentNode,
+    _AgentServiceAgentFields,
     _get_v2_tool_definitions,
     _McpApprovalValue,
     _parse_approval_decision,
@@ -670,6 +671,9 @@ ResponsesAgentNode`
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
             state_schema: State schema. Defaults to ``AgentServiceAgentState``.
+                The fields that ``AgentServiceAgentState`` adds to
+                ``AgentState`` are added to a custom schema, since the agent
+                node keeps its conversation in them.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
             store: Store to use.
@@ -777,6 +781,9 @@ ResponsesAgentNode`
         )
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
+        if state_schema is not None:
+            # The agent node keeps its conversation in these fields.
+            state_schemas.add(_AgentServiceAgentFields)
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
         input_schema = _resolve_state_schema(state_schemas, "InputSchema", "input")
         output_schema = _resolve_state_schema(state_schemas, "OutputSchema", "output")

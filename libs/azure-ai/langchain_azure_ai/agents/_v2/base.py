@@ -74,6 +74,7 @@ from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -91,7 +92,15 @@ MCP_APPROVAL_REQUEST_TOOL_NAME = "mcp_approval_request"
 # ---------------------------------------------------------------------------
 
 
-class AgentServiceAgentState(AgentState):
+class _AgentServiceAgentFields(TypedDict):
+    """The fields that ``AgentServiceAgentState`` adds to ``AgentState``."""
+
+    azure_ai_agents_conversation_id: Optional[str]
+    azure_ai_agents_previous_response_id: Optional[str]
+    azure_ai_agents_pending_type: Optional[str]
+
+
+class AgentServiceAgentState(AgentState, _AgentServiceAgentFields):
     """Extended ``AgentState`` that carries per-invocation agent context.
 
     By storing conversation IDs and pending-call type in the graph state
@@ -112,10 +121,6 @@ class AgentServiceAgentState(AgentState):
         Indicates whether the last response left unresolved calls:
         ``"function_call"``, ``"mcp_approval"``, or ``None``.
     """
-
-    azure_ai_agents_conversation_id: Optional[str]
-    azure_ai_agents_previous_response_id: Optional[str]
-    azure_ai_agents_pending_type: Optional[str]
 
 
 def _get_agent_state(
