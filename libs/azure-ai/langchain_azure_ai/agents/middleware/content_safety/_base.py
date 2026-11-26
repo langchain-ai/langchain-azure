@@ -101,6 +101,11 @@ class _ContentSafetyState(MessagesState, total=False):
 
 logger = logging.getLogger(__name__)
 
+_MAX_TEXT_LENGTH = 10_000
+# Parts of long text overlap by at least this, the maximum length of a
+# blocklist item.
+_TEXT_OVERLAP = 128
+
 
 class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     """Base class with shared credential, client, and violation-handling logic.
@@ -266,7 +271,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def _handle_violations(
         self,
         evaluations: Sequence[ContentSafetyEvaluation],
-        context: Literal["agent.input", "agent.output", "model.input", "model.output"],
+        context: Literal[
+            "agent.input", "agent.output", "model.input", "model.output", "tool.output"
+        ],
         offending_message: Optional[BaseMessage] = None,
     ) -> dict[str, Any] | None:
         """Apply the configured exit behaviour to detected violations.
@@ -459,6 +466,9 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
     def get_text_from_message(self, msg: Optional[BaseMessage]) -> Optional[str]:
         """Extract plain text from a LangChain message's content.
 
+        In list content, string items and ``text`` / ``input_text`` blocks
+        are joined.
+
         Args:
             msg: A LangChain message object, or ``None``.
 
@@ -471,13 +481,64 @@ class _AzureContentSafetyBaseMiddleware(AgentMiddleware[AgentState[Any], Any]):
             return msg.content or None
         if isinstance(msg.content, list):
             parts = [
-                block["text"]
+                block if isinstance(block, str) else block["text"]
                 for block in msg.content
-                if isinstance(block, dict) and block.get("type") == "text"
+                if _is_text_block(block)
             ]
             text = " ".join(parts)
             return text or None
         return None
+
+
+def _is_text_block(block: Any) -> bool:
+    """Return whether a content block is text that the middleware extracts."""
+    return isinstance(block, str) or (
+        isinstance(block, dict)
+        and block.get("type") in ("text", "input_text")
+        and isinstance(block.get("text"), str)
+    )
+
+
+def _split_text(
+    text: str,
+    max_length: int = _MAX_TEXT_LENGTH,
+    overlap: int = _TEXT_OVERLAP,
+) -> List[str]:
+    """Split text into parts that fit in one Content Safety text request.
+
+    The text APIs accept up to 10,000 characters per request, and longer text
+    has to be split.  Each part is ``max_length`` characters, and the last
+    one ends the text, so no part is short.  Each next part starts at least
+    ``overlap`` characters before the end of the previous one, so text up to
+    that long, such as a blocklist item, is whole in at least one part.
+    Parts start at whitespace when there is some within ``overlap``
+    characters, so they don't start inside a word, which can make the last
+    part up to ``overlap`` characters shorter.  Parts that are only
+    whitespace are dropped.
+    """
+    if len(text) <= max_length:
+        return [text]
+    parts: List[str] = []
+    start = 0
+    while start + max_length < len(text):
+        end = start + max_length
+        parts.append(text[start:end])
+        start = next(
+            (
+                i
+                for i in range(end - overlap, end - 2 * overlap, -1)
+                if text[i].isspace()
+            ),
+            end - overlap,
+        )
+    # The last part ends the text and is moved back to be full length.
+    last = len(text) - max_length
+    start = next(
+        (i for i in range(last, min(start, last + overlap)) if text[i].isspace()),
+        last,
+    )
+    parts.append(text[start:])
+    return [part for part in parts if not part.isspace()]
 
 
 def get_content_safety_annotations(

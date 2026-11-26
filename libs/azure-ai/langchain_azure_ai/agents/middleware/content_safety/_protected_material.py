@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from langchain.agents.middleware import AgentState, Runtime
@@ -14,6 +14,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
     _AzureContentSafetyBaseMiddleware,
+    _split_text,
 )
 from langchain_azure_ai.agents.middleware.content_safety._text import (
     TextModerationInput,
@@ -52,6 +53,11 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
 
     Both synchronous (``before_agent`` / ``after_agent``) and asynchronous
     (``abefore_agent`` / ``aafter_agent``) hooks are implemented.
+
+    Text longer than 10,000 characters, the service's limit per request, is
+    split and each part is checked, so it takes one request per part.  A
+    detection in any part is reported as one violation, with the code
+    citations of all the parts.
 
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
@@ -166,7 +172,7 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
             ProtectedMaterialEvaluation(
                 category="ProtectedMaterial",
                 detected=analysis.get("detected", False),
-                code_citations=analysis.get("codeCitations", []),
+                code_citations=analysis.get("codeCitations") or [],
             )
         ]
 
@@ -321,35 +327,60 @@ class AzureProtectedMaterialMiddleware(_AzureContentSafetyBaseMiddleware):
     def _detect_sync(
         self, operation: str, text: str
     ) -> List[ProtectedMaterialEvaluation]:
-        """Call the synchronous protected material detection REST API."""
-        result = self._send_rest_sync(
-            operation,
-            {self.type: text[:10000]},
-            _PROTECTED_MATERIAL_API_VERSION,
-        )
-        evaluations = self.get_evaluation_response(result)
-        violations = [e for e in evaluations if e.detected]
-        logger.debug(
-            "[%s] Protected material detection: detected=%s",
-            self.name,
-            bool(violations),
-        )
-        return violations
+        """Call the synchronous protected material detection REST API.
+
+        Text over the request limit is split and each part is checked.
+        """
+        results = [
+            self._send_rest_sync(
+                operation, {self.type: part}, _PROTECTED_MATERIAL_API_VERSION
+            )
+            for part in _split_text(text)
+        ]
+        return self._collect_violations(results)
 
     async def _detect_async(
         self, operation: str, text: str
     ) -> List[ProtectedMaterialEvaluation]:
-        """Call the asynchronous protected material detection REST API."""
-        result = await self._send_rest_async(
-            operation,
-            {self.type: text[:10000]},
-            _PROTECTED_MATERIAL_API_VERSION,
-        )
-        evaluations = self.get_evaluation_response(result)
-        violations = [e for e in evaluations if e.detected]
+        """Call the asynchronous protected material detection REST API.
+
+        Text over the request limit is split and the parts are checked one at
+        a time, as in :meth:`_detect_sync`.
+        """
+        results = [
+            await self._send_rest_async(
+                operation, {self.type: part}, _PROTECTED_MATERIAL_API_VERSION
+            )
+            for part in _split_text(text)
+        ]
+        return self._collect_violations(results)
+
+    def _collect_violations(
+        self, results: Sequence[Dict[str, Any]]
+    ) -> List[ProtectedMaterialEvaluation]:
+        """Parse the responses into at most one violation.
+
+        When several parts are detected, their code citations are combined,
+        except those already found in an earlier part, as the parts of long
+        text overlap.
+        """
+        detected = [
+            e
+            for result in results
+            for e in self.get_evaluation_response(result)
+            if e.detected
+        ]
         logger.debug(
             "[%s] Protected material detection: detected=%s",
             self.name,
-            bool(violations),
+            bool(detected),
         )
-        return violations
+        if not detected:
+            return []
+        code_citations: List[Dict[str, Any]] = []
+        for e in detected:
+            earlier_citations = list(code_citations)
+            code_citations.extend(
+                c for c in e.code_citations if c not in earlier_citations
+            )
+        return [replace(detected[0], code_citations=code_citations)]

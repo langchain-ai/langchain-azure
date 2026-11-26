@@ -1,7 +1,7 @@
 # What this sample demonstrates
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent whose
-tools are loaded from an **Azure AI Foundry Toolbox** — a managed
+tools are loaded from a **Microsoft Foundry Toolbox** — a managed
 multi-MCP gateway that aggregates many tool servers (custom MCP, OpenAPI
 tools, SharePoint search, etc.) behind one URL. The toolbox tools are
 fetched once at startup and bound to a `create_agent` graph hosted using

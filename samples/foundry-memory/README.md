@@ -1,5 +1,5 @@
-# Azure AI Foundry Memory Demo
-This demo shows how to use Azure AI Foundry Memory with LangChain for long-term memory across chat sessions.
+# Microsoft Foundry Memory Demo
+This demo shows how to use Microsoft Foundry Memory with LangChain for long-term memory across chat sessions.
 
 ## Quick Start
 
@@ -59,6 +59,6 @@ docs = retriever.invoke("What are my preferences?")
 
 ## Learn More
 
-- [Azure AI Foundry Memory Documentation](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/what-is-memory)
+- [Microsoft Foundry Memory Documentation](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/what-is-memory)
 - [Azure AI Projects SDK](https://learn.microsoft.com/en-us/python/api/overview/azure/ai-projects-readme)
 - [LangChain Documentation](https://python.langchain.com/)

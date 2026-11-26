@@ -132,6 +132,8 @@ def build_real_model() -> BaseChatModel:
         api_key=get_bearer_token_provider(credential, _AZURE_AI_SCOPE),
         streaming=True,
         use_responses_api=True,
+        # LangGraph manages message history instead of the model service.
+        store=False,
         output_version="responses/v1",
     )
 

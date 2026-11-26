@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, List, Literal, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence
 
 from azure.ai.contentsafety.models import AnalyzeTextOptions, TextCategory
 from langchain.agents.middleware import AgentState, Runtime
@@ -16,6 +16,7 @@ from langchain_azure_ai.agents.middleware.content_safety._base import (
     ContentSafetyAnnotationPayload,
     ContentSafetyEvaluation,
     _AzureContentSafetyBaseMiddleware,
+    _split_text,
 )
 
 
@@ -131,6 +132,11 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
         context_extractor=my_extractor,
     )
     ```
+
+    Text longer than 10,000 characters, the service's limit per request, is
+    split and each part is analysed, so it takes one request per part.  Each
+    harm category is reported once, with its highest severity across the
+    parts.
 
     Args:
         endpoint: Azure Content Safety resource endpoint URL.  Falls back to
@@ -406,57 +412,68 @@ class AzureContentModerationMiddleware(_AzureContentSafetyBaseMiddleware):
     def _analyze_sync(self, text: str) -> List[ContentSafetyEvaluation]:
         """Call the synchronous Content Safety API and return violations.
 
-        Calls the SDK, parses the response into evaluations via
-        :meth:`get_evaluation_response`, then filters by severity threshold.
+        Text over the request limit is split and each part is analysed.
         """
-        options = AnalyzeTextOptions(
-            text=text[:10000],
-            categories=[TextCategory(c) for c in self._categories],
-            blocklist_names=self._blocklist_names or None,
-        )
+        parts = _split_text(text)
         logger.debug(
-            "[%s] Calling analyze_text (categories=%s, blocklists=%s)",
+            "[%s] Calling analyze_text (categories=%s, blocklists=%s, parts=%d)",
             self.name,
             self._categories,
             self._blocklist_names or [],
+            len(parts),
         )
-        response = self._get_sync_client().analyze_text(options)
-        evaluations = self.get_evaluation_response(response)
-        return [
-            e
-            for e in evaluations
-            if isinstance(e, BlocklistEvaluation)
-            or (
-                isinstance(e, ContentModerationEvaluation)
-                and e.severity >= self._severity_threshold
-            )
-        ]
+        client = self._get_sync_client()
+        responses = [client.analyze_text(self._analyze_options(p)) for p in parts]
+        return self._collect_violations(responses)
 
     async def _analyze_async(self, text: str) -> List[ContentSafetyEvaluation]:
         """Call the async Content Safety API and return violations.
 
-        Calls the SDK, parses the response into evaluations via
-        :meth:`get_evaluation_response`, then filters by severity threshold.
+        Text over the request limit is split and the parts are analysed one
+        at a time, as in :meth:`_analyze_sync`.
         """
-        options = AnalyzeTextOptions(
-            text=text[:10000],
-            categories=[TextCategory(c) for c in self._categories],
-            blocklist_names=self._blocklist_names or None,
-        )
+        parts = _split_text(text)
         logger.debug(
-            "[%s] Calling async analyze_text (categories=%s, blocklists=%s)",
+            "[%s] Calling async analyze_text (categories=%s, blocklists=%s, parts=%d)",
             self.name,
             self._categories,
             self._blocklist_names or [],
+            len(parts),
         )
-        response = await self._get_async_client().analyze_text(options)
-        evaluations = self.get_evaluation_response(response)
-        return [
-            e
-            for e in evaluations
-            if isinstance(e, BlocklistEvaluation)
-            or (
-                isinstance(e, ContentModerationEvaluation)
-                and e.severity >= self._severity_threshold
-            )
-        ]
+        client = self._get_async_client()
+        responses = [await client.analyze_text(self._analyze_options(p)) for p in parts]
+        return self._collect_violations(responses)
+
+    def _analyze_options(self, text: str) -> AnalyzeTextOptions:
+        """Build the ``analyze_text`` request options for one part of the text."""
+        return AnalyzeTextOptions(
+            text=text,
+            categories=[TextCategory(c) for c in self._categories],
+            blocklist_names=self._blocklist_names or None,
+        )
+
+    def _collect_violations(
+        self, responses: Sequence[Any]
+    ) -> List[ContentSafetyEvaluation]:
+        """Parse the responses and keep the evaluations over the threshold.
+
+        Each harm category is kept once, with its highest severity across the
+        responses.  Blocklist matches are kept, except those already found in
+        an earlier response, as the parts of long text overlap.
+        """
+        categories: Dict[str, ContentModerationEvaluation] = {}
+        blocklist_matches: List[ContentSafetyEvaluation] = []
+        for response in responses:
+            earlier_matches = list(blocklist_matches)
+            for e in self.get_evaluation_response(response):
+                if isinstance(e, BlocklistEvaluation):
+                    if e not in earlier_matches:
+                        blocklist_matches.append(e)
+                elif (
+                    isinstance(e, ContentModerationEvaluation)
+                    and e.severity >= self._severity_threshold
+                ):
+                    current = categories.get(e.category)
+                    if current is None or e.severity > current.severity:
+                        categories[e.category] = e
+        return [*categories.values(), *blocklist_matches]

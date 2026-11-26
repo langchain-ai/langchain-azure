@@ -1,0 +1,25 @@
+name: langchain-azure-agent-run-responses
+
+infra:
+  provider: microsoft.foundry
+
+services:
+  langchain-azure-agent-run-responses:
+    project: .
+    host: azure.ai.agent
+    language: docker
+    kind: hosted
+    name: langchain-azure-agent-run-responses
+    startupCommand: python -m langchain_azure_ai.agents.hosting.run --protocol responses
+    docker:
+      path: Dockerfile
+    container:
+      resources:
+        cpu: "0.25"
+        memory: 0.5Gi
+    environmentVariables:
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: responses
+        version: 1.0.0
