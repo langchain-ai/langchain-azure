@@ -24,7 +24,6 @@ For durable execution of compiled LangGraph workflows and LangChain agents (per-
 
 - [SDK samples](https://github.com/langchain-ai/langchain-azure/tree/main/samples) demonstrate SDK usage, including hosting, memory, and storage integrations.
 - [SDK notebooks](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/docs) cover Foundry models, Agent Service, Content Safety, and Content Understanding.
-- [Foundry deployment samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/langgraph) demonstrate platform configuration and deployment with LangGraph.
 
 # Quick Start with langchain-azure-ai
 
