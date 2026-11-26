@@ -115,6 +115,8 @@ model = init_chat_model("azure_ai:gpt-5-mini")
 model.invoke("Hello!").pretty_print()
 ```
 
+`langchain-azure-ai` also supports the [Anthropic Messages API](./libs/azure-ai/README.md#anthropic-messages-api) and [Decision models](./libs/azure-ai/README.md#decision-models) (Microsoft Decision models and the Azure OpenAI Decisions API). See the [`langchain-azure-ai` README](./libs/azure-ai/README.md) for quick starts.
+
 ### Microsoft Foundry Agent Service
 
 Use `AgentServiceFactory` to create a managed Foundry agent and add it as a

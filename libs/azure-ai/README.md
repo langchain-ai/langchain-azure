@@ -7,7 +7,7 @@ This package integrates Microsoft Foundry with LangChain, LangGraph, and Deep Ag
 | I want to... | Start with |
 | --- | --- |
 | Call Microsoft Foundry models from LangChain, LangGraph, or Deep Agents | [Model quick start](#calling-microsoft-foundry-models) and [development guide](https://aka.ms/azureai/langchain) |
-| Ask typed questions with the Decisions API | [Decisions quick start (experimental)](#decisions-api-experimental) |
+| Ask typed questions with Decision models | [Decision models quick start](#decision-models) |
 | Host an existing compiled graph on Azure | [LangGraph-to-Foundry migration guide](https://github.com/langchain-ai/langchain-azure/blob/main/libs/azure-ai/docs/hosting/host-langgraph-on-foundry.md), [hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents), and [configuration-driven sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/09_run/README.md) |
 | Find deployable examples of hosted-agent features | [Hosted-agent sample chooser](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/README.md#start-here) |
 | Branch, rewind, or regenerate from a completed response | [Branching sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/13_branching/README.md) |
@@ -54,7 +54,7 @@ The `langchain-azure-ai` package connects LangChain, LangGraph, and Deep Agents 
 
 This package includes:
 
-* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), [Anthropic Messages API](#anthropic-messages-api), or [Decisions API (experimental)](#decisions-api-experimental).
+* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), [Anthropic Messages API](#anthropic-messages-api), or [Decision models](#decision-models).
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
@@ -163,16 +163,47 @@ model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 You can also pass `project_endpoint` instead of `endpoint` to resolve the
 resource URL automatically.
 
-#### Decisions API (experimental)
+#### Decision models
 
-Use `AzureAIOpenAIApiDecisions` to ask typed questions about a state. Requires
-`langchain-azure-ai>=1.4.0` and a model deployment that supports the Decisions API.
+Ask typed `Noul`, `Choice`, and `Score` questions about a state with
+`langchain-azure-ai>=1.4.1`:
+
+* **Microsoft Decision models (System One API):** use
+  `AzureAIMicrosoftDecisionsClassifier` with a compatible Microsoft Decision
+  deployment.
+* **Azure OpenAI Decisions API (experimental):** use
+  `AzureAIOpenAIApiDecisionsClassifier` with a model deployment that supports
+  the Decisions API.
+
+Both classifiers accept `project_endpoint` or `endpoint`, default to
+`DefaultAzureCredential()`, and use the same request and response interface.
 
 ```python
 from azure.identity import DefaultAzureCredential
-from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
+from langchain_azure_ai.decisions import AzureAIMicrosoftDecisionsClassifier, Noul
 
-decisions = AzureAIOpenAIApiDecisions(
+decisions = AzureAIMicrosoftDecisionsClassifier(
+    endpoint="https://{your-resource-name}.services.ai.azure.com",
+    credential=DefaultAzureCredential(),
+    model="your-microsoft-decision-deployment",  # your deployment name
+)
+
+answer = decisions.invoke({
+    "state": "Please refund the duplicate charge.",
+    "questions": {"refund": Noul(instructions="Is a refund requested?")},
+})
+print(answer.nouls["refund"].noul)  # probability that a refund is requested
+```
+
+For an Azure OpenAI Decisions deployment, swap in
+`AzureAIOpenAIApiDecisionsClassifier` with an `/openai/v1` endpoint (or
+`project_endpoint`):
+
+```python
+from azure.identity import DefaultAzureCredential
+from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisionsClassifier, Noul
+
+decisions = AzureAIOpenAIApiDecisionsClassifier(
     endpoint="https://{your-resource-name}.services.ai.azure.com/openai/v1",
     credential=DefaultAzureCredential(),
     model="your-decisions-deployment",  # your Decisions model deployment name
@@ -186,6 +217,8 @@ print(answer.nouls["refund"].noul)  # probability that a refund is requested
 ```
 
 For API concepts and prerequisites, see the
+[Microsoft Decision model guide](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)
+and the
 [Azure OpenAI Decisions API documentation](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
 
 #### Embeddings
