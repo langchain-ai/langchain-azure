@@ -716,17 +716,8 @@ def test_original_sibling_reply_does_not_answer_a_new_sequential_pause() -> None
         assert _text(done) == "A=first,second"
 
 
-def _refresh_request(response_id: str) -> dict[str, Any]:
-    return {
-        "previous_response_id": response_id,
-        "metadata": {"langgraph_approval_refresh": "true"},
-        "store": True,
-        "input": [],
-    }
-
-
 @pytest.mark.parametrize("stream", [False, True])
-def test_refresh_legacy_same_id_pause_without_execution(stream: bool) -> None:
+def test_ambiguous_legacy_same_id_pause_rejects_reply(stream: bool) -> None:
     graph = build_sequential_interrupt_graph()
     provider = InMemoryResponseProvider()
     server = ResponsesHostServer(graph, store=provider)
@@ -756,55 +747,26 @@ def test_refresh_legacy_same_id_pause_without_execution(stream: bool) -> None:
                 stream=stream,
             )
             assert failed["status"] == "failed"
-            assert failed["error"]["code"] == "approval_refresh_required"
+            assert failed["error"]["code"] == "interrupt_not_pending"
             assert failed["output"] == []
-            for overrides in (
-                {"input": [first_reply]},
-                {"input": "fresh text"},
-                {"instructions": "Run this"},
-                {"store": False},
-                {"background": True},
-                {"conversation": {"id": "another"}},
-            ):
-                refused = client.post(
-                    "/responses", json={**_refresh_request(first["id"]), **overrides}
-                )
-                assert refused.status_code == 400, refused.text
             plain = _create(client, previous_response_id=first["id"], input="hello")
-            assert plain["error"]["code"] == "approval_refresh_required"
+            assert plain["error"]["code"] == "interrupt_not_pending"
             assert plain["output"] == []
-            refreshed = _create(client, **_refresh_request(first["id"]), stream=stream)
-            assert refreshed["status"] == "completed", refreshed
-            assert refreshed["id"] not in {first["id"], second["id"], failed["id"]}
-            assert [interrupt_value(item) for item in sentinels(refreshed)] == ["city?"]
-            stored_refresh = client.portal.call(provider.get_response, refreshed["id"])
-            stored_second = client.portal.call(provider.get_response, second["id"])
-            assert _config(stored_refresh) == _config(stored_second)
-            metadata = ResponseEventStream(
-                response_id=refreshed["id"], response=stored_refresh
-            ).internal_metadata
-            assert metadata["langgraph_pause_generations"] == {
-                sentinels(refreshed)[0]["call_id"]: 1
-            }
-            assert "_internal_metadata" not in refreshed.get("metadata", {})
             run.assert_not_called()
             write.assert_not_called()
             write_pending.assert_not_called()
             chain_write.assert_not_called()
 
-        reply = resume_item(sentinels(refreshed)[0]["call_id"], "Berlin")
-        done = _create(client, previous_response_id=refreshed["id"], input=[reply])
+        reply = resume_item(sentinels(second)[0]["call_id"], "Berlin")
+        done = _create(client, previous_response_id=second["id"], input=[reply])
         assert _text(done) == "Alice@Berlin"
         with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
-            stale = _create(client, previous_response_id=refreshed["id"], input=[reply])
+            stale = _create(client, previous_response_id=second["id"], input=[reply])
             assert stale["error"]["code"] == "interrupt_not_pending"
-            unavailable = _create(client, **_refresh_request(first["id"]))
-            assert unavailable["error"]["code"] == "interrupt_not_pending"
-            assert unavailable["output"] == []
             run.assert_not_called()
 
 
-def test_refresh_does_not_follow_the_thread_to_a_different_checkpoint() -> None:
+def test_stale_reply_does_not_follow_the_thread_to_a_different_checkpoint() -> None:
     server = ResponsesHostServer(
         build_simple_interrupt_graph(), store=InMemoryResponseProvider()
     )
@@ -817,30 +779,9 @@ def test_refresh_does_not_follow_the_thread_to_a_different_checkpoint() -> None:
         )
         assert sentinels(later)
         with patch.object(server.graph, "astream", wraps=server.graph.astream) as run:
-            for parent in (first, finished):
-                unavailable = _create(client, **_refresh_request(parent["id"]))
-                assert unavailable["error"]["code"] == "interrupt_not_pending"
-                assert unavailable["output"] == []
             stale = _create(client, previous_response_id=first["id"], input=[reply])
             assert stale["error"]["code"] == "interrupt_not_pending"
             run.assert_not_called()
-
-
-def test_steerable_external_host_rejects_refresh_before_admission() -> None:
-    app = ResponsesAgentServerHost(
-        options=ResponsesServerOptions(steerable_conversations=True),
-        store=InMemoryResponseProvider(),
-    )
-    server = ResponsesHostServer(build_simple_interrupt_graph(), app=app)
-    with (
-        TestClient(server.app) as client,
-        patch.object(server.graph, "astream", wraps=server.graph.astream) as run,
-    ):
-        response = client.post(
-            "/responses", json=_refresh_request(IdGenerator.new_response_id())
-        )
-        assert response.status_code == 400, response.text
-        run.assert_not_called()
 
 
 @pytest.mark.parametrize("stale_parent", [False, True])
@@ -1723,75 +1664,6 @@ def test_custom_saver_config_is_available_before_checkpoint_reads(
     assert _text(response) == "A|B"
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_refresh_uses_custom_saver_config_without_changing_provenance(
-    stream: bool,
-) -> None:
-    saver = _PartitionSaver()
-    graph = build_sequential_interrupt_graph().copy({"checkpointer": saver})
-    provider = InMemoryResponseProvider()
-    server = _PartitionServer(graph, store=provider)
-    with TestClient(server.app) as client:
-        first = _create(client, input="begin")
-        call_id = sentinels(first)[0]["call_id"]
-        second = _create(
-            client,
-            previous_response_id=first["id"],
-            input=[resume_item(call_id, "Alice")],
-        )
-        assert client.portal is not None
-        stored_second = client.portal.call(provider.get_response, second["id"])
-        with (
-            patch.object(server.graph, "astream", wraps=server.graph.astream) as run,
-            patch.object(server, "build_input", wraps=server.build_input) as build,
-            patch.object(saver, "aput") as write,
-            patch.object(saver, "aput_writes") as write_pending,
-        ):
-            refreshed = _create(client, **_refresh_request(first["id"]), stream=stream)
-            assert refreshed["status"] == "completed", refreshed.get("error")
-            assert [interrupt_value(item) for item in sentinels(refreshed)] == ["city?"]
-            stored_refresh = client.portal.call(provider.get_response, refreshed["id"])
-            assert _config(stored_refresh) == _config(stored_second)
-
-            build_config = server.build_runnable_config
-
-            async def redirected_config(
-                request: CreateResponse,
-                context: ResponseContext,
-                *,
-                changes: dict[str, Any],
-            ) -> RunnableConfig:
-                config = await build_config(request, context)
-                config["configurable"].update(changes)
-                return config
-
-            for config_changes in (
-                {"thread_id": "different-thread"},
-                {"checkpoint_id": "different-checkpoint"},
-                {"checkpoint_id": None},
-                {"checkpoint_ns": "nested"},
-            ):
-                with (
-                    patch.object(
-                        server,
-                        "build_runnable_config",
-                        partial(redirected_config, changes=config_changes),
-                    ),
-                    patch.object(saver, "aget_tuple", wraps=saver.aget_tuple) as read,
-                ):
-                    refused = _create(
-                        client, **_refresh_request(first["id"]), stream=stream
-                    )
-                    read.assert_not_awaited()
-                assert refused["error"]["code"] == "interrupt_not_pending"
-                assert refused["output"] == []
-
-            run.assert_not_called()
-            build.assert_not_awaited()
-            write.assert_not_called()
-            write_pending.assert_not_called()
-
-
 @pytest.mark.parametrize("recovering", [False, True])
 async def test_paused_parent_cannot_be_branched(
     recovery_context: MagicMock,
@@ -2069,10 +1941,7 @@ def test_external_host_remains_supported_without_branching(
 
 
 @pytest.mark.parametrize("caller", ["user-b", None])
-@pytest.mark.parametrize("refresh", [False, True])
-def test_ordinary_parent_checkpoint_remains_user_scoped(
-    caller: str | None, refresh: bool
-) -> None:
+def test_ordinary_parent_checkpoint_remains_user_scoped(caller: str | None) -> None:
     server = ResponsesHostServer(
         build_simple_interrupt_graph(),
         store=InMemoryResponseProvider(),
@@ -2084,11 +1953,7 @@ def test_ordinary_parent_checkpoint_remains_user_scoped(
         ).json()
         response = client.post(
             "/responses",
-            json=(
-                _refresh_request(parent["id"])
-                if refresh
-                else {"input": "B", "previous_response_id": parent["id"]}
-            ),
+            json={"input": "B", "previous_response_id": parent["id"]},
             headers={USER_ID: caller} if caller is not None else {},
         )
     assert parent["status"] == "completed"

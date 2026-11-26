@@ -104,8 +104,6 @@ from ._responses import (
 from ._responses.pause_state import (
     _PARENT_PAUSE,
     _PAUSE_GENERATIONS,
-    _approval_refresh_requested,
-    _is_approval_refresh,
     _is_current_checkpoint,
     _pause_generations,
     _read_pause_state,
@@ -905,69 +903,6 @@ class ResponsesHostServer:
             )
         return runnable
 
-    async def _refresh_approval(
-        self,
-        request: CreateResponse,
-        context: ResponseContext,
-        stream: ResponseEventStream,
-        task_storage: TaskStorageManager,
-    ) -> AsyncIterator[Any]:
-        """Re-emit current approvals only from a verified stored pause."""
-        if not _is_approval_refresh(request) or not self._approval_refresh_enabled():
-            yield stream.emit_failed(
-                code="invalid_request_error",
-                message="Approval refresh requires an ordinary stored response link.",
-            )
-            return
-        parent_config = await self._response_checkpoint_config(request, context)
-        parent = HostingRunnableConfig(parent_config)
-        reference = parent.checkpoint_ref
-        _, parent_pause = parent_config["configurable"].get(_PARENT_PAUSE, (None, {}))
-        pending: tuple[Interrupt, ...] = ()
-        if reference is not None and parent_pause:
-            config = await self.build_runnable_config(request, context)
-            configurable = config.get("configurable") or {}
-            configurable.pop(_PARENT_PAUSE, None)
-            if (
-                HostingRunnableConfig(config).checkpoint_ref == reference
-                and configurable.get("checkpoint_ns", "") == ""
-            ):
-                state, generations = await _read_pause_state(
-                    self._graph, config, latest=True
-                )
-                if _is_current_checkpoint(state, reference):
-                    pending = tuple(
-                        interrupt
-                        for interrupt in state.interrupts
-                        if interrupt.id in parent_pause and interrupt.id in generations
-                    )
-        if not pending or reference is None:
-            yield stream.emit_failed(
-                code="interrupt_not_pending",
-                message="No current pause can be verified for the previous response.",
-            )
-            return
-        if parent.root_response_id is not None:
-            stream.internal_metadata[METADATA_LANGGRAPH_ROOT_RESPONSE_ID] = (
-                parent.root_response_id
-            )
-        task_storage.store_checkpoint_ref(reference)
-        stream.internal_metadata[_PAUSE_GENERATIONS] = {
-            interrupt.id: generations[interrupt.id] for interrupt in pending
-        }
-        _add_request_hosting_features(HostingFeature.HITL)
-        async for event in emit_interrupts(pending, stream):
-            yield event
-        yield stream.emit_completed()
-
-    def _approval_refresh_enabled(self) -> bool:
-        options = getattr(self._app._endpoint, "_runtime_options", None)
-        return (
-            self._graph_has_checkpointer
-            and not self._enable_response_branching
-            and not getattr(options, "steerable_conversations", True)
-        )
-
     async def _resolve_thread_config(
         self,
         request: CreateResponse,
@@ -1170,12 +1105,6 @@ class ResponsesHostServer:
 
         usage = UsageAccumulator()
         try:
-            if _approval_refresh_requested(request):
-                async for event in self._refresh_approval(
-                    request, context, stream, task_storage
-                ):
-                    yield event
-                return
             checkpoint_ref = (
                 task_storage.recovery_checkpoint_ref if recovering else None
             )
@@ -1220,7 +1149,6 @@ class ResponsesHostServer:
             parent_pause_ref, parent_pause = (config.get("configurable") or {}).pop(
                 _PARENT_PAUSE, (None, {})
             )
-            stored_pause = bool(parent_pause)
             reference = HostingRunnableConfig(config).checkpoint_ref
             reusing_superseded_checkpoint = (
                 reference is not None
@@ -1314,27 +1242,6 @@ class ResponsesHostServer:
                         or not pending
                         or _has_reply_for_interrupts(items, stale)
                     ):
-                        ambiguous = {
-                            pause_id
-                            for pause_id in stale
-                            if parent_pause[pause_id] is None
-                            and live_generations.get(pause_id, 0) > 0
-                        }
-                        if (
-                            stored_pause
-                            and same_checkpoint
-                            and ambiguous
-                            and self._approval_refresh_enabled()
-                            and (
-                                not pending
-                                or _has_reply_for_interrupts(items, ambiguous)
-                            )
-                        ):
-                            yield stream.emit_failed(
-                                code="approval_refresh_required",
-                                message="Refresh approvals before sending a decision.",
-                            )
-                            return
                         yield stream.emit_failed(
                             code="interrupt_not_pending",
                             message="The referenced pause is no longer pending.",

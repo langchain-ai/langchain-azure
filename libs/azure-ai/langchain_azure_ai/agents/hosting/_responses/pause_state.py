@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import INTERRUPT, RESUME, CheckpointTuple
 from langgraph.types import Interrupt
@@ -18,27 +18,8 @@ if TYPE_CHECKING:
 
     from .checkpoint_ref import CheckpointRef
 
-_APPROVAL_REFRESH = "langgraph_approval_refresh"
 _PAUSE_GENERATIONS = "langgraph_pause_generations"
 _PARENT_PAUSE = "__langchain_azure_parent_pause"
-
-
-def _approval_refresh_requested(request: Mapping[str, Any]) -> bool:
-    metadata = request.get("metadata")
-    return isinstance(metadata, Mapping) and _APPROVAL_REFRESH in metadata
-
-
-def _is_approval_refresh(request: Mapping[str, Any]) -> bool:
-    parent_id = request.get("previous_response_id")
-    return (
-        request.get("metadata") == {_APPROVAL_REFRESH: "true"}
-        and isinstance(parent_id, str)
-        and bool(parent_id)
-        and request.get("input") == []
-        and request.get("store") is True
-        and not request.get("conversation")
-        and not request.get("background")
-    )
 
 
 def _is_current_checkpoint(

@@ -292,42 +292,13 @@ answered separately; unmatched input re-emits outstanding pauses.
 > precedence. The `call_id` and `approval_request_id` come from different output
 > fields; copy each from the corresponding emitted item.
 
-#### Refresh an Approval
-
 For ordinary `previous_response_id` requests, reply to the response that
-displayed the approval. If that pause has already been consumed, the host
-returns HTTP `200` with `status="failed"` and `error.code="interrupt_not_pending"`.
-It does not run the graph. Stop using that reply.
-
-An older stored response may not distinguish two consecutive pauses that share
-an interrupt ID. In that case the host returns `approval_refresh_required`
-instead of executing the reply. To display the current approval, send
-`POST /responses` with the original paused response ID (not the failed request ID):
-
-```json
-{
-  "previous_response_id": "<original-paused-response-id>",
-  "metadata": {"langgraph_approval_refresh": "true"},
-  "store": true,
-  "input": []
-}
-```
-
-You can add `"stream": true`. For streaming, read the status and error from
-the terminal `response.completed` or `response.failed` event. Do not send
-other request fields, a custom response ID, text, or approval replies with a
-refresh. Refresh requires a checkpointer and does not support branching or
-steering. The host checks that the original pause still belongs to the current
-checkpoint, then stores a new `completed` response with only the pending
-approval items it can verify. It does not execute the graph, model, or tools,
-write graph checkpoints, or move the conversation chain.
-
-Display the new approval and require a **new user decision**. Send that
-decision with the new response ID as `previous_response_id`, even when the
-interrupt ID is unchanged. Never reuse an earlier decision or automatically
-retry it. If refresh fails or returns no approval items, stop. The checkpoint
-check does not provide idempotency for simultaneous retries. Live Foundry and
-Cosmos DB savers have not been validated for refresh.
+displayed the approval. If the pause has been consumed, or an older stored
+response cannot identify which pause the reply belongs to, the host returns
+HTTP `200` with `status="failed"` and `error.code="interrupt_not_pending"`
+without running the graph. Streaming clients receive a terminal
+`response.failed` event. Do not retry that reply. This check does not serialize
+simultaneous retries.
 
 ### Restart recovery
 
