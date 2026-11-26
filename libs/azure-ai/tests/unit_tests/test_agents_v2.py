@@ -3488,6 +3488,54 @@ class TestCustomStateSchema:
         assert result["user_name"] == "Bob"
         assert result["azure_ai_agents_conversation_id"] == "conv_123"
 
+    @pytest.mark.parametrize("subclass_of", ["AgentState", "AgentServiceAgentState"])
+    def test_keeps_annotation_of_declared_field(self, subclass_of: str) -> None:
+        """A field the custom schema declares keeps its own annotation."""
+        from typing import Annotated
+
+        from langchain.agents import AgentState
+        from langchain.agents.middleware.types import PrivateStateAttr
+        from langgraph.checkpoint.memory import InMemorySaver
+        from typing_extensions import NotRequired
+
+        from langchain_azure_ai.agents._v2.base import AgentServiceAgentState
+
+        class PrivateConversationState(AgentState):
+            azure_ai_agents_conversation_id: NotRequired[
+                Annotated[Optional[str], PrivateStateAttr]
+            ]
+
+        class PrivateConversationServiceState(AgentServiceAgentState):
+            azure_ai_agents_conversation_id: NotRequired[  # type: ignore[misc]
+                Annotated[Optional[str], PrivateStateAttr]
+            ]
+
+        factory, mock_client, mock_openai = self._make_factory_and_openai()
+        mock_openai.responses.create.return_value = self._response(
+            "resp_1", [], "Hi Bob"
+        )
+
+        with patch.object(factory, "_initialize_client", return_value=mock_client):
+            graph = factory.create_prompt_agent(
+                name="test-agent",
+                model="gpt-4.1",
+                instructions="Be helpful.",
+                state_schema=(
+                    PrivateConversationState
+                    if subclass_of == "AgentState"
+                    else PrivateConversationServiceState
+                ),
+                checkpointer=InMemorySaver(),
+            )
+            config: Any = {"configurable": {"thread_id": "thread"}}
+            graph.invoke({"messages": [HumanMessage(content="I'm Bob")]}, config)
+            result = graph.invoke({"messages": [HumanMessage(content="Hi")]}, config)
+
+        output_fields = graph.get_output_jsonschema()["properties"]
+        assert "azure_ai_agents_conversation_id" not in result
+        assert "azure_ai_agents_conversation_id" not in output_fields
+        mock_openai.conversations.create.assert_called_once_with()
+
 
 # ---------------------------------------------------------------------------
 # Tests for _get_input_from_state

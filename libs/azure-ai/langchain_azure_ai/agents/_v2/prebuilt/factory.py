@@ -672,8 +672,9 @@ ResponsesAgentNode`
             top_p: Top-p sampling parameter.
             state_schema: State schema. Defaults to ``AgentServiceAgentState``.
                 The fields that ``AgentServiceAgentState`` adds to
-                ``AgentState`` are added to a custom schema, since the agent
-                node keeps its conversation in them.
+                ``AgentState`` are added to a custom schema that doesn't
+                declare them, since the agent node keeps its conversation in
+                them.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
             store: Store to use.
@@ -782,8 +783,17 @@ ResponsesAgentNode`
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
         if state_schema is not None:
-            # The agent node keeps its conversation in these fields.
-            state_schemas.add(_AgentServiceAgentFields)
+            # The agent node keeps its conversation in these fields.  Only
+            # the ones the schemas don't declare are added, so a declared
+            # one keeps its own annotation.
+            declared = {name for s in state_schemas for name in get_type_hints(s)}
+            missing = {
+                name: hint
+                for name, hint in get_type_hints(_AgentServiceAgentFields).items()
+                if name not in declared
+            }
+            if missing:
+                state_schemas.add(TypedDict("AgentServiceAgentFields", missing))  # type: ignore[operator]
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
         input_schema = _resolve_state_schema(state_schemas, "InputSchema", "input")
         output_schema = _resolve_state_schema(state_schemas, "OutputSchema", "output")
