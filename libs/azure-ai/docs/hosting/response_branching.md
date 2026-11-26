@@ -37,7 +37,7 @@ request input to the graph.
 | Branching enabled | `enable_response_branching=True`; the default is `False`. |
 | Graph checkpointer | A history-preserving saver with asynchronous reads and writes. |
 | Stored parent | A response available to the caller, with `status="completed"` and an exact checkpoint reference. |
-| Finished execution | The graph has no pending tasks or interrupts. |
+| Finished execution | The graph has no pending tasks or interrupts, and the response has no unanswered function calls or MCP approval requests. |
 | Host configuration | `app=None` and `options.steerable_conversations=False`. |
 
 Unsupported host configurations raise `ValueError` during initialization. Use
@@ -48,7 +48,6 @@ state must survive a restart.
 > Branching from a paused graph is currently unsupported, even when the response
 > status is `completed`. To submit tool results or approval decisions, use
 > [ordinary continuation](responses.md#human-in-the-loop) with branching disabled.
-> Validation of unanswered calls in stored response output is [follow-up work](#follow-up).
 
 Eligible parents can come from ordinary continuation or an existing
 conversation, including responses created before branching was enabled if they
@@ -61,7 +60,7 @@ have a restorable checkpoint reference.
 | Neither `previous_response_id` nor `conversation` | Start a root response in a new thread. |
 | `previous_response_id` only | Start a child from that response's exact checkpoint. |
 | `conversation` only | Continue the conversation through the ordinary continuation path. |
-| Both fields | Send only `previous_response_id` for branching. If both are sent, the host currently ignores `conversation`; rejecting both fields with HTTP 400 is [follow-up work](#follow-up). |
+| Both fields | Target behavior: return HTTP 400 (currently branches from `previous_response_id` and ignores `conversation`; tracked in [Follow-up](#follow-up)). |
 
 Omitted or `null` linkage fields leave that linkage unset. Parent lookup uses
 the caller's authorized storage scope. A missing or invalid parent causes an

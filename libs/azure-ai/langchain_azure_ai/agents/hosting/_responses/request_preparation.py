@@ -299,7 +299,7 @@ def install_request_validation(server: ResponsesHostServer) -> None:
         create_response = route.endpoint
 
         @wraps(create_response)
-        async def validate_create(request: Request) -> Response:
+        async def validate_store(request: Request) -> Response:
             token = _request_id.set(read_request_id(request.scope))
             try:
                 try:
@@ -324,6 +324,6 @@ def install_request_validation(server: ResponsesHostServer) -> None:
             finally:
                 _request_id.reset(token)
 
-        route.endpoint = validate_create
-        route.app = request_response(validate_create)
+        route.endpoint = validate_store
+        route.app = request_response(validate_store)
         return

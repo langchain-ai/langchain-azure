@@ -162,6 +162,8 @@ With a checkpointer, request linkage selects the saved context:
 For checkpointed graphs, `previous_response_id` selects the named response's
 exact checkpoint in both ordinary continuation and branching mode. An unavailable
 response or checkpoint fails without falling back to the thread's latest state.
+If the referenced checkpoint was paused and no longer has a live pause, ordinary
+continuation returns `interrupt_not_pending` without executing that checkpoint.
 Previously stored responses without checkpoint references cannot be selected in
 checkpoint mode; this change does not migrate stored state.
 
@@ -291,14 +293,6 @@ answered separately; unmatched input re-emits outstanding pauses.
 > If both reply types answer the same interrupt, `function_call_output` takes
 > precedence. The `call_id` and `approval_request_id` come from different output
 > fields; copy each from the corresponding emitted item.
-
-For ordinary `previous_response_id` requests, reply to the response that
-displayed the approval. If the pause has been consumed, or an older stored
-response cannot identify which pause the reply belongs to, the host returns
-HTTP `200` with `status="failed"` and `error.code="interrupt_not_pending"`
-without running the graph. Streaming clients receive a terminal
-`response.failed` event. Do not retry that reply. This check does not serialize
-simultaneous retries.
 
 ### Restart recovery
 
