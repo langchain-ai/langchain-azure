@@ -89,7 +89,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     model = AzureAIAnthropicChatModel(
         endpoint="https://<resource>.services.ai.azure.com",
         credential=DefaultAzureCredential(),
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -106,7 +106,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
             "https://<resource>.services.ai.azure.com/api/projects/my-project"
         ),
         credential=DefaultAzureCredential(),
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -118,7 +118,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     model = AzureAIAnthropicChatModel(
         endpoint="https://<resource>.services.ai.azure.com",
         credential="your-api-key",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -189,7 +189,8 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
       callable bearer-token provider so that tokens are refreshed
       automatically.
     * ``None`` (default) falls back to
-      :class:`~azure.identity.DefaultAzureCredential`.
+      :class:`~azure.identity.DefaultAzureCredential` and ignores
+      ``OPENAI_API_KEY`` and ``ANTHROPIC_API_KEY``.
     """
 
     @model_validator(mode="before")

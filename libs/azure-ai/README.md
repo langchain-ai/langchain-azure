@@ -154,14 +154,19 @@ from langchain_azure_ai.chat_models import AzureAIAnthropicChatModel
 model = AzureAIAnthropicChatModel(
     endpoint="https://{your-resource-name}.services.ai.azure.com",
     credential=DefaultAzureCredential(),
-    model="claude-sonnet-4-20250514",  # your Claude deployment name
+    model="claude-sonnet-4-6",  # your Claude deployment name
 )
 
 model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 ```
 
-You can also pass `project_endpoint` instead of `endpoint` to resolve the
-resource URL automatically.
+You can pass `project_endpoint` instead of `endpoint` to resolve the resource
+URL automatically. When both are omitted, `AzureAIAnthropicChatModel` checks
+`AZURE_AI_PROJECT_ENDPOINT`, then `FOUNDRY_PROJECT_ENDPOINT`, then
+`ANTHROPIC_FOUNDRY_RESOURCE` (a bare resource name or full URL).
+When `credential` is omitted, it defaults to `DefaultAzureCredential()` and
+ignores `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`; for API key authentication,
+pass `credential="<your-api-key>"` with `endpoint` (do not use `init_chat_model("azure_ai:...")`).
 
 #### Decision models
 
@@ -498,6 +503,10 @@ agent = create_agent(
 )
 ```
 
+`memory_middleware.get_retriever_tool()` does not forward a custom `credential`
+from `AzureAIMemoryMiddleware`. When you do not use `DefaultAzureCredential`,
+pass `memory_middleware.get_retriever_tool(credential=...)`.
+
 To query a Foundry Memory store directly as a LangChain retriever, use
 `AzureAIMemoryRetriever` (experimental) standalone or obtain a history-bound
 retriever from `AzureAIMemoryChatMessageHistory`:
@@ -571,6 +580,29 @@ tools = await toolbox.get_tools()
 You can also pin a specific `toolbox_version`, inspect approval requirements
 with `get_tools_requiring_approval()`, and load toolbox skills or resources
 with `get_skills()` / `aget_skills()` and `get_resources()` / `aget_resources()`.
+For example, pass toolbox skills into Deep Agents with `StateBackend`:
+
+```python
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+
+skill_blobs = toolbox.get_resources(scheme="skills")
+skill_files = toolbox.get_skills()
+agent = create_deep_agent(
+    model="azure_ai:gpt-5-mini",
+    backend=StateBackend(),
+    skills=["/skills/"],
+)
+agent.invoke(
+    {
+        "messages": [{"role": "user", "content": "Use the loaded skills."}],
+        "files": skill_files,
+    }
+)
+```
+
+Pass a standalone backend (such as `FilesystemBackend`) to `get_skills(backend=...)`
+or `aget_skills(backend=...)` to write skill files directly into that backend.
 See the [Foundry Toolbox sample](https://github.com/langchain-ai/langchain-azure/blob/main/samples/hosting/langgraph-hosted-agents/responses/04_foundry_toolbox/README.md).
 
 Use tools from Azure AI services as LangChain tools via `AzureAIServicesToolkit`. Available tools include Azure AI Content Understanding, Document Intelligence, Image Analysis, Text Analytics for Health, and more.
