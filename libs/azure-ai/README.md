@@ -163,7 +163,7 @@ model.invoke("Translate 'hi!' from English into Italian.").pretty_print()
 You can pass `project_endpoint` instead of `endpoint` to resolve the resource
 URL automatically. When both are omitted, `AzureAIAnthropicChatModel` checks
 `AZURE_AI_PROJECT_ENDPOINT`, then `FOUNDRY_PROJECT_ENDPOINT`, then
-`ANTHROPIC_FOUNDRY_RESOURCE` (a bare resource name or full URL).
+`ANTHROPIC_FOUNDRY_RESOURCE` (a bare resource name such as `my-resource`; pass full URLs via `endpoint`).
 When `credential` is omitted, it defaults to `DefaultAzureCredential()` and
 ignores `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`; for API key authentication,
 pass `credential="<your-api-key>"` with `endpoint` (do not use `init_chat_model("azure_ai:...")`).
