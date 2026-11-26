@@ -1304,6 +1304,44 @@ def test_superseded_turn_does_not_publish_an_unavailable_checkpoint(
     assert TaskStorageManager.from_stream(stream).checkpoint_ref is None
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("malformed_checkpoint", [False, True])
+def test_thread_only_config_override_preserves_ordinary_continuation(
+    graph: CompiledStateGraph,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    malformed_checkpoint: bool,
+) -> None:
+    class ThreadOnlyServer(ResponsesHostServer):
+        async def build_runnable_config(
+            self, request: CreateResponse, context: ResponseContext
+        ) -> RunnableConfig:
+            return {
+                "configurable": {
+                    "thread_id": "custom-thread",
+                    "response_context": context,
+                }
+            }
+
+    server = ThreadOnlyServer(graph, store=InMemoryResponseProvider())
+    with TestClient(server.app) as client:
+        parent = _create(client, input="A", stream=stream)
+        assert parent["status"] == "completed"
+        if malformed_checkpoint:
+            server.graph.config = {"configurable": {"checkpoint_id": 42}}
+        execute = MagicMock(wraps=server.graph.astream)
+        monkeypatch.setattr(server.graph, "astream", execute)
+        response = _create(
+            client, input="B", previous_response_id=parent["id"], stream=stream
+        )
+    if malformed_checkpoint:
+        assert response["status"] == "failed", response
+        execute.assert_not_called()
+    else:
+        assert response["status"] == "completed", response
+        assert _text(response) == "A|B"
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_custom_saver_config_is_available_before_checkpoint_reads(
     graph: CompiledStateGraph, enabled: bool

@@ -805,7 +805,8 @@ class ResponsesHostServer:
         Configurable keys prefixed with ``__langchain_azure_`` are reserved for
         host implementation details. Subclasses can preserve root caching by
         calling ``await super().build_runnable_config(request, context)`` and
-        retaining the returned hosting-owned entries.
+        retaining the returned hosting-owned entries. For ordinary continuations,
+        an override can instead return a thread-only config to use the thread head.
 
         Args:
             request: The parsed create-response request.
@@ -1133,18 +1134,29 @@ class ResponsesHostServer:
             if self._graph_has_checkpointer and (
                 response_linked or reusing_superseded_checkpoint
             ):
-                state = await self._graph.aget_state(config)
                 if response_linked and self._is_response_branch(request, context):
-                    _validate_branch_state(state, config)
-                elif (
-                    HostingRunnableConfig(state.config).checkpoint_ref != reference
-                    or (state.config.get("configurable") or {}).get("checkpoint_ns", "")
-                    != ""
-                    or state.created_at is None
+                    _validate_branch_state(await self._graph.aget_state(config), config)
+                elif reference is not None:
+                    state = await self._graph.aget_state(config)
+                    state_configurable = state.config.get("configurable") or {}
+                    if (
+                        HostingRunnableConfig(state.config).checkpoint_ref != reference
+                        or state_configurable.get("checkpoint_ns", "") != ""
+                        or state.created_at is None
+                    ):
+                        raise ValueError("The response's graph checkpoint is missing.")
+                    parent_paused = response_linked and bool(
+                        getattr(state, "interrupts", ())
+                    )
+                elif any(
+                    {"checkpoint_id", "checkpoint_map"} & configurable.keys()
+                    or configurable.get("checkpoint_ns")
+                    for configurable in (
+                        config.get("configurable") or {},
+                        (self._graph.config or {}).get("configurable") or {},
+                    )
                 ):
                     raise ValueError("The response's graph checkpoint is missing.")
-                elif response_linked:
-                    parent_paused = bool(getattr(state, "interrupts", ()))
 
             if cancellation_signal.is_set() and not context.client_cancelled:
                 if reference is not None:
@@ -1184,7 +1196,7 @@ class ResponsesHostServer:
                             {"config": _without_checkpoint_selection(graph.config)}
                         )
                 pending, snapshot_config = await _detect_pending_interrupts_with_config(
-                    graph, pending_config
+                    graph, pending_config, strict=parent_paused
                 )
                 if parent_paused and (
                     snapshot_config is None
@@ -1206,6 +1218,8 @@ class ResponsesHostServer:
                         request, context, pending
                     )
                     if approval_error is not None:
+                        if parent_paused and reference is not None:
+                            task_storage.store_checkpoint_ref(reference)
                         yield stream.emit_failed(
                             code="interrupt_rejected",
                             message=approval_error,

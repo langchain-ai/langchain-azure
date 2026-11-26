@@ -139,7 +139,7 @@ async def detect_pending_interrupts(
 
 
 async def _detect_pending_interrupts_with_config(
-    graph: Runnable[Any, Any], config: RunnableConfig
+    graph: Runnable[Any, Any], config: RunnableConfig, *, strict: bool = False
 ) -> tuple[tuple[Interrupt, ...], RunnableConfig | None]:
     """Return pending interrupts and the config of the snapshot they came from."""
     get_state = getattr(graph, "aget_state", None)
@@ -148,6 +148,8 @@ async def _detect_pending_interrupts_with_config(
     try:
         snapshot: "StateSnapshot | None" = await get_state(config)
     except Exception:  # noqa: BLE001
+        if strict:
+            raise
         # No checkpointer / unknown thread / provider error — treat as
         # "nothing pending" and let the regular path run.
         logger.debug("aget_state failed; assuming no pending interrupts", exc_info=True)
