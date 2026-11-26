@@ -21,10 +21,10 @@ from langchain_azure_ai.utils.env import get_from_dict_or_env, get_project_endpo
 
 
 @experimental(
-    message="AzureAIOpenAIApiDecisions is experimental and its interface may change. "
-    "It extends the beta OpenAIClassifier integration."
+    message="AzureAIOpenAIApiDecisionsClassifier is experimental and its interface "
+    "may change. It extends the beta OpenAIClassifier integration."
 )
-class AzureAIOpenAIApiDecisions(OpenAIClassifier):
+class AzureAIOpenAIApiDecisionsClassifier(OpenAIClassifier):
     """Ask typed questions with the Azure OpenAI Decisions API in Foundry.
 
     Inherits question handling, response parsing, batching, retries, and synchronous
@@ -67,9 +67,12 @@ class AzureAIOpenAIApiDecisions(OpenAIClassifier):
     Example:
         ```python
         from azure.identity import DefaultAzureCredential
-        from langchain_azure_ai.decisions import AzureAIOpenAIApiDecisions, Noul
+        from langchain_azure_ai.decisions import (
+            AzureAIOpenAIApiDecisionsClassifier,
+            Noul,
+        )
 
-        decisions = AzureAIOpenAIApiDecisions(
+        decisions = AzureAIOpenAIApiDecisionsClassifier(
             endpoint="https://my-resource.openai.azure.com/openai/v1",
             credential=DefaultAzureCredential(),
             model="my-luna-deployment",
@@ -187,3 +190,17 @@ class AzureAIOpenAIApiDecisions(OpenAIClassifier):
             The Azure Decisions module namespace.
         """
         return ["langchain_azure_ai", "decisions"]
+
+    @classmethod
+    def lc_id(cls) -> list[str]:
+        """Return the serialized class ID.
+
+        Returns:
+            The original class ID for this adapter, or the default ID for subclasses.
+        """
+        if cls is AzureAIOpenAIApiDecisionsClassifier:
+            return [*cls.get_lc_namespace(), "AzureAIOpenAIApiDecisions"]
+        return super().lc_id()
+
+
+AzureAIOpenAIApiDecisions = AzureAIOpenAIApiDecisionsClassifier

@@ -22,6 +22,7 @@ from langchain_azure_ai._api.base import ExperimentalWarning
 from langchain_azure_ai.decisions import (
     AzureAIMicrosoftDecisionsClassifier,
     AzureAIOpenAIApiDecisions,
+    AzureAIOpenAIApiDecisionsClassifier,
     Choice,
     ClassifierRequest,
     ClassifierResponse,
@@ -485,29 +486,50 @@ def test_serialization_round_trip(
     transport: httpx.MockTransport,
     requests: list[httpx.Request],
 ) -> None:
-    decisions = AzureAIOpenAIApiDecisions(
+    decisions = AzureAIOpenAIApiDecisionsClassifier(
         **{endpoint_field: ENDPOINT if endpoint_field == "endpoint" else PROJECT},
         credential=SyncCredential(),
         model="deployment",
     )
-    restored = AzureAIOpenAIApiDecisions.model_validate(decisions.model_dump())
+    restored = AzureAIOpenAIApiDecisionsClassifier.model_validate(
+        decisions.model_dump()
+    )
     with httpx.Client(transport=transport) as client:
         restored.http_client = client
         restored.invoke(REQUEST)
     serialized = dumps(decisions)
+    assert json.loads(serialized)["id"] == [
+        "langchain_azure_ai",
+        "decisions",
+        "AzureAIOpenAIApiDecisions",
+    ]
     restored = loads(
         serialized,
         secrets_map={"OPENAI_API_KEY": "restored-token"},
         valid_namespaces=["langchain_azure_ai"],
-        allowed_objects=[AzureAIOpenAIApiDecisions],
+        allowed_objects=[AzureAIOpenAIApiDecisionsClassifier],
     )
-    assert isinstance(restored, AzureAIOpenAIApiDecisions)
+    assert isinstance(restored, AzureAIOpenAIApiDecisionsClassifier)
     with httpx.Client(transport=transport) as client:
         restored.http_client = client
         restored.invoke(REQUEST)
     assert [str(r.url) for r in requests] == [ENDPOINT + "/decisions"] * 2
     assert requests[0].headers["authorization"] == "Bearer token-1"
     assert requests[1].headers["authorization"] == "Bearer restored-token"
+
+
+def test_legacy_class_alias() -> None:
+    from langchain_azure_ai.decisions.openai import (
+        AzureAIOpenAIApiDecisions as module_alias,
+    )
+
+    assert AzureAIOpenAIApiDecisions is AzureAIOpenAIApiDecisionsClassifier
+    assert module_alias is AzureAIOpenAIApiDecisionsClassifier
+
+    class CustomClassifier(AzureAIOpenAIApiDecisionsClassifier):
+        pass
+
+    assert CustomClassifier.lc_id()[-1] == "CustomClassifier"
 
 
 def test_experimental_warning_and_exports() -> None:
@@ -519,12 +541,15 @@ def test_experimental_warning_and_exports() -> None:
         if name not in {
             "AzureAIMicrosoftDecisionsClassifier",
             "AzureAIOpenAIApiDecisions",
+            "AzureAIOpenAIApiDecisionsClassifier",
         }:
             assert getattr(azure, name) is getattr(upstream, name)
     assert issubclass(AzureAIMicrosoftDecisionsClassifier, BaseDecisionModel)
-    assert issubclass(AzureAIOpenAIApiDecisions, OpenAIClassifier)
-    assert issubclass(AzureAIOpenAIApiDecisions, BaseDecisionModel)
-    with pytest.warns(ExperimentalWarning, match="is experimental"):
-        AzureAIOpenAIApiDecisions(
+    assert issubclass(AzureAIOpenAIApiDecisionsClassifier, OpenAIClassifier)
+    assert issubclass(AzureAIOpenAIApiDecisionsClassifier, BaseDecisionModel)
+    with pytest.warns(
+        ExperimentalWarning, match="AzureAIOpenAIApiDecisionsClassifier is experimental"
+    ):
+        AzureAIOpenAIApiDecisionsClassifier(
             endpoint=ENDPOINT, credential="test-key", model="deployment"
         )

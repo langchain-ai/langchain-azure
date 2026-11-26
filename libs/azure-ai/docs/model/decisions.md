@@ -5,7 +5,7 @@
 | Models | Adapter | API path |
 | --- | --- | --- |
 | Compatible Microsoft Decision models, verified with `Microsoft-Decision-1` and `Microsoft-Decision-1.1` | `AzureAIMicrosoftDecisionsClassifier` | `/providers/microsoft/v1/systemone` |
-| `gpt-6-luna` | `AzureAIOpenAIApiDecisions` | `/openai/v1/decisions` |
+| Azure OpenAI models that support the Decisions API (currently `gpt-6-luna`) | `AzureAIOpenAIApiDecisionsClassifier` | `/openai/v1/decisions` |
 
 ## Shared interface
 
@@ -28,9 +28,10 @@ name. Both adapters derive the resource URL from the project URL and default to
 `DefaultAzureCredential` in this configuration.
 
 To switch between compatible Microsoft Decision deployments, change only
-`DECISION_DEPLOYMENT_NAME`. For a `gpt-6-luna` deployment, also replace
-`AzureAIMicrosoftDecisionsClassifier` with `AzureAIOpenAIApiDecisions` in the
-import and constructor. The request and response code stays the same.
+`DECISION_DEPLOYMENT_NAME`. To switch to an Azure OpenAI deployment that supports
+the Decisions API, also replace `AzureAIMicrosoftDecisionsClassifier` with
+`AzureAIOpenAIApiDecisionsClassifier` in the import and constructor. The request
+and response code stays the same.
 
 ```python
 import os
@@ -67,7 +68,7 @@ resource URL as `endpoint`. See the [Microsoft Decision model guide](https://lea
 
 ### Azure OpenAI Decisions
 
-`AzureAIOpenAIApiDecisions` uses the beta `OpenAIClassifier` from
+`AzureAIOpenAIApiDecisionsClassifier` uses the beta `OpenAIClassifier` from
 `langchain-openai>=1.8.0` and emits `ExperimentalWarning` on construction. The
 classifier maps `Noul` to `Predicate`. Root messages can carry supported
 images. Media embedded in JSON state is dropped with a warning. A refusal on
@@ -78,3 +79,8 @@ resource `endpoint` ending in `/openai/v1` and the key as `credential`. The
 adapter retains the resolved `base_url` and `api_key` for Runnable
 reconstruction and serialization, using the upstream secret-reference
 mechanism for credentials. See the [Azure OpenAI Decisions guide](https://learn.microsoft.com/azure/foundry/openai/how-to/decisions).
+
+Use `AzureAIOpenAIApiDecisionsClassifier` in new code. The previous name,
+`AzureAIOpenAIApiDecisions`, remains an alias at both existing import paths.
+LangChain serialization keeps the original class ID so existing serialized
+Runnables can still be loaded with either name in `allowed_objects`.
