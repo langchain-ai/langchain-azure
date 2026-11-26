@@ -54,7 +54,7 @@ The `langchain-azure-ai` package connects LangChain, LangGraph, and Deep Agents 
 
 This package includes:
 
-* **Calling Microsoft Foundry models:** use the [model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), [Anthropic Messages API](#anthropic-messages-api), or [Decision models](#decision-models).
+* **Calling Microsoft Foundry models:** use the [chat model integrations](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/chat_models) via the [Responses API](#responses-api), [Chat Completions API](#chat-completions-api), or [Anthropic Messages API](#anthropic-messages-api), or use [Decision models](#decision-models) (`langchain_azure_ai.decisions`).
 * **Accessing agents on Microsoft Foundry Agent Service:** use [managed agents](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents) as nodes in your graph.
 * **Applying Content Safety guardrails via middleware:** check agent, model, and tool inputs and outputs with [Microsoft Foundry Content Safety](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/middleware).
 * **Hosting LangGraph agents on Microsoft Foundry (server):** serve your own [LangGraph agents on Microsoft Foundry](https://github.com/langchain-ai/langchain-azure/tree/main/libs/azure-ai/langchain_azure_ai/agents/hosting) through Responses or Invocations HTTP endpoints.
@@ -175,8 +175,8 @@ Ask typed `Noul`, `Choice`, and `Score` questions about a state with
   `AzureAIOpenAIApiDecisionsClassifier` with a model deployment that supports
   the Decisions API.
 
-Both classifiers accept `project_endpoint` or `endpoint`, default to
-`DefaultAzureCredential()`, and use the same request and response interface.
+Both implement LangChain's `BaseDecisionModel` interface, accept
+`project_endpoint` or `endpoint`, and default to `DefaultAzureCredential()`.
 
 ```python
 from azure.identity import DefaultAzureCredential
