@@ -150,6 +150,89 @@ class TestAGrep:
         result = await backend.agrep("match", path="/src")
         assert result.matches == []
 
+    async def test_grep_single_file_path(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # Nothing is listed under a file path, so the file itself is looked up
+        # by its exact blob key and searched.
+        _, container = patched_async
+        setup_async_grep(container, [], "hello\nbye\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.return_value = make_blob("pfx/src/f.py", 5)
+        result = await backend.agrep("hello", path="/src/f.py")
+        assert result.error is None
+        assert result.matches == [{"path": "/src/f.py", "line": 1, "text": "hello"}]
+        container.list_blobs.assert_called_once_with(name_starts_with="pfx/src/f.py/")
+        container.get_blob_client.assert_called_with("pfx/src/f.py")
+        blob_client.get_blob_properties.assert_awaited_once_with()
+
+    @pytest.mark.parametrize(
+        ("glob", "expected"),
+        [("*.py", ["/src/f.py"]), ("*.txt", [])],
+    )
+    async def test_grep_single_file_path_applies_glob_filter(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+        glob: str,
+        expected: list[str],
+    ) -> None:
+        _, container = patched_async
+        setup_async_grep(container, [], "hello\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.return_value = make_blob("pfx/src/f.py", 5)
+        result = await backend.agrep("hello", path="/src/f.py", glob=glob)
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == expected
+
+    async def test_grep_missing_path_returns_no_matches(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+    ) -> None:
+        # Neither a directory nor a file: the exact-key lookup 404s.
+        _, container = patched_async
+        setup_async_grep(container, [], "hello\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.side_effect = ResourceNotFoundError()
+        result = await backend.agrep("hello", path="/src/missing.py")
+        assert result.error is None
+        assert result.matches == []
+        blob_client.download_blob.assert_not_called()
+
+    async def test_grep_directory_path_skips_file_lookup(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # A path with blobs under it is a directory: no extra request.
+        _, container = patched_async
+        setup_async_grep(container, [make_blob("pfx/src/f.py", 5)], "hello\n")
+        await backend.agrep("hello", path="/src")
+        container.get_blob_client.return_value.get_blob_properties.assert_not_called()
+
+    async def test_grep_empty_root_skips_file_lookup(
+        self,
+        backend: AzureBlobBackend,
+        patched_async: tuple[MagicMock, MagicMock],
+        setup_async_grep: Callable[[MagicMock, list[Any], Any], None],
+    ) -> None:
+        # The root can never name a file.
+        _, container = patched_async
+        setup_async_grep(container, [], "hello\n")
+        result = await backend.agrep("hello")
+        assert result.matches == []
+        container.get_blob_client.assert_not_called()
+
     async def test_grep_read_failure(
         self,
         backend: AzureBlobBackend,
@@ -363,6 +446,89 @@ class TestGrep:
         setup_sync_grep(container, [make_blob("pfx/other/f.py", 5)], "match\n")
         result = backend.grep("match", path="/src")
         assert result.matches == []
+
+    def test_grep_single_file_path(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # Nothing is listed under a file path, so the file itself is looked up
+        # by its exact blob key and searched.
+        _, container = patched_sync
+        setup_sync_grep(container, [], "hello\nbye\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.return_value = make_blob("pfx/src/f.py", 5)
+        result = backend.grep("hello", path="/src/f.py")
+        assert result.error is None
+        assert result.matches == [{"path": "/src/f.py", "line": 1, "text": "hello"}]
+        container.list_blobs.assert_called_once_with(name_starts_with="pfx/src/f.py/")
+        container.get_blob_client.assert_called_with("pfx/src/f.py")
+        blob_client.get_blob_properties.assert_called_once_with()
+
+    @pytest.mark.parametrize(
+        ("glob", "expected"),
+        [("*.py", ["/src/f.py"]), ("*.txt", [])],
+    )
+    def test_grep_single_file_path_applies_glob_filter(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+        glob: str,
+        expected: list[str],
+    ) -> None:
+        _, container = patched_sync
+        setup_sync_grep(container, [], "hello\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.return_value = make_blob("pfx/src/f.py", 5)
+        result = backend.grep("hello", path="/src/f.py", glob=glob)
+        assert result.matches is not None
+        assert [m["path"] for m in result.matches] == expected
+
+    def test_grep_missing_path_returns_no_matches(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+    ) -> None:
+        # Neither a directory nor a file: the exact-key lookup 404s.
+        _, container = patched_sync
+        setup_sync_grep(container, [], "hello\n")
+        blob_client = container.get_blob_client.return_value
+        blob_client.get_blob_properties.side_effect = ResourceNotFoundError()
+        result = backend.grep("hello", path="/src/missing.py")
+        assert result.error is None
+        assert result.matches == []
+        blob_client.download_blob.assert_not_called()
+
+    def test_grep_directory_path_skips_file_lookup(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+        make_blob: Callable[..., MagicMock],
+    ) -> None:
+        # A path with blobs under it is a directory: no extra request.
+        _, container = patched_sync
+        setup_sync_grep(container, [make_blob("pfx/src/f.py", 5)], "hello\n")
+        backend.grep("hello", path="/src")
+        container.get_blob_client.return_value.get_blob_properties.assert_not_called()
+
+    def test_grep_empty_root_skips_file_lookup(
+        self,
+        backend: AzureBlobBackend,
+        patched_sync: tuple[MagicMock, MagicMock],
+        setup_sync_grep: Callable[[MagicMock, list[Any], Any], None],
+    ) -> None:
+        # The root can never name a file.
+        _, container = patched_sync
+        setup_sync_grep(container, [], "hello\n")
+        result = backend.grep("hello")
+        assert result.matches == []
+        container.get_blob_client.assert_not_called()
 
     def test_grep_read_failure(
         self,
