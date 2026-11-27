@@ -16,7 +16,7 @@ uv add --python 3.13 --prerelease allow --upgrade-package langchain-azure-ai "la
 uv pip check
 ```
 
-The Python pin records local interpreter selection in `.python-version`. Keep it aligned with the deployment runtime: selecting Python for one install does not necessarily control a later CLI-created environment. See [uv Python version requests](https://docs.astral.sh/uv/concepts/python-versions/#python-version-files).
+The Python pin records local interpreter selection in `.python-version`. The `codeConfiguration.runtime` deployment setting does not pin the interpreter used by a local CLI launch. Include a compatible version pin or an explicit interpreter selection in the local startup workflow you deliver. Verify that workflow from a clean environment rather than relying on an existing virtual environment. See [uv Python version requests](https://docs.astral.sh/uv/concepts/python-versions/#python-version-files).
 
 The command selects Python 3.13, records the dependency in `pyproject.toml`, updates `uv.lock`, and installs the latest compatible version. The [uv dependency guide](https://docs.astral.sh/uv/concepts/projects/dependencies/#adding-dependencies) explains these project file updates. The upgrade option requests the latest compatible release when the package is already declared.
 
