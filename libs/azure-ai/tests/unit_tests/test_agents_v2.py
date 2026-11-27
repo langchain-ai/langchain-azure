@@ -1301,7 +1301,7 @@ class TestPromptBasedAgentModelV2Additional:
         assert result.llm_output["model"] == "gpt-4.1"
 
     def test_empty_output_no_text(self) -> None:
-        """Test that empty output with no text produces no generations."""
+        """Test that empty output with no text produces an empty message."""
         from langchain_azure_ai.agents._v2.base import (
             _AzureAIAgentApiProxyModel,
         )
@@ -1323,7 +1323,9 @@ class TestPromptBasedAgentModelV2Additional:
             input_items="hi",
         )
         result = model._generate([HumanMessage(content="hi")])
-        assert len(result.generations) == 0
+        assert len(result.generations) == 1
+        assert result.generations[0].message.content == ""
+        assert result.generations[0].message.name == "test-agent"
 
     def test_response_without_status(self) -> None:
         """Test response object without status attribute."""
@@ -2313,6 +2315,63 @@ class TestResponsesAgentNode:
         with pytest.raises(RuntimeError, match="AgentServiceAgentState"):
             graph.invoke({"messages": [HumanMessage(content="5 + 8?")]})
         mock_openai.responses.create.assert_called_once()
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_completed_response_without_text(self, stream: bool) -> None:
+        """A completed response without text returns an empty message."""
+        from langgraph.graph import START, StateGraph
+
+        from langchain_azure_ai.agents._v2.base import (
+            AgentServiceAgentState,
+            ResponsesAgentNode,
+        )
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_1"
+        mock_response.status = "completed"
+        mock_response.output = []
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        completed_event = MagicMock()
+        completed_event.type = "response.completed"
+        completed_event.response = mock_response
+        stream_ctx = MagicMock()
+        stream_ctx.__enter__.return_value = iter([completed_event])
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.conversations.create.return_value = MagicMock(id="conv_123")
+        mock_openai.responses.create.return_value = (
+            stream_ctx if stream else mock_response
+        )
+
+        mock_agent = MagicMock()
+        mock_agent.name = "test-agent"
+        mock_agent.version = "v1"
+        mock_agent.definition = {"model": "gpt-4.1"}
+        mock_client = MagicMock()
+        mock_client.agents.get_version.return_value = mock_agent
+        mock_client.get_openai_client.return_value = mock_openai
+
+        builder = StateGraph(AgentServiceAgentState)
+        builder.add_node("agent", ResponsesAgentNode(mock_client, "test-agent", "v1"))
+        builder.add_edge(START, "agent")
+        graph = builder.compile()
+
+        inputs: Any = {"messages": [HumanMessage(content="hi")]}
+        result: Any = None
+        if stream:
+            # "messages" makes the node stream the response.
+            for mode, chunk in graph.stream(inputs, stream_mode=["messages", "values"]):
+                if mode == "values":
+                    result = chunk
+        else:
+            result = graph.invoke(inputs)
+
+        last = result["messages"][-1]
+        assert isinstance(last, AIMessage)
+        assert last.content == ""
+        assert result["azure_ai_agents_conversation_id"] == "conv_123"
 
     def test_func_tracks_pending_after_function_call_response(self) -> None:
         """Test that pending function calls are tracked from response."""
