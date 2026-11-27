@@ -123,7 +123,7 @@ Start `main.py` with the fresh environment's interpreter and the required enviro
 
 ### Configure upload exclusions
 
-Configure a root `.agentignore` to keep local credentials, development files, and evaluation data out of source uploads. The following exclusions apply to this example's `requirements.txt`-based build. Adapt development-file exclusions to your build process; do not exclude files required at build time or runtime:
+Before writing `.agentignore`, identify the dependency inputs the remote builder uses and keep them in the upload. For example, keep `pyproject.toml` and the lockfile when the builder relies on them. Start with exclusions for local credentials and generated files, then adapt them to your application:
 
 ```text
 .env
@@ -135,14 +135,9 @@ eval/
 __pycache__/
 *.pyc
 *.log
-uv.lock
-pyproject.toml
-research_agent.ipynb
 ```
 
-Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`; the upload excludes the development `pyproject.toml` and lockfile.
-
-For a different dependency workflow, keep its required project and lockfile inputs in the upload and follow the selected builder's dependency rules. Do not copy this example's exclusions while relying on the excluded files for installation.
+Your `.gitignore` should also exclude local credentials, azd environment files, and generated results. In this example, the remote build uses `requirements.txt`. Keep it in the upload; omit the development manifest, lockfile, or notebook only if the remote builder and application do not use them.
 
 Run `azd package` before deployment and inspect the upload for the declared launcher, referenced application files, and dependency inputs. Packaging verifies the upload contents, not a successful remote build. The upload must exclude `.env`, local caches, evaluation output, and development-only dependencies.
 

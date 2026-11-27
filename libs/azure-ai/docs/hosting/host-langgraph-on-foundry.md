@@ -10,6 +10,8 @@ The examples use Python, uv, the hosted Responses protocol, and source-code depl
 
 Clients that use LangGraph Server APIs, custom HTTP routes, or Studio views need separate adaptation. See the [Responses hosting limitations](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point).
 
+Before choosing a hosting sample or entry point, use the state and interface checks below and review [local hosting and graph selection](langgraph-to-foundry/02-run-locally.md#identify-the-existing-graph-entry-point). If the source runtime supplies state required by later requests, follow [persistence configuration](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns) before choosing the hosted graph. When preparing a deployment, also follow [deployment preparation](langgraph-to-foundry/03-prepare-deployment.md#prepare-deployment-files). If you cannot complete a required check, report the gap rather than assuming the unmodified graph is compatible.
+
 ## Preserve runtime-owned state
 
 Identify required state from the original launch path and documented client workflow, not only the exported graph. LangGraph development/server runtimes can supply checkpointing outside that graph; `langgraph dev` manages persistence and rejects application-configured checkpointers. Another host does not inherit that runtime service.
@@ -23,6 +25,8 @@ A graph without an explicit checkpointer is not necessarily stateless. For examp
 | The caller, under the existing contract | Preserve that contract; do not introduce server-side storage or recovery requirements unnecessarily. |
 
 Ensure the serving and delegated execution paths preserve required state through the chosen owner. Conversation/thread identifiers are keys, not storage; for Invocations, a reused session does not reconstruct transcript history without a checkpointer. See [conversation and state](invocations.md#3-conversation-and-state) and [persistence configuration](langgraph-to-foundry/05-persistence-and-recovery.md#persist-graph-state-across-turns). Keep necessary construction/lifecycle adaptations focused on preserving behavior; they do not authorize business-logic redesign or historical checkpoint migration. Keep development and hosted construction separate where their ownership rules differ. Change client/server state responsibilities only with explicit user intent. For stateless operations, do not introduce continuity requirements.
+
+If the stock runner supports the caller interface but the original graph relies on services supplied by its runtime, adapt the hosted graph construction without replacing the runner. Verify continuation through the delivered entry point: use a later request to read or update state from an earlier request without recreating it. A successful first request does not verify continuation.
 
 ## Map the application interface
 

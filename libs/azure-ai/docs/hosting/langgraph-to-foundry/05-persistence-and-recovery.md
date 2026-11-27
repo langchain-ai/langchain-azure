@@ -57,11 +57,11 @@ azd deploy deep-research-foundry
 
 ### Verify persistence and user isolation
 
-Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, the client needs to retain the conversation identity and authenticated user across turns. Test continuation in the same session, then in a different session with the same conversation. The [session management guide](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions) explains sessions and conversations.
+Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, retain the conversation identity and, for user-scoped state, the authenticated user across turns. Verify continuation in the same hosted session. If the workflow requires state to outlive a hosted session, also verify continuation in a different hosted session with the same conversation. See [Manage hosted agent sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions).
 
 Verify that conversation-specific state stays isolated from other conversations.
 
-> **Tip:** Measure latency with representative conversation histories and state sizes, including continuation in a new session. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
+> **Tip:** Measure latency with representative conversation histories and state sizes, including a new session when required. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
 
 > **Warning:** User isolation must remain enabled for user-specific state. Test continuation with the same authenticated user and verify that another user cannot access that state.
 
