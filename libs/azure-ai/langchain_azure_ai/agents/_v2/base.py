@@ -780,16 +780,17 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             # Extract generated images from image-generation tool calls.
             content_parts.extend(self._extract_image_generation_results(response))
 
-            if content_parts:
-                # Use a plain string when there's only text.
-                content: Any
-                if len(content_parts) == 1 and isinstance(content_parts[0], str):
-                    content = content_parts[0]
-                else:
-                    content = content_parts
-                msg = AIMessage(content=content)
-                msg.name = self.agent_name
-                generations.append(ChatGeneration(message=msg, generation_info={}))
+            # Use a plain string when there's only text or nothing.
+            content: Any
+            if not content_parts:
+                content = ""
+            elif len(content_parts) == 1 and isinstance(content_parts[0], str):
+                content = content_parts[0]
+            else:
+                content = content_parts
+            msg = AIMessage(content=content)
+            msg.name = self.agent_name
+            generations.append(ChatGeneration(message=msg, generation_info={}))
 
         llm_output: Dict[str, Any] = {"model": self.model_name}
         usage = getattr(response, "usage", None)
@@ -813,9 +814,10 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
         forward them to the caller token-by-token.
 
         The final complete response is captured from the
-        ``response.completed`` event (``event.response``) emitted at the
-        end of the stream.  Post-processing (function calls, MCP approval
-        requests, file downloads) is then performed identically to
+        ``response.completed`` or ``response.incomplete`` event
+        (``event.response``) emitted at the end of the stream.
+        Post-processing (function calls, MCP approval requests, file
+        downloads) is then performed identically to
         :meth:`_generate`, and the output fields ``response_id``,
         ``pending_function_calls``, and ``pending_mcp_approvals`` are
         populated accordingly.
@@ -843,8 +845,10 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             per text delta during the stream, followed by a single chunk
             with all tool-call fragments when pending calls are present,
             and optionally a final chunk with file / image content blocks.
+            A response without any content yields a single empty chunk.
         """
         response = None
+        streamed_text = False
         with self.openai_client.responses.create(
             **self._build_api_params(), stream=True
         ) as stream:
@@ -858,12 +862,16 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
                     )
                     if run_manager:
                         run_manager.on_llm_new_token(event.delta, chunk=chunk)
+                    streamed_text = True
                     yield chunk
-                elif event.type == "response.completed":
+                elif event.type in ("response.completed", "response.incomplete"):
                     response = event.response
 
         if response is None:
-            raise RuntimeError("Stream ended without a 'response.completed' event")
+            raise RuntimeError(
+                "Stream ended without a 'response.completed' or "
+                "'response.incomplete' event"
+            )
 
         self.response_id = response.id
 
@@ -944,6 +952,10 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
 
             if extra_parts:
                 yield ChatGenerationChunk(message=AIMessageChunk(content=extra_parts))
+            elif not streamed_text:
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(content="", name=self.agent_name)
+                )
 
     # -- helpers ----------------------------------------------------------
 
