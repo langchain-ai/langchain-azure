@@ -99,12 +99,12 @@ async def _load_toolbox() -> tuple[list[BaseTool], str]:
             raise ToolException("Use a skill:// URI from this Toolbox.")
         try:
             resources = await toolbox.aget_resources(uris=uri)
+            content = "\n\n".join(resource.as_string() for resource in resources)
         except Exception as exc:
             raise ToolException(
                 "Could not read the skill resource. Check the skill:// URI "
                 "or retry if the Toolbox is temporarily unavailable."
             ) from exc
-        content = "\n\n".join(resource.as_string() for resource in resources)
         if not content.strip():
             raise ToolException(f"No skill content returned for {uri}.")
         return content

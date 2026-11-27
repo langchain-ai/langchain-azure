@@ -1,6 +1,7 @@
 """Exercise Toolbox tools and skills through the sample's native Responses host."""
 
 import asyncio
+import base64
 import importlib.util
 import json
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-from mcp.types import TextResourceContents
+from mcp.types import BlobResourceContents, TextResourceContents
 from pydantic import Field
 from starlette.testclient import TestClient
 
@@ -100,7 +101,7 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     class Client:
         def __init__(self) -> None:
-            self.resources: dict[str, list[str]] = {
+            self.resources: dict[str, list[str | bytes]] = {
                 INDEX_URI: [CATALOG],
                 SKILL_URI: [SKILL],
             }
@@ -121,8 +122,14 @@ def mcp_boundary(sample: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
                 raise RuntimeError("transient toolbox failure")
             return SimpleNamespace(
                 contents=[
-                    TextResourceContents(uri=uri, text=text)
-                    for text in self.resources[uri]
+                    TextResourceContents(uri=uri, text=item)
+                    if isinstance(item, str)
+                    else BlobResourceContents(
+                        uri=uri,
+                        blob=base64.b64encode(item).decode("ascii"),
+                        mimeType="image/png",
+                    )
+                    for item in self.resources[uri]
                 ]
             )
 
@@ -343,6 +350,17 @@ def test_reader_returns_sanitized_error_on_read_failure(
     result = asyncio.run(tools[-1].ainvoke({"uri": SKILL_URI}))
     assert "Could not read the skill resource" in result
     assert "transient toolbox failure" not in result
+
+
+def test_reader_returns_sanitized_error_on_binary_resource(
+    sample: Any, mcp_boundary: Any
+) -> None:
+    asset_uri = "skill://release-notes/assets/logo.png"
+    mcp_boundary.client.resources[asset_uri] = [b"\x89PNG\r\n\x1a\n\xff"]
+    tools, _ = asyncio.run(sample._load_toolbox())
+    result = asyncio.run(tools[-1].ainvoke({"uri": asset_uri}))
+    assert "Could not read the skill resource" in result
+    assert "UnicodeDecodeError" not in result
 
 
 @pytest.mark.parametrize("contents", [[], ["   "]])
