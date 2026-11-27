@@ -283,7 +283,7 @@ echo_node = factory.create_prompt_agent_node(
 )
 ```
 
-Agent Service nodes run in Microsoft Foundry but can be added to any graph:
+Agent Service nodes run in Microsoft Foundry but can be added to any graph whose state schema has the fields of `AgentServiceAgentState`:
 
 ```python
 graph = StateGraph(AgentServiceAgentState)

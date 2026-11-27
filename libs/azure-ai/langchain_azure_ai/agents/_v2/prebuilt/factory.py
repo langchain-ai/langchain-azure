@@ -529,6 +529,11 @@ class AgentServiceFactory(BaseModel):
         only holds a reference to the existing agent and handles request/response
         building.
 
+        The state schema of the graph that the node is added to must have the
+        fields of ``AgentServiceAgentState``, for example by using
+        ``AgentServiceAgentState`` or a subclass of it.
+        :meth:`create_prompt_agent` adds them to a custom schema itself.
+
         Args:
             name: The name of the agent.
             model: The model deployment name.

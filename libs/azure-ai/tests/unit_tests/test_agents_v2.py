@@ -2257,6 +2257,63 @@ class TestResponsesAgentNode:
         with pytest.raises(RuntimeError, match="No pending function calls"):
             node._func(state, config, store=None)
 
+    @pytest.mark.parametrize("schema", ["AgentState", "MessagesState"])
+    def test_graph_without_agent_state_fields_raises_clear_error(
+        self, schema: str
+    ) -> None:
+        """The error for a tool output names the state fields the node needs."""
+        from langchain.agents import AgentState
+        from langchain_core.tools import tool as lc_tool
+        from langgraph.graph import START, MessagesState, StateGraph
+        from langgraph.prebuilt.tool_node import ToolNode
+
+        from langchain_azure_ai.agents._v2.base import ResponsesAgentNode
+        from langchain_azure_ai.agents._v2.prebuilt.factory import (
+            external_tools_condition,
+        )
+
+        @lc_tool
+        def add(a: int, b: int) -> int:
+            """Add two numbers."""
+            return a + b
+
+        function_call = MagicMock()
+        function_call.type = "function_call"
+        function_call.call_id = "call_abc"
+        function_call.name = "add"
+        function_call.arguments = '{"a": 5, "b": 8}'
+
+        mock_response = MagicMock()
+        mock_response.id = "resp_1"
+        mock_response.status = "completed"
+        mock_response.output = [function_call]
+        mock_response.output_text = None
+        mock_response.usage = None
+
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.conversations.create.return_value = MagicMock(id="conv_123")
+        mock_openai.responses.create.return_value = mock_response
+
+        mock_agent = MagicMock()
+        mock_agent.name = "test-agent"
+        mock_agent.version = "v1"
+        mock_agent.definition = {"model": "gpt-4.1"}
+        mock_client = MagicMock()
+        mock_client.agents.get_version.return_value = mock_agent
+        mock_client.get_openai_client.return_value = mock_openai
+
+        builder = StateGraph(AgentState if schema == "AgentState" else MessagesState)
+        builder.add_node("agent", ResponsesAgentNode(mock_client, "test-agent", "v1"))
+        builder.add_node("tools", ToolNode([add]))
+        builder.add_edge(START, "agent")
+        builder.add_conditional_edges("agent", external_tools_condition)
+        builder.add_edge("tools", "agent")
+        graph = builder.compile()
+
+        with pytest.raises(RuntimeError, match="AgentServiceAgentState"):
+            graph.invoke({"messages": [HumanMessage(content="5 + 8?")]})
+        mock_openai.responses.create.assert_called_once()
+
     def test_func_tracks_pending_after_function_call_response(self) -> None:
         """Test that pending function calls are tracked from response."""
         node = self._make_node()
