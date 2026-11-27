@@ -691,11 +691,16 @@ class TestPromptBasedAgentModelV2Streaming:
         event.delta = delta
         return event
 
-    def _make_stream_ctx(self, events: list, final_response: MagicMock) -> MagicMock:
+    def _make_stream_ctx(
+        self,
+        events: list,
+        final_response: MagicMock,
+        final_type: str = "response.completed",
+    ) -> MagicMock:
         """Build a mock ``responses.create(stream=True)`` context manager."""
         stream_obj = MagicMock()
         completed_event = MagicMock()
-        completed_event.type = "response.completed"
+        completed_event.type = final_type
         completed_event.response = final_response
         stream_obj.__iter__ = MagicMock(return_value=iter(events + [completed_event]))
         ctx = MagicMock()
@@ -758,7 +763,6 @@ class TestPromptBasedAgentModelV2Streaming:
             model_name="gpt-4.1",
             input_items="hi",
         )
-        # Use _stream directly to avoid LangChain's "at least one chunk" guard.
         list(model._stream([HumanMessage(content="hi")]))
         assert model.response_id == "resp_id_xyz"
 
@@ -784,6 +788,35 @@ class TestPromptBasedAgentModelV2Streaming:
         )
         with pytest.raises(RuntimeError, match="failed"):
             list(model.stream([HumanMessage(content="hi")]))
+
+    @pytest.mark.parametrize("deltas", [[], ["Hel", "lo"]])
+    def test_stream_incomplete_response(self, deltas: list) -> None:
+        """A stream that ends with ``response.incomplete`` is handled."""
+        from langchain_azure_ai.agents._v2.base import _AzureAIAgentApiProxyModel
+
+        final_response = MagicMock()
+        final_response.id = "resp_incomplete"
+        final_response.status = "incomplete"
+        final_response.output = []
+        final_response.output_text = "".join(deltas)
+        final_response.usage = None
+
+        events = [self._make_text_event(d) for d in deltas]
+        ctx = self._make_stream_ctx(
+            events, final_response, final_type="response.incomplete"
+        )
+        mock_openai = MagicMock(spec=OpenAI)
+        mock_openai.responses.create.return_value = ctx
+
+        model = _AzureAIAgentApiProxyModel(
+            openai_client=mock_openai,
+            agent_name="test-agent",
+            model_name="gpt-4.1",
+            input_items="hi",
+        )
+        chunks = list(model.stream([HumanMessage(content="hi")]))
+        assert "".join(str(c.content) for c in chunks) == "".join(deltas)
+        assert model.response_id == "resp_incomplete"
 
     def test_stream_function_call_response(self) -> None:
         """Function calls are yielded as ChatGenerationChunk with tool-call chunks."""
@@ -972,7 +1005,6 @@ class TestPromptBasedAgentModelV2Streaming:
             input_items="hi",
             conversation_id="conv_123",
         )
-        # Use _stream directly to avoid LangChain's "at least one chunk" guard.
         list(model._stream([HumanMessage(content="hi")]))
 
         mock_openai.responses.create.assert_called_once()

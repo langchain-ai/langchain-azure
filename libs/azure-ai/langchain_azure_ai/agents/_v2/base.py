@@ -814,9 +814,10 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
         forward them to the caller token-by-token.
 
         The final complete response is captured from the
-        ``response.completed`` event (``event.response``) emitted at the
-        end of the stream.  Post-processing (function calls, MCP approval
-        requests, file downloads) is then performed identically to
+        ``response.completed`` or ``response.incomplete`` event
+        (``event.response``) emitted at the end of the stream.
+        Post-processing (function calls, MCP approval requests, file
+        downloads) is then performed identically to
         :meth:`_generate`, and the output fields ``response_id``,
         ``pending_function_calls``, and ``pending_mcp_approvals`` are
         populated accordingly.
@@ -844,8 +845,7 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
             per text delta during the stream, followed by a single chunk
             with all tool-call fragments when pending calls are present,
             and optionally a final chunk with file / image content blocks.
-            A completed response without any content yields a single empty
-            chunk.
+            A response without any content yields a single empty chunk.
         """
         response = None
         streamed_text = False
@@ -864,11 +864,14 @@ class _AzureAIAgentApiProxyModel(BaseChatModel):
                         run_manager.on_llm_new_token(event.delta, chunk=chunk)
                     streamed_text = True
                     yield chunk
-                elif event.type == "response.completed":
+                elif event.type in ("response.completed", "response.incomplete"):
                     response = event.response
 
         if response is None:
-            raise RuntimeError("Stream ended without a 'response.completed' event")
+            raise RuntimeError(
+                "Stream ended without a 'response.completed' or "
+                "'response.incomplete' event"
+            )
 
         self.response_id = response.id
 
