@@ -11,6 +11,7 @@ LIB_DIRS = [
     "libs/azure-storage",
     "libs/azure-cosmosdb",
     "libs/azure-compute",
+    "libs/azure-kusto",
 ]
 
 REPO_ROOT = Path(

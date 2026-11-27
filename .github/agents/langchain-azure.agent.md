@@ -27,6 +27,7 @@ Keep public namespaces consistent with the relevant upstream ecosystem and with 
 | `libs/azure-compute` | `langchain-azure-compute` | Azure Container Apps dynamic-sessions tools and Deep Agents backends for dynamic sessions and sandboxes |
 | `libs/azure-cosmosdb` | `langchain-azure-cosmosdb` | Cosmos DB / Azure DocumentDB vector search, semantic cache, chat history, and LangGraph persistence |
 | `libs/azure-dynamic-sessions` | `langchain-azure-dynamic-sessions` | **Deprecated** legacy dynamic-sessions integrations; use `langchain-azure-compute` for new work |
+| `libs/azure-kusto` | `langchain-azure-kusto` | Azure Data Explorer / Fabric Eventhouse read-only KQL toolkit and document loader |
 | `libs/sqlserver` | `langchain-sqlserver` | SQL Server vector store |
 | `libs/azure-storage` | `langchain-azure-storage` | Azure Blob Storage document loaders |
 | `libs/azure-postgresql` | `langchain-azure-postgresql` | Azure PostgreSQL vector store (pgvector) |
@@ -294,6 +295,21 @@ Uses `psycopg` with safe SQL composition (`psycopg.sql.Identifier`, `Literal`, `
 
 ---
 
+### 8. `langchain-azure-kusto` (libs/azure-kusto)
+
+Read-only integrations for Azure Data Explorer and Fabric Eventhouse (both run the Kusto engine and use KQL), built on `azure-kusto-data`.
+
+#### Public Classes
+
+- **`KustoDatabase`** — `@beta()`. Read-only connection to one database; lazily creates and reuses a sync `KustoClient` and an `azure.kusto.data.aio.KustoClient` (recreated if the event loop changes). Methods: `get_table_names`, `get_table_info`, `run` and their `a*` twins; `close` / `aclose` and both context managers.
+- **`KustoToolkit`** — `BaseToolkit` returning `KustoListTablesTool` (`kusto_list_tables`), `KustoTableSchemaTool` (`kusto_table_schema`) and `KustoQueryTool` (`kusto_query`).
+- **`KustoLoader`** — `BaseLoader`; one `Document` per result row, with `page_content_columns` / `metadata_columns`.
+- **`InvalidKustoInputError`** — `ValueError` for input the caller or agent can fix.
+
+Safety invariants: queries run with the `request_readonly` request property; text starting with `.` (after whitespace and `//` comments) is rejected before it is sent; table names are validated against `[\w .-]` before bracket quoting; `query_take_max_records` is `max_rows + 1` so truncation can be reported. Credentials default to `DefaultAzureCredential` (sync or `aio`); a caller-supplied credential is wrapped so closing the Kusto client never closes it. Requests are stamped with `kcsb._set_connector_details("LangChain", <version>)`. Tools turn `InvalidKustoInputError` and non-network `KustoServiceError` into `ToolException`; network errors propagate.
+
+---
+
 ## Cross-Package Patterns
 
 ### Lazy Import Pattern
@@ -362,6 +378,7 @@ Preserve each package's supported sync/async contract:
 - `langchain-azure-ai`: sync and async chat models, embeddings, retrievers, vector stores
 - `langchain-azure-compute`: dynamic-sessions tools use synchronous requests; the Deep Agents backends also expose async operations
 - `langchain-azure-cosmosdb`: sync and async NoSQL vector stores, semantic caches, chat history, and LangGraph checkpoint/cache/store APIs
+- `langchain-azure-kusto`: every `KustoDatabase` method, tool and the loader have real async twins on the `aio` Kusto client
 - `langchain-azure-storage`: `lazy_load()` / `alazy_load()` on the document loader
 - `langchain-azure-postgresql`: `AzurePGVectorStore` / `AsyncAzurePGVectorStore`
 - `langchain-azure-dynamic-sessions`: legacy synchronous tools; direct new feature work to `langchain-azure-compute`
@@ -435,7 +452,7 @@ except ImportError as ex:
 
 ### User-Agent Tracking
 
-When creating Azure SDK clients or service requests, follow the affected package's user-agent convention (for example, SDK `user_agent` in Cosmos DB or a `User-Agent` header in compute's dynamic sessions). Do not override a caller-supplied client's configuration.
+When creating Azure SDK clients or service requests, follow the affected package's user-agent convention (for example, SDK `user_agent` in Cosmos DB, a `User-Agent` header in compute's dynamic sessions, or connector details in the Kusto connection string). Do not override a caller-supplied client's configuration.
 
 ### Git Hooks
 

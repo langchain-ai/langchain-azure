@@ -6,6 +6,7 @@ This repository contains the following packages with Azure integrations with Lan
 - [langchain-azure-compute](./libs/azure-compute)
 - [langchain-azure-cosmosdb](https://pypi.org/project/langchain-azure-cosmosdb/)
 - [langchain-azure-dynamic-sessions](https://pypi.org/project/langchain-azure-dynamic-sessions/)
+- [langchain-azure-kusto](./libs/azure-kusto)
 - [langchain-sqlserver](https://pypi.org/project/langchain-sqlserver/)
 - [langchain-azure-postgresql](https://pypi.org/project/langchain-azure-postgresql/)
 - [langchain-azure-storage](https://pypi.org/project/langchain-azure-storage/)
