@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -13,12 +14,15 @@ pytest.importorskip("azure.ai.agentserver.invocations")
 pytest.importorskip("azure.ai.agentserver.responses")
 pytest.importorskip("starlette")
 
+from azure.ai.agentserver.responses import InMemoryResponseProvider  # noqa: E402
 from langchain.agents import create_agent  # noqa: E402
 from langchain.agents.middleware import HumanInTheLoopMiddleware  # noqa: E402
 from langchain_core.language_models import BaseChatModel  # noqa: E402
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage  # noqa: E402
 from langchain_core.outputs import ChatGeneration, ChatResult  # noqa: E402
+from langchain_core.runnables import RunnableConfig  # noqa: E402
 from langchain_core.tools import tool  # noqa: E402
+from langgraph.checkpoint.base import CheckpointTuple  # noqa: E402
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from langgraph.graph.state import CompiledStateGraph  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
@@ -33,6 +37,7 @@ from .conftest import (  # noqa: E402
     ScriptRegistrar,
     approval_requests,
     assistant_text,
+    sse_payloads,
 )
 from .graphs import ScriptedModel  # noqa: E402
 
@@ -84,8 +89,10 @@ def _middleware_graph(
     )
 
 
-def _register_script(script: ScriptRegistrar, key: str, expected_text: str) -> None:
-    script(
+def _register_script(
+    script: ScriptRegistrar, key: str, expected_text: str
+) -> list[AIMessage]:
+    return script(
         key,
         [
             AIMessage(
@@ -158,6 +165,149 @@ def test_responses_host_resumes_hitl_middleware(
     assert payload["status"] == "completed", payload
     assert expected_text in assistant_text(payload)
     _assert_result(key, tool_calls, approve)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@REAL_INTERRUPT_ASYNC_XFAIL
+def test_response_linked_approval_cannot_execute_twice(
+    script: ScriptRegistrar, stream: bool
+) -> None:
+    key = f"response-linked-middleware-{stream}"
+    script_queue = _register_script(script, key, "approved")
+    script_queue.append(AIMessage(content="Unexpected second execution."))
+    tool_calls: list[str] = []
+    host = ResponsesHostServer(_middleware_graph(key, tool_calls, ["approve"]))
+
+    with TestClient(host.app) as client:
+        paused = client.post("/responses", json={"input": "do it"}).json()
+        approval_id = approval_requests(paused)[0]["id"]
+        body = {"previous_response_id": paused["id"], "stream": stream}
+        rejected = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, False)]}
+        )
+        accepted = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, True)]}
+        )
+        duplicate = client.post(
+            "/responses", json={**body, "input": [_approval(approval_id, True)]}
+        )
+
+    assert tool_calls == ["approved"]
+    assert len(script_queue) == 1
+    for result, status in (
+        (rejected, "failed"),
+        (accepted, "completed"),
+        (duplicate, "failed"),
+    ):
+        assert result.status_code == 200, result.text
+        payload = sse_payloads(result.text)[-1]["response"] if stream else result.json()
+        assert payload["status"] == status, payload
+    assert payload["error"]["code"] == "interrupt_not_pending"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@REAL_INTERRUPT_ASYNC_XFAIL
+def test_response_linked_retry_from_rejected_approval(
+    script: ScriptRegistrar, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = f"response-linked-rejected-{stream}"
+    _register_script(script, key, "approved")
+    tool_calls: list[str] = []
+    host = ResponsesHostServer(
+        _middleware_graph(key, tool_calls, ["approve"]),
+        store=InMemoryResponseProvider(),
+    )
+    execute = Mock(wraps=host.graph.astream)
+    chain_write = AsyncMock()
+
+    with TestClient(host.app) as client:
+        paused = client.post("/responses", json={"input": "do it"}).json()
+        approval_id = approval_requests(paused)[0]["id"]
+        monkeypatch.setattr(host.graph, "astream", execute)
+        monkeypatch.setattr(host._conversation_chain_store, "set", chain_write)
+        rejected = client.post(
+            "/responses",
+            json={
+                "previous_response_id": paused["id"],
+                "input": [_approval(approval_id, False)],
+                "stream": stream,
+            },
+        )
+        assert rejected.status_code == 200, rejected.text
+        failed = (
+            sse_payloads(rejected.text)[-1]["response"] if stream else rejected.json()
+        )
+        assert failed["status"] == "failed"
+        assert failed["error"]["code"] == "interrupt_rejected"
+        execute.assert_not_called()
+        chain_write.assert_not_awaited()
+
+        body = {
+            "previous_response_id": failed["id"],
+            "input": [_approval(approval_id, True)],
+            "stream": stream,
+        }
+        retried = client.post("/responses", json=body)
+        assert retried.status_code == 200, retried.text
+        result = (
+            sse_payloads(retried.text)[-1]["response"] if stream else retried.json()
+        )
+        assert result["status"] == "completed", result
+        assert assistant_text(result) == "The action was approved."
+
+        duplicate = client.post("/responses", json=body)
+        assert duplicate.status_code == 200, duplicate.text
+        stale = (
+            sse_payloads(duplicate.text)[-1]["response"] if stream else duplicate.json()
+        )
+        assert stale["status"] == "failed", stale
+        assert stale["error"]["code"] == "interrupt_not_pending"
+
+    execute.assert_called_once()
+    chain_write.assert_not_awaited()
+    assert tool_calls == ["approved"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@REAL_INTERRUPT_ASYNC_XFAIL
+def test_response_linked_approval_reports_live_checkpoint_read_failure(
+    script: ScriptRegistrar, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = f"response-linked-read-failure-{stream}"
+    _register_script(script, key, "approved")
+    tool_calls: list[str] = []
+    graph = _middleware_graph(key, tool_calls, ["approve"])
+    saver = graph.checkpointer
+    assert isinstance(saver, InMemorySaver)
+    host = ResponsesHostServer(graph, store=InMemoryResponseProvider())
+    get_tuple = saver.aget_tuple
+
+    async def fail_live_read(config: RunnableConfig) -> CheckpointTuple | None:
+        if "checkpoint_id" not in (config.get("configurable") or {}):
+            raise ConnectionError("Cannot read the live checkpoint")
+        return await get_tuple(config)
+
+    with TestClient(host.app) as client:
+        paused = client.post("/responses", json={"input": "do it"}).json()
+        approval_id = approval_requests(paused)[0]["id"]
+        monkeypatch.setattr(saver, "aget_tuple", fail_live_read)
+        execute = Mock(wraps=host.graph.astream)
+        monkeypatch.setattr(host.graph, "astream", execute)
+        response = client.post(
+            "/responses",
+            json={
+                "previous_response_id": paused["id"],
+                "input": [_approval(approval_id, True)],
+                "stream": stream,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    failed = sse_payloads(response.text)[-1]["response"] if stream else response.json()
+    assert failed["status"] == "failed", failed
+    assert failed["error"]["code"] == "server_error", failed
+    execute.assert_not_called()
+    assert tool_calls == []
 
 
 @pytest.mark.parametrize(

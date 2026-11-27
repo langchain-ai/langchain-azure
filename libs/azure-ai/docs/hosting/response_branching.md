@@ -50,7 +50,8 @@ state must survive a restart.
 > [ordinary continuation](responses.md#human-in-the-loop) with branching disabled.
 
 Eligible parents can come from ordinary continuation or an existing
-conversation, including responses created before branching was enabled.
+conversation, including responses created before branching was enabled if they
+have a restorable checkpoint reference.
 
 ### Request linkage
 
@@ -99,9 +100,10 @@ during execution or recovery, so applications should make replayed work safe.
 
 ## 2. Internal data structures and flow
 
-Branching adds exact parent selection and finished-parent checks to the shared
-checkpointed execution path. It shares storage, graph execution, output
-conversion, and recovery from saved progress with ordinary continuation.
+Branching adds finished-parent checks to the shared checkpointed execution path.
+Both modes restore the exact checkpoint selected by `previous_response_id` and
+share storage, graph execution, output conversion, and recovery from saved progress.
+Only checkpointed conversation-only requests access `conversation_chain_store`.
 
 ### Shared storage
 
@@ -146,7 +148,7 @@ The current checkpointed paths differ during parent selection and validation:
 
 | Stage | Ordinary checkpointed continuation | Branching |
 | --- | --- | --- |
-| Select starting state | Read the conversation-chain checkpoint when available; otherwise use the thread's latest checkpoint. | Load the named parent's exact final checkpoint from its stored response reference. |
+| Select starting state | Load the named parent's exact checkpoint for `previous_response_id`, or use the conversation-chain checkpoint when available for `conversation`-only requests. | Load the named parent's exact final checkpoint from its stored response reference. |
 | Validate graph state | A paused graph can accept matching tool results or approval decisions. | Require a completed parent response and a finished graph under the parent eligibility rules. |
 
 Between selection and finalization, both paths run the graph with current input
@@ -201,10 +203,10 @@ Implementation details live with the code:
 
 The remaining work is:
 
-- Align ordinary continuation with branching for requests using
-  `previous_response_id`: select the referenced response's checkpoint and
-  skip all reads and writes to `conversation_chain_store`. Requests using
-  `conversation` continue to use the conversation-chain checkpoint.
+- Verify how OpenAI handles a child linked by `previous_response_id` when its
+  parent belongs to an explicit conversation. The host currently leaves that
+  conversation's checkpoint reference unchanged. Verify the child's association,
+  conversation items, and which context a later `conversation` request receives.
 - Validate parent outputs for unanswered tool calls as well as checking graph
   completion.
 - Reject requests combining `previous_response_id` and `conversation` with

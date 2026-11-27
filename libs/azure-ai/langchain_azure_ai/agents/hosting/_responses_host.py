@@ -36,7 +36,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, closing
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 try:
     from azure.ai.agentserver.core import resolve_state_subdir
@@ -78,7 +78,6 @@ from ._checkpoint._checkpoint_reuse import (
 from ._converters import (
     UsageAccumulator,
     build_messages_input,
-    detect_pending_interrupts,
     emit_interrupts,
     is_messages_state_schema,
     parse_resume_command,
@@ -86,6 +85,7 @@ from ._converters import (
     track_pending_interrupts,
     validate_approval_responses,
 )
+from ._converters._hitl import _detect_pending_interrupts_with_config
 from ._responses import (
     CONVERSATION_CHECKPOINT_KEY,
     METADATA_LANGGRAPH_ROOT_RESPONSE_ID,
@@ -293,23 +293,47 @@ def _response_conversation_id(response: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _response_root_id(response: Any) -> str | None:
-    """Read a cached root from JSON or legacy dictionary metadata."""
+def _response_internal_metadata(response: Any) -> dict[str, Any]:
+    """Read JSON or legacy dictionary metadata without copying response items."""
     metadata = getattr(response, "metadata", None)
     if metadata is None and hasattr(response, "get"):
         metadata = response.get("metadata")
     if not isinstance(metadata, dict):
-        return None
+        return {}
     internal = metadata.get("_internal_metadata")
     if isinstance(internal, str):
         try:
             internal = json.loads(internal)
         except ValueError:
-            return None
-    if not isinstance(internal, dict):
-        return None
-    value = internal.get(METADATA_LANGGRAPH_ROOT_RESPONSE_ID)
+            return {}
+    return internal if isinstance(internal, dict) else {}
+
+
+def _response_root_id(response: Any) -> str | None:
+    """Read a cached root from JSON or legacy dictionary metadata."""
+    value = _response_internal_metadata(response).get(
+        METADATA_LANGGRAPH_ROOT_RESPONSE_ID
+    )
     return value if isinstance(value, str) and value else None
+
+
+def _conversation_chain_key(
+    request: CreateResponse, context: ResponseContext
+) -> str | None:
+    """Return the chain-store key only for explicit conversation linkage."""
+    # shortcut: keep conversation heads for response links, align after OpenAI tests.
+    if request.get("previous_response_id") or not (
+        get_conversation_id(request) or context.conversation_id
+    ):
+        return None
+    return _scope_thread_id(context.conversation_chain_id, context)
+
+
+def _without_checkpoint_selection(config: RunnableConfig) -> RunnableConfig:
+    configurable = dict(config.get("configurable") or {})
+    configurable.pop("checkpoint_id", None)
+    configurable.pop("checkpoint_map", None)
+    return {**config, "configurable": configurable}
 
 
 class ResponsesHostServer:
@@ -391,14 +415,17 @@ class ResponsesHostServer:
             when hosted on Foundry. When supplying an existing ``app``, configure
             ``store`` when creating it; passing ``store`` here has no effect.
         conversation_chain_store: Optional :class:`ConversationChainStoreProtocol`
-            for dictionaries shared across turns. Implementations choose their
-            serialization and durability model and must support concurrent calls,
-            atomic replacement, and explicit failures. Defaults to
+            for dictionaries shared across explicit conversation turns. Requests
+            using only ``previous_response_id`` do not access this store.
+            Implementations choose their serialization and durability model and
+            must support concurrent calls, atomic replacement, and explicit
+            failures. Defaults to
             :class:`FoundryConversationChainStore`, which uses one
             :class:`FoundryStateStore` namespace per conversation chain.
-        enable_response_branching: Start ``previous_response_id`` requests from
-            the specified completed response's checkpoint instead of the
-            conversation head. Defaults to ``False``. Requires a
+        enable_response_branching: Require ``previous_response_id`` parents to
+            be completed responses with finished graphs. For checkpointed graphs,
+            both flag values select the referenced response's exact checkpoint.
+            Defaults to ``False``. Enabling branching requires a
             history-preserving checkpointer with asynchronous ``aget_tuple``,
             ``aput``, and ``aput_writes`` implementations, steering disabled,
             and ``app=None``.
@@ -765,16 +792,12 @@ class ResponsesHostServer:
         """Build a LangGraph ``RunnableConfig`` for the request.
 
         The logical thread is namespaced by the platform-provided user key.
-        For ``previous_response_id`` chains, a cached root response ID is reused
-        when available; otherwise the root response is resolved through the
-        Responses provider when possible. Checkpointed graphs
-        additionally restore the exact ``(thread_id, checkpoint_id)`` saved
-        for this user and conversation chain. With any checkpoint saver,
-        that reference fixes the request's input. Latest-checkpoint queries
+        Checkpointed graphs restore the exact ``(thread_id, checkpoint_id)``
+        saved on the referenced response or explicit conversation. Recovered
+        responses first use their own saved progress. Only explicit conversation
+        requests access the conversation chain store. Latest-checkpoint queries
         still reach storage to preserve historical-branch protection.
-        When response branching is enabled, ``previous_response_id`` requests
-        select that completed response's saved checkpoint. A recovered response's
-        own persisted checkpoint takes precedence over its parent.
+        Without a checkpointer, cached root IDs avoid response-chain traversal.
         The full :class:`ResponseContext`
         is exposed under ``configurable.response_context`` for transient
         execution facts such as recovery state.
@@ -782,7 +805,8 @@ class ResponsesHostServer:
         Configurable keys prefixed with ``__langchain_azure_`` are reserved for
         host implementation details. Subclasses can preserve root caching by
         calling ``await super().build_runnable_config(request, context)`` and
-        retaining the returned hosting-owned entries.
+        retaining the returned hosting-owned entries. For ordinary continuations,
+        an override can instead return a thread-only config to use the thread head.
 
         Args:
             request: The parsed create-response request.
@@ -791,36 +815,25 @@ class ResponsesHostServer:
         Returns:
             A ``RunnableConfig`` dict.
         """
-        if self._is_response_branch(request, context):
+        if self._graph_has_checkpointer:
             if context.is_recovery and context.persisted_response is not None:
-                checkpoint_ref = TaskStorageManager.from_stream(
-                    ResponseEventStream(
-                        response_id=context.response_id,
-                        response=context.persisted_response,
-                    )
+                reference = TaskStorageManager(
+                    _response_internal_metadata(context.persisted_response)
                 ).recovery_checkpoint_ref
-                if checkpoint_ref is not None:
+                if reference is not None:
                     return HostingRunnableConfig.create_from_checkpoint(
-                        checkpoint_ref, context
+                        reference, context
                     ).runnable_config
-            return await self._response_branch_config(request, context)
+            if request.get("previous_response_id"):
+                return await self._response_checkpoint_config(request, context)
         hosting_config = await self._resolve_thread_config(request, context)
         if not self._graph_has_checkpointer:
             return hosting_config.runnable_config
 
-        previous_response_id = request.get("previous_response_id")
-        conversation_id = get_conversation_id(request) or context.conversation_id
-        if (
-            not context.is_recovery
-            and not (isinstance(previous_response_id, str) and previous_response_id)
-            and not (isinstance(conversation_id, str) and conversation_id)
-        ):
+        conversation_chain_id = _conversation_chain_key(request, context)
+        if conversation_chain_id is None:
             return hosting_config.runnable_config
 
-        conversation_chain_id = _scope_thread_id(
-            context.conversation_chain_id,
-            context,
-        )
         checkpoint_ref = CheckpointRef.from_dict(
             await self._conversation_chain_store.get(
                 conversation_chain_id,
@@ -841,25 +854,33 @@ class ResponsesHostServer:
             request.get("previous_response_id")
         )
 
-    async def _response_branch_config(
+    async def _response_checkpoint_config(
         self, request: CreateResponse, context: ResponseContext
     ) -> RunnableConfig:
-        # _is_response_branch guarantees a non-empty previous_response_id here.
-        # Conversation-only requests use _resolve_thread_config instead.
-        parent_id = cast(str, request["previous_response_id"])
+        parent_id = request.get("previous_response_id")
+        if not isinstance(parent_id, str) or not parent_id:
+            raise ValueError("previous_response_id must be a nonempty string.")
         parent = await _load_parent_response(parent_id, context)
-        if context.is_recovery:
-            reference = _validate_branch_parent(parent_id, parent, context)
-        else:
-            reference = cast(
-                CheckpointRef,
-                TaskStorageManager.from_stream(
-                    ResponseEventStream(response_id=parent_id, response=parent)
-                ).checkpoint_ref,
-            )
-        return HostingRunnableConfig.create_from_checkpoint(
-            reference, context
-        ).runnable_config
+        if self._is_response_branch(request, context) and context.is_recovery:
+            _validate_branch_parent(parent_id, parent, context)
+        # shortcut: ordinary parents may be in_progress, revisit with shared checks.
+        if self._is_response_branch(request, context) and (
+            _response_field(parent, "status") != "completed"
+        ):
+            raise ValueError("The previous response must be completed.")
+        reference = TaskStorageManager(
+            _response_internal_metadata(parent)
+        ).checkpoint_ref
+        if reference is None:
+            raise ValueError("The previous response has no saved graph checkpoint.")
+        namespace = _scope_thread_id("", context)
+        if _thread_namespace(reference.thread_id) != namespace:
+            raise ValueError("The previous response belongs to a different user.")
+        config = HostingRunnableConfig.create_from_checkpoint(reference, context)
+        root_response_id = _response_root_id(parent)
+        if root_response_id is not None:
+            config = config.with_root_response_id(root_response_id)
+        return config.runnable_config
 
     async def _resolve_thread_config(
         self,
@@ -1039,10 +1060,7 @@ class ResponsesHostServer:
         recovering = bool(context.is_recovery)
         stream = self._new_stream(request, context)
         task_storage = TaskStorageManager.from_stream(stream)
-        conversation_chain_id = _scope_thread_id(
-            context.conversation_chain_id,
-            context,
-        )
+        conversation_chain_id = _conversation_chain_key(request, context)
         yield stream.emit_created()
 
         # Shutdown and request cancellation are independent. Check shutdown
@@ -1050,20 +1068,17 @@ class ResponsesHostServer:
         if context.shutdown.is_set():
             await context.exit_for_recovery()
 
-        if cancellation_signal.is_set():
+        if cancellation_signal.is_set() and context.client_cancelled:
             yield stream.emit_in_progress()
-            if context.client_cancelled:
-                yield stream.emit_failed(
-                    code="cancelled",
-                    message="Request was cancelled.",
-                )
-            else:
-                yield stream.emit_completed()
+            yield stream.emit_failed(
+                code="cancelled",
+                message="Request was cancelled.",
+            )
             return
 
         yield stream.emit_in_progress()
 
-        if not recovering:
+        if not recovering and not cancellation_signal.is_set():
             # Persist handler admission before any provider or graph I/O.
             yield stream.checkpoint()
 
@@ -1106,10 +1121,56 @@ class ResponsesHostServer:
                     checkpoint_reads.cache = None
                 checkpoint_reads.pin(getattr(self._graph, "checkpointer", None), config)
 
-            if self._is_response_branch(request, context) and checkpoint_ref is None:
-                # shortcut: Assume no unanswered tool calls; validate parent outputs
-                # in follow-up.
-                _validate_branch_state(await self._graph.aget_state(config), config)
+            response_linked = checkpoint_ref is None and bool(
+                request.get("previous_response_id")
+            )
+            reference = HostingRunnableConfig(config).checkpoint_ref
+            parent_paused = False
+            reusing_superseded_checkpoint = (
+                reference is not None
+                and cancellation_signal.is_set()
+                and not context.client_cancelled
+            )
+            if self._graph_has_checkpointer and (
+                response_linked or reusing_superseded_checkpoint
+            ):
+                if response_linked and self._is_response_branch(request, context):
+                    _validate_branch_state(await self._graph.aget_state(config), config)
+                elif reference is not None:
+                    state = await self._graph.aget_state(config)
+                    state_configurable = state.config.get("configurable") or {}
+                    if (
+                        HostingRunnableConfig(state.config).checkpoint_ref != reference
+                        or state_configurable.get("checkpoint_ns", "") != ""
+                        or state.created_at is None
+                    ):
+                        raise ValueError("The response's graph checkpoint is missing.")
+                    parent_paused = response_linked and bool(
+                        getattr(state, "interrupts", ())
+                    )
+                elif any(
+                    {"checkpoint_id", "checkpoint_map"} & configurable.keys()
+                    or configurable.get("checkpoint_ns")
+                    for configurable in (
+                        config.get("configurable") or {},
+                        (self._graph.config or {}).get("configurable") or {},
+                    )
+                ):
+                    raise ValueError("The response's graph checkpoint is missing.")
+
+            if cancellation_signal.is_set() and not context.client_cancelled:
+                if reference is not None:
+                    task_storage.store_checkpoint_ref(reference)
+                    if checkpoint_ref is not None and conversation_chain_id is not None:
+                        await self._conversation_chain_store.set(
+                            conversation_chain_id,
+                            CONVERSATION_CHECKPOINT_KEY,
+                            reference.to_dict(),
+                        )
+                if reference is not None or not self._graph_has_checkpointer:
+                    yield stream.emit_completed()
+                    return
+                # A fresh thread must publish its initial checkpoint before stopping.
 
             if checkpoint_ref is not None:
                 # Crash-recovered re-entry. The graph's own persistent
@@ -1123,8 +1184,30 @@ class ResponsesHostServer:
             else:
                 if recovering:
                     logger.debug("Recovery: replaying request input")
-                # Detect a pause from a previous turn and try to resume it.
-                pending = await detect_pending_interrupts(self._graph, config)
+                graph, pending_config = self._graph, config
+                if parent_paused:
+                    pending_config = _without_checkpoint_selection(config)
+                    if (
+                        graph.config
+                        and {"checkpoint_id", "checkpoint_map"}
+                        & (graph.config.get("configurable") or {}).keys()
+                    ):
+                        graph = graph.copy(
+                            {"config": _without_checkpoint_selection(graph.config)}
+                        )
+                pending, snapshot_config = await _detect_pending_interrupts_with_config(
+                    graph, pending_config, strict=parent_paused
+                )
+                if parent_paused and (
+                    snapshot_config is None
+                    or HostingRunnableConfig(snapshot_config).checkpoint_ref
+                    != reference
+                ):
+                    yield stream.emit_failed(
+                        code="interrupt_not_pending",
+                        message="The referenced pause is no longer pending.",
+                    )
+                    return
                 if pending:
                     _add_request_hosting_features(HostingFeature.HITL)
                     # HITL:
@@ -1135,6 +1218,8 @@ class ResponsesHostServer:
                         request, context, pending
                     )
                     if approval_error is not None:
+                        if parent_paused and reference is not None:
+                            task_storage.store_checkpoint_ref(reference)
                         yield stream.emit_failed(
                             code="interrupt_rejected",
                             message=approval_error,
@@ -1153,14 +1238,20 @@ class ResponsesHostServer:
                     # dangling ``AskHuman``-style tool_call — to the model.
                     async for event in emit_interrupts(pending, stream):
                         yield event
-                    ref = HostingRunnableConfig(config).checkpoint_ref
-                    if ref is not None:
-                        task_storage.store_checkpoint_ref(ref)
-                        await self._conversation_chain_store.set(
-                            conversation_chain_id,
-                            CONVERSATION_CHECKPOINT_KEY,
-                            ref.to_dict(),
-                        )
+                    if reference is None and snapshot_config is not None:
+                        configurable = snapshot_config.get("configurable") or {}
+                        if configurable.get("checkpoint_ns", "") == "":
+                            reference = HostingRunnableConfig(
+                                snapshot_config
+                            ).checkpoint_ref
+                    if reference is not None:
+                        task_storage.store_checkpoint_ref(reference)
+                        if conversation_chain_id is not None:
+                            await self._conversation_chain_store.set(
+                                conversation_chain_id,
+                                CONVERSATION_CHECKPOINT_KEY,
+                                reference.to_dict(),
+                            )
                     yield stream.emit_completed()
                     return
 
@@ -1190,10 +1281,7 @@ class ResponsesHostServer:
                 ):
                     yield event
             checkpoint_ref = task_storage.checkpoint_ref
-            if checkpoint_ref is not None and not (
-                self._enable_response_branching
-                and bool(request.get("previous_response_id"))
-            ):
+            if checkpoint_ref is not None and conversation_chain_id is not None:
                 await self._conversation_chain_store.set(
                     conversation_chain_id,
                     CONVERSATION_CHECKPOINT_KEY,

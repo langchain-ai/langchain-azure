@@ -164,7 +164,9 @@ async def _load_parent_response(
             status_code=404,
             code="previous_response_not_found",
         )
-    parents[key] = parent
+    # A steering parent can finish between HTTP preflight and handler execution.
+    if parent.get("status") not in {"queued", "in_progress"}:
+        parents[key] = parent
     return parent
 
 

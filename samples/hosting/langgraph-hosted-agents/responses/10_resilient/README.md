@@ -48,7 +48,7 @@ a process restart.
 supports background execution, stored-response retrieval, replayable SSE
 streaming, cancellation, and optional active-turn steering. The host maps the
 conversation ID to the LangGraph thread and uses `previous_response_id` to
-continue the latest completed checkpoint.
+continue the referenced response's exact saved checkpoint.
 
 ## Running the Agent Host
 

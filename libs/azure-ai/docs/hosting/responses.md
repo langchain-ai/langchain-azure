@@ -36,8 +36,8 @@ positional or keyword argument; all other constructor parameters are keyword-onl
 | `app` | `ResponsesAgentServerHost \| None` | `None` | Use an existing app, or create one from the arguments passed to `ResponsesHostServer` when `app=None`. |
 | `options` | `ResponsesServerOptions \| None` | `None` | Configure the app created when `app=None`. If omitted, use default [`ResponsesServerOptions`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesserveroptions?view=azure-python): `resilient_background=False` and `steerable_conversations=False`. With an existing `app`, these two fields must match the values used to create it; they are not inferred or checked. |
 | `store` | `ResponseProviderProtocol \| None` | `None` | Configure response storage when `app=None`; ignored when an existing `app` is supplied. If omitted with `app=None`, uses [`FileResponseStore`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.fileresponsestore?view=azure-python) (JSON files) locally, or [`FoundryStorageProvider`](https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.foundrystorageprovider?view=azure-python) (Foundry storage API) when hosted in [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). |
-| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for the next linear turn. |
-| `enable_response_branching` | `bool` | `False` | Continue from a named response's exact graph checkpoint. |
+| `conversation_chain_store` | `ConversationChainStoreProtocol \| None` | `None` | If not specified, uses [`FoundryConversationChainStore`](../../langchain_azure_ai/agents/hosting/_responses/conversation_chain_store.py), backed by the [durable state store](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-state-store), to retain the [checkpoint](https://docs.langchain.com/oss/python/langgraph/persistence#checkpoints) reference for explicit conversation turns. |
+| `enable_response_branching` | `bool` | `False` | Enable branching from a completed parent selected by `previous_response_id`. Requires a graph checkpointer. `False` uses ordinary continuation. |
 | `prefix` | `str` | `""` | Add a prefix to the protocol routes when `app=None`; ignored when an existing `app` is supplied. |
 | `applicationinsights_connection_string` | `str \| None` | `None` | Configure Application Insights when `app=None`; ignored when an existing `app` is supplied. |
 | `graceful_shutdown_timeout` | `int \| None` | `None` | Configure graceful shutdown when `app=None`; ignored when an existing `app` is supplied. |
@@ -137,21 +137,45 @@ the graph; request `model` and `tools` do not reconfigure it.
 > `store=false` returns HTTP 400 before streaming or graph execution. Without a
 > checkpointer, foreground requests can use `store=false`.
 
-A LangGraph checkpointer determines the conversation's state source:
+### Ordinary continuation
+
+With `enable_response_branching=False`, the host uses ordinary continuation.
+The graph's checkpointer determines the state source:
 
 | Graph configuration | History used on later turns | Input sent to the graph |
 | --- | --- | --- |
 | Without a checkpointer | Responses history resolved by the provider | History plus current input. |
 | With a checkpointer | Saved LangGraph state | Current input only. |
 
-`conversation.id` identifies a conversation [thread](https://docs.langchain.com/oss/python/langgraph/persistence#threads). For `previous_response_id`,
-the host resolves the parent's conversation or root thread. Threads are scoped
-to the platform user when that identity is available. An in-memory saver keeps
-state within one process; a persistent saver is needed across restarts.
+Without a checkpointer, the Responses provider resolves the history for
+`conversation` or `previous_response_id`. The graph receives that history and the
+current input.
 
-Ordinary checkpointed continuation uses the saved conversation-chain checkpoint
-when available. Without one, LangGraph selects the latest checkpoint in the
-thread. Exact selection of an older response's checkpoint requires branching.
+With a checkpointer, request linkage selects the saved context:
+
+| Request linkage | Context source |
+| --- | --- |
+| `conversation` only | The conversation-chain checkpoint reference, when available. |
+| `previous_response_id` only | The referenced response's exact checkpoint, stored with that response. |
+| Neither | A fresh response thread. |
+
+For checkpointed graphs, `previous_response_id` selects the named response's
+exact checkpoint in both ordinary continuation and branching mode. An unavailable
+response or checkpoint fails without falling back to the thread's latest state.
+If the referenced checkpoint was paused and no longer has a live pause, ordinary
+continuation returns `interrupt_not_pending` without executing that checkpoint.
+Previously stored responses without checkpoint references cannot be selected in
+checkpoint mode; this change does not migrate stored state.
+
+Only conversation-only requests with a checkpointer read or update
+`conversation_chain_store`. A response-linked request leaves its parent's
+conversation-chain reference unchanged pending OpenAI compatibility verification.
+
+`conversation.id` identifies a conversation [thread](https://docs.langchain.com/oss/python/langgraph/persistence#threads).
+Response-linked requests use the thread in the selected checkpoint reference.
+Threads are scoped to the platform user when that identity is available. An
+in-memory saver keeps state within one process; a persistent saver is needed
+across restarts.
 
 ### Storage choices
 
@@ -185,8 +209,9 @@ completes with partial output.
 
 ### Branching
 
-Branching uses `enable_response_branching=True` with `previous_response_id`.
-It restores the named parent's checkpoint. Siblings can run sequentially or
+Branching uses `enable_response_branching=True` with `previous_response_id` and
+requires a completed parent response and a finished parent graph. It restores
+the named parent's checkpoint. Siblings can run sequentially or
 concurrently: children B and C of A see A+B and A+C respectively. Each child
 can become a new parent.
 
@@ -275,11 +300,11 @@ answered separately; unmatched input re-emits outstanding pauses.
 | --- | :---: | --- |
 | Foreground request | × | The resilience option does not resume a foreground Responses handler. |
 | Stored background request; resilience off | × | Background execution alone provides no handler crash recovery. |
-| Stored background request; resilience on | ✓ | Requires persistent response/task storage, conversation-chain state, and graph checkpoints. The host requires a checkpointer when enabling resilience. |
+| Stored background request; resilience on | ✓ | Requires persistent response/task storage and graph checkpoints. Also retain conversation-chain state when using `conversation`. The host requires a checkpointer when enabling resilience. |
 
-The response store retains protocol data, the conversation-chain store retains
-the checkpoint for the next linear turn, and the graph saver retains execution
-state.
+The response store retains protocol data and each response's checkpoint
+reference. The conversation-chain store retains the reference for explicit
+conversation turns, and the graph saver retains execution state.
 
 Recovery uses the current response's saved graph progress, including for a
 branch child. Without saved progress, it processes the original input again.
