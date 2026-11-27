@@ -1,6 +1,6 @@
 # Host and test the agent locally
 
-With the [resources prepared](01-prepare-resources.md), you can test your existing graph through the local Responses host. In this article, you will add the hosting dependency, load the graph, and verify a representative request before preparing a remote deployment. Keep the current model provider, tools, and prompts.
+With the [resources prepared](01-prepare-resources.md), choose the hosting boundary and graph construction for your application, then load the graph and verify a representative request locally. The commands below illustrate the Responses path. Keep the current model provider, tools, and prompts.
 
 ## Before you start
 
@@ -11,15 +11,24 @@ Complete [Prepare Foundry resources](01-prepare-resources.md). Run commands from
 The hosting runner requires the `hosting` extra described in the [hosting package installation guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#install-the-package). Add this dependency before starting the host:
 
 ```shell
+uv python pin 3.13
 uv add --python 3.13 --prerelease allow --upgrade-package langchain-azure-ai "langchain-azure-ai[hosting]"
 uv pip check
 ```
+
+The Python pin records local interpreter selection in `.python-version`. Keep it aligned with the deployment runtime: selecting Python for one install does not necessarily control a later CLI-created environment. See [uv Python version requests](https://docs.astral.sh/uv/concepts/python-versions/#python-version-files).
 
 The command selects Python 3.13, records the dependency in `pyproject.toml`, updates `uv.lock`, and installs the latest compatible version. The [uv dependency guide](https://docs.astral.sh/uv/concepts/projects/dependencies/#adding-dependencies) explains these project file updates. The upgrade option requests the latest compatible release when the package is already declared.
 
 ## Identify the existing graph entry point
 
-The hosting runner loads an existing graph as described in [Host an existing agent](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#host-an-existing-agent). In this example, `agent.py` exports the compiled graph as `agent`. The root `langgraph.json` references it as `./agent.py:agent`, telling the hosting runner which graph to load. The hosting runner reuses this graph entry point.
+Before selecting the export to load, apply the walkthrough's [interface mapping](../host-langgraph-on-foundry.md#map-the-application-interface) to choose the protocol boundary. The default Responses converter expects a `messages` field, but that field alone does not establish compatibility. Keep protocol conversion at the hosting boundary, delegating business execution to the existing graph rather than changing its business routing or results to fit the converter.
+
+When the original runtime supplies required state, follow [persistence construction](05-persistence-and-recovery.md#persist-graph-state-across-turns) before selecting the hosted entry point. Its construction must supply the owner and lifetime identified in the [state-ownership mapping](../host-langgraph-on-foundry.md#preserve-runtime-owned-state); a development export may rely on services the new host does not provide. Keep development and hosted construction separate where ownership differs. Reuse an existing backend that meets those requirements; stateless or caller-owned workflows do not require new server-side storage.
+
+The Responses path does not expose LangGraph Agent Server runs, threads, or state APIs. Required client operations need compatible target access paths; response records and conversation identity do not replace full graph state.
+
+Once the boundary and required state construction are satisfied, the [default loader](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents#host-an-existing-agent) can reuse a compatible compiled export. In this example, `agent.py` exports it as `agent`, and `langgraph.json` points to `./agent.py:agent`. A configuration-driven entry point remains appropriate when it satisfies both conditions; required state alone does not require a custom host.
 
 The local host reuses these application files:
 
@@ -29,11 +38,7 @@ The local host reuses these application files:
 | `research_agent/` | Existing prompts and tools |
 | `langgraph.json` | Points the hosting runner to `./agent.py:agent` |
 
-The hosting package works with the existing graph, tools, and prompts, handling Responses request conversion and streaming for a compiled graph. The runner loads the agent from `langgraph.json`. You can also create and run the host explicitly with `ResponsesHostServer(graph).run()` in Python. The [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) describes both approaches.
-
-> **Note:** The Responses hosting path used in this guide does not currently expose the LangGraph Agent Server runs, threads, or state APIs. Reusing the graph does not preserve those client APIs. Adapt agent invocation to the hosted Responses API and preserve the conversation identity for multi-turn clients. The Responses API provides request and response records, not equivalent access to full graph state.
-
-> **Note:** The default host requires a graph state schema with a `messages` field. Check any custom state schema before choosing this path.
+For this compatible Responses path, the package handles request conversion and streaming. Run the loader below or create the host explicitly with `ResponsesHostServer(graph).run()`. The [LangGraph hosting guide](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-hosted-agents) describes both approaches. Use the selected boundary and hosted graph construction when adapting these commands.
 
 ## Prepare local configuration
 
