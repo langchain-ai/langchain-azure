@@ -53,6 +53,7 @@ from langchain_azure_ai.agents._v2.base import (
     MCP_APPROVAL_REQUEST_TOOL_NAME,
     AgentServiceAgentState,
     ResponsesAgentNode,
+    _AgentServiceAgentFields,
     _get_v2_tool_definitions,
     _McpApprovalValue,
     _parse_approval_decision,
@@ -528,6 +529,11 @@ class AgentServiceFactory(BaseModel):
         only holds a reference to the existing agent and handles request/response
         building.
 
+        The state schema of the graph that the node is added to must have the
+        fields of ``AgentServiceAgentState``, for example by using
+        ``AgentServiceAgentState`` or a subclass of it.
+        :meth:`create_prompt_agent` adds them to a custom schema itself.
+
         Args:
             name: The name of the agent.
             model: The model deployment name.
@@ -670,6 +676,10 @@ ResponsesAgentNode`
             temperature: Sampling temperature.
             top_p: Top-p sampling parameter.
             state_schema: State schema. Defaults to ``AgentServiceAgentState``.
+                The fields that ``AgentServiceAgentState`` adds to
+                ``AgentState`` are added to a custom schema that doesn't
+                declare them, since the agent node keeps its conversation in
+                them.
             context_schema: Context schema.
             checkpointer: Checkpointer to use.
             store: Store to use.
@@ -777,6 +787,18 @@ ResponsesAgentNode`
         )
         state_schemas: set[type] = {m.state_schema for m in middleware}
         state_schemas.add(base_state)
+        if state_schema is not None:
+            # The agent node keeps its conversation in these fields.  Only
+            # the ones the schemas don't declare are added, so a declared
+            # one keeps its own annotation.
+            declared = {name for s in state_schemas for name in get_type_hints(s)}
+            missing = {
+                name: hint
+                for name, hint in get_type_hints(_AgentServiceAgentFields).items()
+                if name not in declared
+            }
+            if missing:
+                state_schemas.add(TypedDict("AgentServiceAgentFields", missing))  # type: ignore[operator]
         resolved_state_schema = _resolve_state_schema(state_schemas, "StateSchema")
         input_schema = _resolve_state_schema(state_schemas, "InputSchema", "input")
         output_schema = _resolve_state_schema(state_schemas, "OutputSchema", "output")

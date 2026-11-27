@@ -59,7 +59,7 @@ conversation, including responses created before branching was enabled.
 | Neither `previous_response_id` nor `conversation` | Start a root response in a new thread. |
 | `previous_response_id` only | Start a child from that response's exact checkpoint. |
 | `conversation` only | Continue the conversation through the ordinary continuation path. |
-| Both fields | Return HTTP 400. |
+| Both fields | Target behavior: return HTTP 400 (currently branches from `previous_response_id` and ignores `conversation`; tracked in [Follow-up](#follow-up)). |
 
 Omitted or `null` linkage fields leave that linkage unset. Parent lookup uses
 the caller's authorized storage scope. A missing or invalid parent causes an

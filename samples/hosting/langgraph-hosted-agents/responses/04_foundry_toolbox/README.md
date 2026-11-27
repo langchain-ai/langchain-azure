@@ -1,6 +1,6 @@
 # Foundry Toolbox Tools and Skills
 
-A LangChain agent that loads both **tools** and **skills** from an **Azure AI
+A LangChain agent that loads both **tools** and **skills** from a **Microsoft
 Foundry Toolbox** and serves the **Responses protocol**. Use it when you want
 one Foundry Toolbox to supply remote tools and reusable skills independently.
 

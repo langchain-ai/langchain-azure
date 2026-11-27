@@ -74,6 +74,7 @@ from openai.types.responses.response_output_item import (
     McpApprovalRequest as McpApprovalRequestOutputItem,
 )
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
+from typing_extensions import TypedDict
 
 from langchain_azure_ai.agents._v2.prebuilt.tools import (
     AgentServiceBaseTool,
@@ -91,7 +92,15 @@ MCP_APPROVAL_REQUEST_TOOL_NAME = "mcp_approval_request"
 # ---------------------------------------------------------------------------
 
 
-class AgentServiceAgentState(AgentState):
+class _AgentServiceAgentFields(TypedDict):
+    """The fields that ``AgentServiceAgentState`` adds to ``AgentState``."""
+
+    azure_ai_agents_conversation_id: Optional[str]
+    azure_ai_agents_previous_response_id: Optional[str]
+    azure_ai_agents_pending_type: Optional[str]
+
+
+class AgentServiceAgentState(AgentState, _AgentServiceAgentFields):
     """Extended ``AgentState`` that carries per-invocation agent context.
 
     By storing conversation IDs and pending-call type in the graph state
@@ -113,10 +122,6 @@ class AgentServiceAgentState(AgentState):
         ``"function_call"``, ``"mcp_approval"``, or ``None``.
     """
 
-    azure_ai_agents_conversation_id: Optional[str]
-    azure_ai_agents_previous_response_id: Optional[str]
-    azure_ai_agents_pending_type: Optional[str]
-
 
 def _get_agent_state(
     state: StateSchema,
@@ -124,8 +129,8 @@ def _get_agent_state(
     """Read agent context fields from the graph state.
 
     Returns ``(conversation_id, previous_response_id, pending_type)``.
-    When the state schema does not carry these fields (e.g. the user
-    supplied a plain ``AgentState``), the values default to ``None``.
+    A field that isn't set yet, or that the state schema doesn't have,
+    defaults to ``None``.
     """
     if isinstance(state, dict):
         return (
@@ -1093,11 +1098,19 @@ create_prompt_agent_node`
     to create an agent and obtain a node in a single step, or instantiate this
     class directly to reference an existing agent by name.
 
+    The node keeps its conversation in the fields that ``AgentServiceAgentState``
+    adds to ``AgentState``, so the state schema of the graph must have them, for
+    example by using ``AgentServiceAgentState`` or a subclass of it. With another
+    schema, such as ``MessagesState``, the graph drops these fields: each turn
+    starts a new conversation, and tool outputs and MCP approvals raise a
+    ``RuntimeError``.
+
     Example:
     ```python
     from azure.ai.projects import AIProjectClient
     from azure.identity import DefaultAzureCredential
-    from langchain_azure_ai.agents.prebuilt import ResponsesAgentNode
+    from langgraph.graph import END, START, StateGraph
+    from langchain_azure_ai.agents import AgentServiceAgentState, ResponsesAgentNode
 
     client = AIProjectClient(
         endpoint="https://resource.services.ai.azure.com/api/projects/demo-project",
@@ -1109,6 +1122,11 @@ create_prompt_agent_node`
         name="code-interpreter-agent",
         version="latest",
     )
+
+    graph = StateGraph(AgentServiceAgentState)
+    graph.add_node("coder", coder)
+    graph.add_edge(START, "coder")
+    graph.add_edge("coder", END)
     ```
     """
 
@@ -1299,7 +1317,10 @@ AgentServiceBaseTool`
                 else:
                     raise RuntimeError(
                         "No pending function calls or MCP approval requests "
-                        "to submit tool outputs to."
+                        "to submit tool outputs to. The agent node keeps them "
+                        "in the graph state, so the state schema must have the "
+                        "fields of AgentServiceAgentState, for example by using "
+                        "AgentServiceAgentState or a subclass of it."
                     )
 
                 proxy = _AzureAIAgentApiProxyModel(

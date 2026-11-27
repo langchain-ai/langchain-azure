@@ -289,7 +289,9 @@ branch child. Without saved progress, it processes the original input again.
 
 See the public
 [Agent Server resilience contract](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/agentserver/azure-ai-agentserver-responses/docs/resilience-contract.md)
-for the protocol lifecycle.
+for the protocol lifecycle and the
+[Responses resiliency design](response_resiliency.md) for how this host
+composes Responses and LangGraph recovery boundaries.
 
 Client cancellation fails the handler with code `cancelled`. Shutdown recovery
 follows the conditions above.

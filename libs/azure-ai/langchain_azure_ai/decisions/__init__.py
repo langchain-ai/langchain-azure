@@ -1,4 +1,4 @@
-"""Azure OpenAI decision model and LangChain Core question and answer types."""
+"""Foundry decision models and LangChain Core question and answer types."""
 
 from langchain_core.decisions import (
     Answer,
@@ -15,11 +15,17 @@ from langchain_core.decisions import (
     State,
 )
 
-from langchain_azure_ai.decisions.openai import AzureAIOpenAIApiDecisions
+from langchain_azure_ai.decisions.microsoft import AzureAIMicrosoftDecisionsClassifier
+from langchain_azure_ai.decisions.openai import (
+    AzureAIOpenAIApiDecisions,
+    AzureAIOpenAIApiDecisionsClassifier,
+)
 
 __all__ = [
     "Answer",
+    "AzureAIMicrosoftDecisionsClassifier",
     "AzureAIOpenAIApiDecisions",
+    "AzureAIOpenAIApiDecisionsClassifier",
     "Choice",
     "ChoiceAnswer",
     "ClassifierRequest",

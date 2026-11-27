@@ -24,9 +24,8 @@ from langchain_anthropic import ChatAnthropic
 
 logger = logging.getLogger(__name__)
 
-# Environment variable holding the Azure AI Foundry resource name or full URL.
-# When only a resource name is provided (no ``://``), the endpoint is
-# synthesized as ``https://<resource>.services.ai.azure.com``.
+# Environment variable holding the bare Azure AI Foundry resource name.
+# The endpoint is synthesized as ``https://<resource>.services.ai.azure.com``.
 _ANTHROPIC_FOUNDRY_RESOURCE_ENV_VAR = "ANTHROPIC_FOUNDRY_RESOURCE"
 
 
@@ -89,7 +88,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     model = AzureAIAnthropicChatModel(
         endpoint="https://<resource>.services.ai.azure.com",
         credential=DefaultAzureCredential(),
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -106,7 +105,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
             "https://<resource>.services.ai.azure.com/api/projects/my-project"
         ),
         credential=DefaultAzureCredential(),
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -118,7 +117,7 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     model = AzureAIAnthropicChatModel(
         endpoint="https://<resource>.services.ai.azure.com",
         credential="your-api-key",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
     ```
 
@@ -132,8 +131,8 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
       when both are set.
     * ``ANTHROPIC_FOUNDRY_RESOURCE`` – resolved as ``endpoint`` when neither
       ``endpoint`` nor ``project_endpoint`` is set (directly or via env var).
-      May be a bare resource name (e.g. ``my-resource``) or a full URL.  When
-      a bare name is provided the endpoint is synthesized as
+      Must be a bare resource name (e.g. ``my-resource``); pass full URLs via
+      ``endpoint``.  The endpoint is synthesized as
       ``https://<ANTHROPIC_FOUNDRY_RESOURCE>.services.ai.azure.com``.
       This is the same variable used by **Claude Code** when connected to
       Azure AI Foundry, so models configured that way will work here without
@@ -172,8 +171,9 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
     """Azure AI Foundry resource endpoint, e.g.
     ``https://<resource>.services.ai.azure.com``.  ``/anthropic`` is
     appended automatically.  When omitted, falls back to the
-    ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable (resource name or
-    full URL).  Mutually exclusive with ``project_endpoint``."""
+    ``ANTHROPIC_FOUNDRY_RESOURCE`` environment variable (bare resource name;
+    pass full URLs via ``endpoint``).  Mutually exclusive with
+    ``project_endpoint``."""
 
     credential: Optional[
         Union[str, AzureKeyCredential, TokenCredential, AsyncTokenCredential]
@@ -189,7 +189,8 @@ class AzureAIAnthropicChatModel(ChatAnthropic):
       callable bearer-token provider so that tokens are refreshed
       automatically.
     * ``None`` (default) falls back to
-      :class:`~azure.identity.DefaultAzureCredential`.
+      :class:`~azure.identity.DefaultAzureCredential` and ignores
+      ``OPENAI_API_KEY`` and ``ANTHROPIC_API_KEY``.
     """
 
     @model_validator(mode="before")

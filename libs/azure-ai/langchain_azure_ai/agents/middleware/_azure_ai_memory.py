@@ -265,7 +265,9 @@ class AzureAIMemoryMiddleware(AgentMiddleware[_AzureAIMemoryState, Any]):
         the middleware, so you don't need to specify those parameters again. You can
         also configure additional parameters for the retriever tool via ``kwargs``. For
         example, you can specify the number of memories to retrieve with parameter
-        ``k``.
+        ``k``. Custom ``credential`` values passed to ``AzureAIMemoryMiddleware`` are
+        not forwarded automatically; pass ``credential=...`` if you do not use
+        ``DefaultAzureCredential``.
 
         """
         from langchain_azure_ai.tools import AzureAIMemoryRetrieverTool
