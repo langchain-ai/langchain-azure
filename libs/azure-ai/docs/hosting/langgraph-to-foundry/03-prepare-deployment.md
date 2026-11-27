@@ -78,7 +78,7 @@ services:
 
 The remote Python runtime starts the file specified by `codeConfiguration.entryPoint`. The explicit `startupCommand` is for the local CLI path; it runs the same launcher from the application root using the prepared Python environment on `PATH`. Install the runtime dependencies before using this command. If you use uv to create or sync the local project environment, keep the `.python-version` pin alongside the local project files and verify that the local run uses the selected target Python minor version. A successful dependency install in a separate environment does not verify the submitted startup path. See the [azure.yaml reference](https://learn.microsoft.com/azure/foundry/agents/concepts/azure-yaml-reference) and [source-code deployment guide](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent-code).
 
-When adding `environmentVariables`, use a list of `name`/`value` objects, not a mapping. Include the variables the application actually requires; do not make an optional setting mandatory by adding an unresolved placeholder. Run `azd ai agent doctor --local-only` to check the delivered service definition and configuration before packaging. This check does not establish remote deployment or runtime behavior.
+Declare application environment variables in the agent service's `env` map in `azure.yaml`. Do not copy environment fields from the deployed API representation into that file. Include the variables the application actually requires; do not make an optional setting mandatory by adding an unresolved placeholder. Run `azd ai agent doctor --local-only` to check the delivered service definition and configuration before packaging. This check does not establish remote deployment or runtime behavior.
 
 ### Prepare runtime dependencies
 
@@ -212,14 +212,12 @@ azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<deployment-name>"
 azd env set TAVILY_CONNECTION_NAME tavily-search
 ```
 
-For this source-code example, add these values to the agent service's `environmentVariables` list in `azure.yaml`:
+For this source-code example, add these values to the agent service's `env` map in `azure.yaml`:
 
 ```yaml
-environmentVariables:
-  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-    value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
-  - name: TAVILY_CONNECTION_NAME
-    value: ${TAVILY_CONNECTION_NAME}
+env:
+  AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+  TAVILY_CONNECTION_NAME: ${TAVILY_CONNECTION_NAME}
 ```
 
 Add the connection name to the local `.env`:
