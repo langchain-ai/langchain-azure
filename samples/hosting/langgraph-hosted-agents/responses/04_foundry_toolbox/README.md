@@ -36,9 +36,16 @@ The agent also receives a local LangChain `@tool`, `read_skill_resource`:
   procedure directly. Supporting text files can be read through the same tool
   when needed.
 
-This follows Foundry's
-[progressive-disclosure pattern](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/skills#consume-toolbox-skills-in-microsoft-agent-framework)
-using the standard LangChain `create_agent` graph and SDK resource API.
+This follows the [Agent Skills](https://agentskills.io/) progressive-disclosure
+pattern using the standard LangChain `create_agent` graph and the
+[`AzureAIProjectToolbox` skill resource API](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-toolbox#load-skills-from-a-toolbox).
+
+If you build with `deepagents`, prefer `AzureAIProjectToolbox.aget_skills()` /
+`get_skills()` with `create_deep_agent(skills=["/skills/"], ...)` instead of
+wiring `aget_resources()` and a custom `read_skill_resource` tool by hand.
+`deepagents` handles skill discovery and file loading for you; see
+[Load skills for deep agents](https://learn.microsoft.com/azure/foundry/how-to/develop/langchain-toolbox#load-skills-for-deep-agents)
+for `StateBackend` and `FilesystemBackend` setup examples.
 
 All calls target the Toolbox's default version unless you pass
 `toolbox_version` to `AzureAIProjectToolbox`. Tools and the skill catalog are
