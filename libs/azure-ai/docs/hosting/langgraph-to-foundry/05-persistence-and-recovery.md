@@ -1,14 +1,14 @@
 # Enable persistence and recovery
 
-Once the agent [runs in Foundry](04-deploy-and-verify.md), decide what state and work must survive across turns or host restarts. This article shows how to preserve messages, reports, and task progress with durable checkpoints. It then covers recovery for requests interrupted by a host failure. Apply the parts that match your application's requirements.
+Use this chapter during hosting design and graph construction when state retained by the original runtime must be preserved. Apply the walkthrough's [state-ownership mapping](../host-langgraph-on-foundry.md#preserve-runtime-owned-state) and keep an existing backend that meets those requirements. The examples below show checkpoint construction and, separately, unfinished-request recovery when required. Perform the hosted verification sections after deployment; preserving required state is not a post-deployment enhancement.
 
 ## Before you start
 
-Complete [Deploy and verify the agent](04-deploy-and-verify.md). Keep the deployed agent name, invocation access, and application source available. Choose the checks below that match your state and recovery requirements.
+For planning and graph construction, use the existing application source; deployment is not a prerequisite. For hosted persistence, user-isolation, or recovery verification, first complete [Deploy and verify the agent](04-deploy-and-verify.md) and have the deployed agent name and invocation access available. Apply only the parts that match your existing state and recovery requirements.
 
 ## Persist graph state across turns
 
-If your application needs state across turns, configure a durable checkpointer. In the Deep Research example, this state includes messages, reports, and task progress.
+If the existing workflow requires server-managed graph state across turns, supply a checkpointer with the required lifetime. Use a durable checkpointer when state must survive the relevant host or session lifecycle. In the Deep Research example, this state includes messages, reports, and task progress.
 
 Keep your existing checkpointer if it meets your persistence requirements. Responses history does not replace graph checkpoints, and checkpointed virtual files are separate from hosted filesystem files.
 
@@ -45,7 +45,11 @@ The existing root `langgraph.json` loads `./agent.py:agent`. The Responses host 
 
 > **Tip:** To continue using [LangGraph Studio](https://docs.langchain.com/langsmith/local-dev-testing) for local debugging, provide a separate graph entry point without a custom checkpointer. `langgraph dev` manages persistence itself and rejects graphs with an application-configured checkpointer. Keep `FoundryCheckpointSaver` on the Foundry entry point. Studio shows local graph state, not deployed Foundry checkpoints.
 
-Redeploy the updated agent:
+If the same source must support both launchers, put the existing construction behind a factory that accepts a checkpointer. Keep the Studio export without an explicit checkpointer, and use the factory with the durable checkpointer in the Foundry export. Keep the graph selection explicit when the two launchers have different state owners: bind the hosted export in a separate graph manifest and pass that manifest to the Foundry runner with `--config`. This makes the selected export independent of default manifest discovery or incidental environment variables. Confirm that the delivered launcher, not just a standalone import, uses the selected checkpointer. If local credentials or resources are unavailable, report the persistence check as blocked instead of removing persistence from the deployed graph.
+
+Verify two separate requests under the same conversation identity: write a virtual file, then read the same file back without recreating it or supplying its contents again. If the required lifetime extends across hosted sessions, repeat the read from a different hosted session. A successful response, matching conversation ID, or report text in the first response is not proof that the underlying file survived.
+
+Include this construction in the initial deployment when required state is part of the migration. If updating an already deployed agent, redeploy it:
 
 ```shell
 azd deploy deep-research-foundry
@@ -53,11 +57,11 @@ azd deploy deep-research-foundry
 
 ### Verify persistence and user isolation
 
-Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, the client needs to retain the conversation identity and authenticated user across turns. Test continuation in the same session, then in a different session with the same conversation. The [session management guide](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions) explains sessions and conversations.
+Verify that a later turn restores and updates the required application state. For this example, create a report and revise it in a later turn. For hosted tests, retain the conversation identity and, for user-scoped state, the authenticated user across turns. Verify continuation in the same hosted session. If the workflow requires state to outlive a hosted session, also verify continuation in a different hosted session with the same conversation. See [Manage hosted agent sessions](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-sessions).
 
 Verify that conversation-specific state stays isolated from other conversations.
 
-> **Tip:** Measure latency with representative conversation histories and state sizes, including continuation in a new session. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
+> **Tip:** Measure latency with representative conversation histories and state sizes, including a new session when required. Separate model and tool time from checkpoint and response-history I/O. A successful first turn does not establish acceptable multi-turn performance.
 
 > **Warning:** User isolation must remain enabled for user-specific state. Test continuation with the same authenticated user and verify that another user cannot access that state.
 
