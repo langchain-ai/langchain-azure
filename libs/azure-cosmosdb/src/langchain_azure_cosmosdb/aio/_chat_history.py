@@ -106,7 +106,12 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
     async def __aenter__(self) -> AsyncCosmosDBChatMessageHistory:
         """Async context manager entry point."""
         await self._client.__aenter__()
-        await self.prepare_cosmos()
+        try:
+            await self.prepare_cosmos()
+        except BaseException as e:
+            # __aexit__ does not run when __aenter__ raises.
+            await self._client.__aexit__(type(e), e, e.__traceback__)
+            raise
         return self
 
     async def __aexit__(
@@ -129,7 +134,14 @@ class AsyncCosmosDBChatMessageHistory(BaseChatMessageHistory):
             item = await self._container.read_item(
                 item=self.session_id, partition_key=self.user_id
             )
-        except CosmosHttpResponseError:
+        except CosmosHttpResponseError as e:
+            if e.status_code != 404:
+                logger.warning(
+                    "Failed to load messages for session %s (status %s)",
+                    self.session_id,
+                    e.status_code,
+                )
+                raise
             logger.info("no session found")
             self._loaded_count = len(self.messages)
             return
